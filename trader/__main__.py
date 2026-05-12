@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import asyncio
-import signal
+import os
 
+import django
 import structlog
 
 log = structlog.get_logger()
 
 
 async def run() -> None:
-    log.info("trader.started")
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
-    await stop.wait()
-    log.info("trader.stopped")
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "web.settings")
+    django.setup()
+    from core.services.runtime import TraderRuntime
+
+    runtime = TraderRuntime()
+    log.info("trader.starting")
+    await runtime.bootstrap()
+    try:
+        await runtime.run()
+    finally:
+        await runtime.shutdown()
 
 
 def main() -> None:
