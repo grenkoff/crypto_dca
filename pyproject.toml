@@ -47,7 +47,8 @@ ignore = ["E501"]  # line length handled by formatter
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
-"**/migrations/*" = ["E501", "RUF012"]
+"**/migrations/*" = ["E501", "RUF012", "I001"]
+"**/models.py" = ["RUF012"]  # Django Meta class attrs trigger false positives
 
 [tool.mypy]
 python_version = "3.12"
