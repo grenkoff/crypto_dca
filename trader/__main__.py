@@ -12,15 +12,23 @@ log = structlog.get_logger()
 async def run() -> None:
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "web.settings")
     django.setup()
+    from core.config.settings import redis_settings
+    from core.services.events import EventBus, NoOpEventBus
+    from core.services.redis_bus import RedisEventBus
     from core.services.runtime import TraderRuntime
 
-    runtime = TraderRuntime()
-    log.info("trader.starting")
+    url = redis_settings().redis_url
+    bus: EventBus = RedisEventBus(url) if url else NoOpEventBus()
+
+    runtime = TraderRuntime(bus=bus)
+    log.info("trader.starting", bus=type(bus).__name__)
     await runtime.bootstrap()
     try:
         await runtime.run()
     finally:
         await runtime.shutdown()
+        if isinstance(bus, RedisEventBus):
+            await bus.close()
 
 
 def main() -> None:
