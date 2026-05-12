@@ -1,0 +1,86 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Dashboard — Crypto DCA{% endblock %}
+{% block content %}
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="text-muted small">Status</div>
+                <div class="h4">{% if bot.paused %}⏸ paused{% else %}▶ running{% endif %}</div>
+                <div class="small text-muted">Heartbeat: {{ bot.last_heartbeat|default:"—" }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="text-muted small">Open positions</div>
+                <div class="h4">{{ open_positions.count }}</div>
+                <div class="small text-muted">Symbol: {{ config.symbol }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="text-muted small">PnL today</div>
+                <div class="h4">{{ pnl.today }} USDT</div>
+                <div class="small text-muted">Week: {{ pnl.week }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="text-muted small">PnL total</div>
+                <div class="h4">{{ pnl.total }} USDT</div>
+                <div class="small text-muted">Max open orders: {{ config.max_open_orders }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<h2 class="h5">Open positions</h2>
+<div class="table-responsive mb-4">
+    <table class="table table-sm table-striped bg-white">
+        <thead>
+            <tr><th>Level</th><th>Entry</th><th>Qty</th><th>TP</th><th>Opened</th></tr>
+        </thead>
+        <tbody>
+            {% for p in open_positions %}
+            <tr>
+                <td>L{{ p.level_index }}</td>
+                <td>{{ p.entry_price }}</td>
+                <td>{{ p.qty }}</td>
+                <td>{{ p.tp_price|default:"—" }}</td>
+                <td>{{ p.opened_at }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-muted text-center">No open positions</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<h2 class="h5">Recently closed</h2>
+<div class="table-responsive">
+    <table class="table table-sm table-striped bg-white">
+        <thead>
+            <tr><th>Level</th><th>Entry</th><th>Qty</th><th>Realized PnL</th><th>Closed</th></tr>
+        </thead>
+        <tbody>
+            {% for p in closed_recent %}
+            <tr>
+                <td>L{{ p.level_index }}</td>
+                <td>{{ p.entry_price }}</td>
+                <td>{{ p.qty }}</td>
+                <td>{{ p.realized_pnl }}</td>
+                <td>{{ p.closed_at }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-muted text-center">No closed positions</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

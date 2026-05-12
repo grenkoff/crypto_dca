@@ -1,6 +1,8 @@
 from django.contrib import admin
-from django.urls import path
+from django.urls import include, path
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("api/v1/", include("web.api.urls")),
+    path("", include("web.dashboard.urls")),
 ]
