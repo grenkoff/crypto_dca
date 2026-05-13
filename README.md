@@ -55,6 +55,22 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
 Integration tests against Bybit testnet are kept out of CI by default — run them locally
 with `BYBIT_API_KEY=... BYBIT_API_SECRET=... BYBIT_TESTNET=1 uv run pytest -m integration tests/integration`.
 
+## Pre-flight & dry-run
+
+Before placing real orders, run the validator (checks Bybit creds, balance, instrument, Redis):
+
+```bash
+uv run python manage.py preflight
+```
+
+Set `TRADER_DRY_RUN=1` to have the trader log intended orders without placing them:
+
+```bash
+TRADER_DRY_RUN=1 uv run python -m trader
+```
+
+Full smoke-test walkthrough: see `docs/DEPLOY.md`.
+
 ## Railway deployment
 
 Three services off the same repo, sharing a single Postgres + Redis plugin:

@@ -15,12 +15,14 @@ import asyncio
 import signal
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import cast
 
 import structlog
 from asgiref.sync import sync_to_async
 
-from core.config.settings import bybit_settings
+from core.config.settings import bybit_settings, trader_settings
 from core.exchange.bybit import BybitClient
+from core.exchange.dry_run import DryRunBybitClient
 from core.exchange.types import Side
 from core.exchange.ws import BybitPrivateStream, StreamEvent
 from core.services.events import EventBus, NoOpEventBus
@@ -52,9 +54,14 @@ class TraderRuntime:
 
     async def bootstrap(self) -> None:
         settings = bybit_settings()
-        self._client = BybitClient.from_credentials(
+        real_client = BybitClient.from_credentials(
             settings.api_key, settings.api_secret, testnet=settings.testnet
         )
+        if trader_settings().dry_run:
+            log.warning("trader.dry_run_enabled")
+            self._client = cast(BybitClient, DryRunBybitClient(real_client))
+        else:
+            self._client = real_client
         config = await sync_to_async(StrategyConfig.load)()
         instrument = await self._client.get_instrument(str(config.symbol))
         self._current_price = await self._client.get_last_price(str(config.symbol))
