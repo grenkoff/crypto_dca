@@ -15,6 +15,12 @@ class BybitSettings(BaseSettings):
     recv_window: int = Field(default=5000)
 
 
+class TraderSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_prefix="TRADER_")
+
+    dry_run: bool = Field(default=False)
+
+
 class RedisSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -34,6 +40,11 @@ class TelegramSettings(BaseSettings):
 @lru_cache(maxsize=1)
 def bybit_settings() -> BybitSettings:
     return BybitSettings()
+
+
+@lru_cache(maxsize=1)
+def trader_settings() -> TraderSettings:
+    return TraderSettings()
 
 
 @lru_cache(maxsize=1)
