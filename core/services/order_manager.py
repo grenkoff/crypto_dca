@@ -217,6 +217,7 @@ class OrderManager:
             target=target,
             new_tp_price=decision.new_tp_price,
             new_tp_order_id=new_tp_order_id,
+            new_credit=decision.new_credit,
             profit_applied=profit,
             source_position_id=source_position_id,
         )
@@ -327,6 +328,7 @@ def _open_positions_view() -> list[OpenPosition]:
             qty=p.qty,
             fees_in=p.fees_in,
             current_tp_price=p.tp_price if p.tp_price is not None else Decimal(0),
+            compensation_credit=p.compensation_credit,
         )
         for p in Position.objects.filter(status=PositionStatus.OPEN)
     ]
@@ -337,12 +339,14 @@ def _record_compensation(
     target: Position,
     new_tp_price: Decimal,
     new_tp_order_id: str,
+    new_credit: Decimal,
     profit_applied: Decimal,
     source_position_id: int,
 ) -> None:
     with transaction.atomic():
         target.tp_price = new_tp_price
         target.tp_order_id = new_tp_order_id
+        target.compensation_credit = new_credit
         target.save()
         CompensationLink.objects.create(
             profitable_position_id=source_position_id,

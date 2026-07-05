@@ -109,6 +109,9 @@ class Position(models.Model):
     realized_pnl = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
     )
+    compensation_credit = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+    )
     opened_at = models.DateTimeField()
     closed_at = models.DateTimeField(null=True, blank=True)
 
