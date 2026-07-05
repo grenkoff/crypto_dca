@@ -85,3 +85,7 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.BrowsableAPIRenderer",
     ],
 }
+
+from core.config.logging import configure_logging  # noqa: E402
+
+configure_logging()

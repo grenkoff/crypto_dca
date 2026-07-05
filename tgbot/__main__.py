@@ -12,6 +12,9 @@ log = structlog.get_logger()
 
 
 async def run() -> None:
+    from core.config.logging import configure_logging
+
+    configure_logging()
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "web.settings")
     django.setup()
 
