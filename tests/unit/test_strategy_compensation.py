@@ -5,7 +5,7 @@ from decimal import Decimal
 from core.strategy.compensation import (
     compute_compensation,
     plan_compensation,
-    select_most_underwater,
+    select_compensation_target,
 )
 from core.strategy.types import OpenPosition
 
@@ -26,24 +26,24 @@ def _pos(
     )
 
 
-def test_select_picks_largest_loss() -> None:
+def test_select_picks_highest_tp() -> None:
     positions = [
-        _pos(1, "60000"),  # underwater by ~$3.06 at 57k
-        _pos(2, "58000"),  # underwater by ~$1.06
-        _pos(3, "55000"),  # in profit at 57k
+        _pos(1, "60000", tp="61000"),  # tail — highest TP, hardest to fill
+        _pos(2, "58000", tp="59000"),
+        _pos(3, "55000", tp="56000"),
     ]
-    victim = select_most_underwater(positions, Decimal("57000"), Decimal("0.001"))
+    victim = select_compensation_target(positions, Decimal("57000"))
     assert victim is not None and victim.id == 1
 
 
-def test_select_returns_none_when_all_profitable() -> None:
-    positions = [_pos(1, "50000"), _pos(2, "55000")]
-    victim = select_most_underwater(positions, Decimal("60000"), Decimal("0.001"))
+def test_select_skips_tp_at_or_below_market() -> None:
+    positions = [_pos(1, "50000", tp="56000"), _pos(2, "55000", tp="56500")]
+    victim = select_compensation_target(positions, Decimal("60000"))
     assert victim is None
 
 
 def test_select_returns_none_on_empty() -> None:
-    assert select_most_underwater([], Decimal("60000"), Decimal("0.001")) is None
+    assert select_compensation_target([], Decimal("60000")) is None
 
 
 def test_compute_compensation_drops_tp_to_breakeven() -> None:

@@ -22,23 +22,18 @@ from core.strategy.rounding import round_up_to_tick
 from core.strategy.types import CompensationDecision, OpenPosition
 
 
-def select_most_underwater(
-    positions: list[OpenPosition], current_price: Decimal, maker_fee: Decimal
+def select_compensation_target(
+    positions: list[OpenPosition], current_price: Decimal
 ) -> OpenPosition | None:
-    """Pick the open position with the largest unrealized loss at current price."""
-    if not positions:
+    """Pick the open position whose take-profit sits highest above the market.
+
+    This is the hardest-to-fill "tail" of the bag; compensation walks it down
+    toward the market first, unloading the most stranded orders. Positions whose
+    TP is already at/below the market are skipped (nothing to lower into)."""
+    candidates = [p for p in positions if p.current_tp_price > current_price]
+    if not candidates:
         return None
-    fee_factor = Decimal(1) - maker_fee
-    worst: OpenPosition | None = None
-    worst_loss = Decimal(0)
-    for p in positions:
-        revenue = current_price * p.qty * fee_factor
-        cost = p.entry_price * p.qty + p.fees_in
-        loss = cost - revenue  # positive ⇒ underwater
-        if loss > worst_loss:
-            worst_loss = loss
-            worst = p
-    return worst
+    return max(candidates, key=lambda p: p.current_tp_price)
 
 
 def compute_compensation(
@@ -71,7 +66,7 @@ def plan_compensation(
     tick_size: Decimal,
 ) -> CompensationDecision | None:
     """Convenience: pick victim and compute decision in one call."""
-    victim = select_most_underwater(open_positions, current_price, maker_fee)
+    victim = select_compensation_target(open_positions, current_price)
     if victim is None:
         return None
     return compute_compensation(
