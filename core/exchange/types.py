@@ -15,9 +15,14 @@ class Side(StrEnum):
 class OrderStatus(StrEnum):
     NEW = "New"
     PARTIALLY_FILLED = "PartiallyFilled"
+    PARTIALLY_FILLED_CANCELED = "PartiallyFilledCanceled"
     FILLED = "Filled"
     CANCELLED = "Cancelled"
     REJECTED = "Rejected"
+    # Conditional (stop / tp-sl) order lifecycle.
+    UNTRIGGERED = "Untriggered"
+    TRIGGERED = "Triggered"
+    DEACTIVATED = "Deactivated"
 
 
 class _Frozen(BaseModel):

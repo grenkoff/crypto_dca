@@ -103,9 +103,12 @@ class BybitClient:
         balances: dict[str, Balance] = {}
         for account in accounts:
             for coin in account.get("coin", []):
-                free = Decimal(str(coin.get("availableToWithdraw") or coin.get("walletBalance", 0)))
-                locked = Decimal(str(coin.get("locked", 0)))
-                balances[coin["coin"]] = Balance(coin=coin["coin"], free=free, locked=locked)
+                # UTA leaves availableToWithdraw blank; derive free from wallet - locked.
+                wallet = Decimal(str(coin.get("walletBalance") or 0))
+                locked = Decimal(str(coin.get("locked") or 0))
+                balances[coin["coin"]] = Balance(
+                    coin=coin["coin"], free=wallet - locked, locked=locked
+                )
         return balances
 
     async def place_limit(
@@ -146,9 +149,19 @@ class BybitClient:
         _raise_for_ret(resp)
 
     async def get_open_orders(self, symbol: str) -> list[Order]:
-        resp = await asyncio.to_thread(self._http.get_open_orders, category=CATEGORY, symbol=symbol)
-        result = _raise_for_ret(resp)
-        return [_parse_order(item) for item in (result.get("list") or [])]
+        orders: list[Order] = []
+        cursor: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"category": CATEGORY, "symbol": symbol, "limit": 50}
+            if cursor:
+                kwargs["cursor"] = cursor
+            resp = await asyncio.to_thread(self._http.get_open_orders, **kwargs)
+            result = _raise_for_ret(resp)
+            orders.extend(_parse_order(item) for item in (result.get("list") or []))
+            cursor = result.get("nextPageCursor") or None
+            if not cursor:
+                break
+        return orders
 
     async def get_executions(self, symbol: str, *, limit: int = 50) -> list[Execution]:
         resp = await asyncio.to_thread(
