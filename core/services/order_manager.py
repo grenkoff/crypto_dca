@@ -20,7 +20,7 @@ from core.exchange.types import Instrument, Side
 from core.services.events import EventBus
 from core.strategy.compensation import plan_compensation
 from core.strategy.pricing import compute_tp_price
-from core.strategy.rounding import round_down_to_tick
+from core.strategy.rounding import round_down_to_tick, round_up_to_tick
 from core.strategy.types import GridMode, OpenPosition
 from core.trading.models import (
     CompensationLink,
@@ -200,18 +200,34 @@ class OrderManager:
         if not target.tp_order_id:
             log.warning("compensation.target_has_no_tp", id=target.id)
             return
+        # Guard BEFORE cancelling: a re-priced sell below the exchange minimum would
+        # be rejected, leaving the position with no protective order. Skip instead.
+        new_notional = decision.new_tp_price * target.qty
+        if new_notional < self.instrument.min_order_amt:
+            log.warning(
+                "compensation.skip_below_min_notional",
+                id=target.id,
+                new_tp=str(decision.new_tp_price),
+                notional=str(new_notional),
+            )
+            return
         try:
             await self.client.cancel_order(self.symbol, target.tp_order_id)
         except Exception as exc:
             log.warning("compensation.cancel_failed", id=target.id, error=str(exc))
             return
-        new_tp_order_id = await self.client.place_limit(
-            self.symbol,
-            Side.SELL,
-            target.qty,
-            decision.new_tp_price,
-            order_link_id=_link_id("grid-tp-comp", target.level_index),
-        )
+        try:
+            new_tp_order_id = await self.client.place_limit(
+                self.symbol,
+                Side.SELL,
+                target.qty,
+                decision.new_tp_price,
+                order_link_id=_link_id("grid-tp-comp", target.level_index),
+            )
+        except Exception as exc:
+            # Cancelled but could not re-place: restore protection so it is never naked.
+            await self._restore_protection(target, exc)
+            return
         await sync_to_async(_record_compensation)(
             target=target,
             new_tp_price=decision.new_tp_price,
@@ -236,8 +252,48 @@ class OrderManager:
             },
         )
 
+    async def _restore_protection(self, target: Position, place_error: Exception) -> None:
+        """Re-place a protective sell after a failed compensation placement.
+
+        Priced at the higher of the old TP and the minimum notional price so it
+        always clears the exchange minimum — the position is never left naked.
+        """
+        min_price = round_up_to_tick(
+            self.instrument.min_order_amt / target.qty, self.instrument.tick_size
+        )
+        price = max(target.tp_price or Decimal(0), min_price)
+        try:
+            order_id = await self.client.place_limit(
+                self.symbol,
+                Side.SELL,
+                target.qty,
+                price,
+                order_link_id=_link_id("grid-tp-restore", target.level_index),
+            )
+        except Exception as restore_error:
+            log.error(
+                "compensation.restore_failed",
+                id=target.id,
+                place_error=str(place_error),
+                restore_error=str(restore_error),
+            )
+            return
+        await sync_to_async(_set_tp)(target=target, tp_price=price, tp_order_id=order_id)
+        log.error(
+            "compensation.restored_after_place_failure",
+            id=target.id,
+            price=str(price),
+            error=str(place_error),
+        )
+
 
 # --- sync helpers (invoked via sync_to_async from async methods) -----------
+
+
+def _set_tp(*, target: Position, tp_price: Decimal, tp_order_id: str) -> None:
+    target.tp_price = tp_price
+    target.tp_order_id = tp_order_id
+    target.save(update_fields=["tp_price", "tp_order_id"])
 
 
 def _upsert_grid_level(level_index: int, price: Decimal, order_id: str) -> None:

@@ -241,6 +241,48 @@ async def test_handle_sell_fill_closes_position_and_runs_compensation(
     assert "compensation.applied" in kinds
 
 
+async def test_compensation_skips_below_min_notional_without_cancelling(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    # Underwater position so small that a re-priced sell would fall below the $5
+    # exchange minimum — compensation must SKIP and leave the old order untouched.
+    underwater = await Position.objects.acreate(
+        level_index=1,
+        entry_price=Decimal("60000"),
+        qty=Decimal("0.00005"),  # notional ~$3 — below min_order_amt
+        fees_in=Decimal("0"),
+        tp_order_id="tp-under",
+        tp_price=Decimal("61000"),
+        status=PositionStatus.OPEN,
+        opened_at=datetime.now(tz=UTC),
+    )
+    await Position.objects.acreate(
+        level_index=0,
+        entry_price=Decimal("58000"),
+        qty=Decimal("0.001"),
+        fees_in=Decimal("0.058"),
+        tp_order_id="tp-win",
+        tp_price=Decimal("58580"),
+        status=PositionStatus.OPEN,
+        opened_at=datetime.now(tz=UTC),
+    )
+    execution = _exec(
+        exec_id="es3",
+        order_id="tp-win",
+        side=Side.SELL,
+        price=Decimal("58580"),
+        qty=Decimal("0.001"),
+        fee=Decimal("0.0586"),
+        fee_coin="USDT",
+    )
+    await om.handle_sell_fill(execution, current_price=Decimal("57000"))
+    # Old order left in place, nothing cancelled, no compensation recorded.
+    await underwater.arefresh_from_db()
+    assert underwater.tp_order_id == "tp-under"
+    assert ("BTCUSDT", "tp-under") not in client.cancelled
+    assert await CompensationLink.objects.acount() == 0
+
+
 async def test_handle_sell_fill_no_compensation_when_all_profitable(
     om: OrderManager, client: FakeBybitClient
 ) -> None:
