@@ -48,6 +48,12 @@ class StrategyConfig(_Singleton):
     grid_step = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal("0.005")
     )
+    tp_step = models.DecimalField(
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        default=Decimal("0.00005"),
+        help_text="Absolute price offset above entry for the take-profit.",
+    )
     order_qty_quote = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal("10")
     )

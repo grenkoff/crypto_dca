@@ -19,19 +19,17 @@ def _verify_pnl_at_least(
     return pnl
 
 
-def test_grid_step_target_when_profitable_enough() -> None:
-    # Percent step that easily covers min_profit
+def test_absolute_tp_step_used_when_above_floor() -> None:
+    # tp_step comfortably clears the min-profit floor -> target wins
     tp = compute_tp_price(
         entry_price=Decimal("60000"),
         qty=Decimal("0.001"),
-        fees_in=Decimal("0.06"),  # 0.001 * 60000 * 0.001
-        mode="percent",
-        step=Decimal("0.01"),  # 1% — gives ~$0.60 gross
+        fees_in=Decimal("0.06"),
+        tp_step=Decimal("600"),  # +$600 absolute
         min_profit_quote=Decimal("0.05"),
         maker_fee=Decimal("0.001"),
         tick_size=Decimal("0.01"),
     )
-    # Target = 60600; min ~ 60180 — target wins
     assert tp == Decimal("60600")
     _verify_pnl_at_least(
         tp=tp,
@@ -43,19 +41,17 @@ def test_grid_step_target_when_profitable_enough() -> None:
     )
 
 
-def test_min_profit_overrides_when_step_too_small() -> None:
-    # Tiny step — fees would eat the profit, min_profit forces a higher TP
+def test_min_profit_overrides_when_tp_step_too_small() -> None:
+    # tp_step so small the fees would eat it -> floor forces a higher TP
     tp = compute_tp_price(
         entry_price=Decimal("60000"),
         qty=Decimal("0.001"),
         fees_in=Decimal("0.06"),
-        mode="absolute",
-        step=Decimal("1"),  # only $1 gross spread
+        tp_step=Decimal("1"),  # only +$1 absolute
         min_profit_quote=Decimal("1"),
         maker_fee=Decimal("0.001"),
         tick_size=Decimal("0.01"),
     )
-    # Target = 60001; min must give net pnl ≥ $1 → tp ≈ (1 + 60.06)/(0.001*0.999) ≈ 61121
     assert tp > Decimal("61000")
     _verify_pnl_at_least(
         tp=tp,
@@ -67,13 +63,37 @@ def test_min_profit_overrides_when_step_too_small() -> None:
     )
 
 
+def test_breakeven_floor_when_min_profit_zero() -> None:
+    # min_profit=0 -> floor is break-even; a below-break-even tp_step is lifted to it
+    entry = Decimal("0.03100")
+    qty = Decimal("193.54")
+    fees_in = entry * qty * Decimal("0.000625")
+    tp = compute_tp_price(
+        entry_price=entry,
+        qty=qty,
+        fees_in=fees_in,
+        tp_step=Decimal("0.00001"),  # 1 tick — below break-even (~4 ticks)
+        min_profit_quote=Decimal("0"),
+        maker_fee=Decimal("0.000625"),
+        tick_size=Decimal("0.00001"),
+    )
+    # Never below break-even, so pnl >= 0
+    _verify_pnl_at_least(
+        tp=tp,
+        entry=entry,
+        qty=qty,
+        fees_in=fees_in,
+        maker_fee=Decimal("0.000625"),
+        min_profit=Decimal("0"),
+    )
+
+
 def test_tp_rounds_up_to_tick() -> None:
     tp = compute_tp_price(
         entry_price=Decimal("60000"),
         qty=Decimal("0.001"),
         fees_in=Decimal("0"),
-        mode="absolute",
-        step=Decimal("12.345"),
+        tp_step=Decimal("12.345"),
         min_profit_quote=Decimal("0"),
         maker_fee=Decimal("0"),
         tick_size=Decimal("0.10"),
