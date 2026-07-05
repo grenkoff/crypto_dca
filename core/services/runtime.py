@@ -51,6 +51,9 @@ class TraderRuntime:
         self._client: BybitClient | None = None
         self._stream: BybitPrivateStream | None = None
         self._current_price = Decimal(0)
+        # Serialise grid maintenance: the event handler and the reconcile loop both
+        # call _ensure_grid; without this they can race and double-place a level.
+        self._grid_lock = asyncio.Lock()
 
     async def bootstrap(self) -> None:
         settings = bybit_settings()
@@ -78,6 +81,12 @@ class TraderRuntime:
         await self._ensure_grid()
 
     async def _ensure_grid(self) -> None:
+        # One grid maintenance pass at a time — callers (event handler, reconcile
+        # loop, bootstrap) must not interleave or they double-place levels.
+        async with self._grid_lock:
+            await self._ensure_grid_impl()
+
+    async def _ensure_grid_impl(self) -> None:
         """Maintain a contiguous band of buy orders at round, step-aligned prices
         just below the current price.
 
