@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import signal
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 
 import structlog
@@ -75,9 +75,54 @@ class TraderRuntime:
             current_price=str(self._current_price),
             tick=str(instrument.tick_size),
         )
-        await self._ensure_grid_placed()
+        await self._ensure_grid()
 
-    async def _ensure_grid_placed(self) -> None:
+    async def _ensure_grid(self) -> None:
+        """Maintain a contiguous band of buy orders at round, step-aligned prices
+        just below the current price.
+
+        The band is the ``max_open_orders`` highest multiples of ``grid_step`` that
+        sit strictly below the market. A level's identity is its price (index
+        ``k = price / step``), so nothing drifts as the market moves: gaps get
+        filled, buys outside the band are pruned, and the band tracks the price.
+        Held positions (a filled buy awaiting its TP) count as covering their level.
+        """
+        assert self._om is not None
+        if await sync_to_async(_is_paused)():
+            return
+        if self._om.grid_mode != "absolute":
+            await self._ensure_grid_percent()
+            return
+        cfg = self._om.config
+        step: Decimal = cfg.grid_step
+        price = self._current_price
+        n = int(cfg.max_open_orders)
+        if step <= 0 or price <= 0 or n <= 0:
+            return
+
+        targets = band_levels(price, step, n)
+        target_prices = {p for _, p in targets}
+
+        resting, held = await sync_to_async(_grid_state)(step)
+        # Prune resting buys that fell outside the band (market moved up).
+        for p, (k, order_id) in list(resting.items()):
+            if p in target_prices:
+                continue
+            try:
+                await self._om.client.cancel_order(self._om.symbol, order_id)
+            except Exception as exc:
+                log.warning("grid.prune_failed", price=str(p), error=str(exc))
+                continue
+            await sync_to_async(_idle_level)(k)
+            log.info("grid.pruned", price=str(p))
+        # Fill any missing band levels (skip ones already resting or held).
+        for k, p in targets:
+            if p in resting or p in held:
+                continue
+            await self._om.place_buy_at_level(k, p)
+
+    async def _ensure_grid_percent(self) -> None:
+        """Legacy percent-mode grid (relative levels off a moving anchor)."""
         assert self._om is not None
         config = self._om.config
         anchor = config.top_anchor if config.top_anchor is not None else self._current_price
@@ -91,10 +136,6 @@ class TraderRuntime:
         existing = await sync_to_async(_existing_active_levels)()
         for spec in specs:
             if spec.level_index in existing:
-                continue
-            paused = await sync_to_async(_is_paused)()
-            if paused:
-                log.info("grid.skip_paused", level=spec.level_index)
                 continue
             await self._om.place_buy_at_level(spec.level_index, spec.price)
 
@@ -138,50 +179,23 @@ class TraderRuntime:
 
         if not isinstance(event.payload, BybitExecution):
             return
-        # Refresh last price for compensation math
+        # Refresh last price for compensation + grid maintenance.
         self._current_price = await self._client.get_last_price(self._om.symbol)
         if event.payload.side == Side.BUY:
-            level_index = await self._om.handle_buy_fill(event.payload)
-            if level_index is not None:
-                await self._maybe_extend_grid()
+            await self._om.handle_buy_fill(event.payload)
         else:
-            level_index = await self._om.handle_sell_fill(event.payload, self._current_price)
-            if level_index is not None:
-                # Reactivate the just-vacated grid slot with a fresh buy
-                await self._place_buy_at_existing_level(level_index)
-
-    async def _maybe_extend_grid(self) -> None:
-        """After a buy fills, place a buy at the next deeper level (if under the cap)."""
-        assert self._om is not None
-        config = self._om.config
-        active = await sync_to_async(_count_active_buys)()
-        if active >= config.max_open_orders:
-            return
-        next_index = await sync_to_async(_next_deeper_level_index)()
-        anchor = config.top_anchor if config.top_anchor is not None else self._current_price
-        specs = generate_levels(
-            top_anchor=anchor,
-            mode=self._om.grid_mode,
-            step=config.grid_step,
-            count=next_index + 1,
-            tick_size=self._om.instrument.tick_size,
-        )
-        if next_index >= len(specs):
-            log.info("grid.exhausted", next_index=next_index)
-            return
-        spec = specs[next_index]
-        await self._om.place_buy_at_level(spec.level_index, spec.price)
-
-    async def _place_buy_at_existing_level(self, level_index: int) -> None:
-        assert self._om is not None
-        level = await GridLevel.objects.aget(level_index=level_index)
-        await self._om.place_buy_at_level(level_index, level.target_buy_price)
+            await self._om.handle_sell_fill(event.payload, self._current_price)
+        # Re-derive the contiguous band from the fresh price (fills the vacated /
+        # newly-deeper level, prunes stale ones).
+        await self._ensure_grid()
 
     async def _reconcile_loop(self) -> None:
         assert self._client is not None and self._om is not None
         while not self._stop.is_set():
             try:
+                self._current_price = await self._client.get_last_price(self._om.symbol)
                 await reconcile_once(self._client, self._om.symbol)
+                await self._ensure_grid()  # self-heal the band even without fills
             except Exception as exc:
                 log.exception("reconcile.error", error=str(exc))
             try:
@@ -218,13 +232,53 @@ def _existing_active_levels() -> set[int]:
     )
 
 
-def _count_active_buys() -> int:
-    return GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL).count()
+# Adopted (manual-bag) positions live at level_index >= this; grid levels stay below it.
+_ADOPTED_LEVEL_BASE = 1000
 
 
-def _next_deeper_level_index() -> int:
-    last = GridLevel.objects.order_by("-level_index").values_list("level_index", flat=True).first()
-    return 0 if last is None else int(last) + 1
+def band_levels(price: Decimal, step: Decimal, count: int) -> list[tuple[int, Decimal]]:
+    """The ``count`` highest step-aligned prices strictly below ``price``.
+
+    Each level is ``(k, k*step)`` with ``k = price // step`` descending, giving a
+    contiguous round ladder. Levels at/below zero are dropped.
+    """
+    if step <= 0 or price <= 0 or count <= 0:
+        return []
+    k_top = int(price / step)
+    if Decimal(k_top) * step >= price:
+        k_top -= 1
+    levels: list[tuple[int, Decimal]] = []
+    for j in range(count):
+        k = k_top - j
+        p = Decimal(k) * step
+        if p <= 0:
+            break
+        levels.append((k, p))
+    return levels
+
+
+def _grid_state(step: Decimal) -> tuple[dict[Decimal, tuple[int, str]], set[Decimal]]:
+    """Snapshot for band maintenance: resting buys keyed by price, and the set of
+    round prices currently *held* (an open grid position sits there)."""
+    resting = {
+        g.target_buy_price: (int(g.level_index), g.current_buy_order_id)
+        for g in GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL).exclude(
+            current_buy_order_id=""
+        )
+    }
+    held: set[Decimal] = set()
+    for entry in Position.objects.filter(
+        status=PositionStatus.OPEN, level_index__lt=_ADOPTED_LEVEL_BASE
+    ).values_list("entry_price", flat=True):
+        k = int((entry / step).to_integral_value(rounding=ROUND_HALF_UP))
+        held.add(Decimal(k) * step)
+    return resting, held
+
+
+def _idle_level(level_index: int) -> None:
+    GridLevel.objects.filter(level_index=level_index).update(
+        status=LevelStatus.IDLE, current_buy_order_id=""
+    )
 
 
 def _is_paused() -> bool:
