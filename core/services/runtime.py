@@ -112,11 +112,10 @@ class TraderRuntime:
         if step <= 0 or price <= 0 or n <= 0:
             return
 
-        targets = band_levels(price, step, n)
-        target_prices = {p for _, p in targets}
-
         resting, held = await sync_to_async(_grid_state)(step)
-        # Prune resting buys that fell outside the band (market moved up).
+        targets = resting_buy_levels(price, step, n, held)
+        target_prices = {p for _, p in targets}
+        # Prune resting buys that fell outside the target set (market moved / held).
         for p, (k, order_id) in list(resting.items()):
             if p in target_prices:
                 continue
@@ -316,11 +315,16 @@ def sell_band_gaps(
     return gaps
 
 
-def band_levels(price: Decimal, step: Decimal, count: int) -> list[tuple[int, Decimal]]:
-    """The ``count`` highest step-aligned prices strictly below ``price``.
+def resting_buy_levels(
+    price: Decimal, step: Decimal, count: int, held: set[Decimal]
+) -> list[tuple[int, Decimal]]:
+    """The ``count`` highest step-aligned prices below ``price`` that we don't
+    already hold.
 
-    Each level is ``(k, k*step)`` with ``k = price // step`` descending, giving a
-    contiguous round ladder. Levels at/below zero are dropped.
+    Walks round levels down from just below the market, skipping levels already
+    covered by an open position, until ``count`` resting-buy levels are collected.
+    This keeps a constant number of live buy orders — when one fills, the next
+    deeper unheld level takes its place. Levels at/below zero stop the walk.
     """
     if step <= 0 or price <= 0 or count <= 0:
         return []
@@ -328,12 +332,14 @@ def band_levels(price: Decimal, step: Decimal, count: int) -> list[tuple[int, De
     if Decimal(k_top) * step >= price:
         k_top -= 1
     levels: list[tuple[int, Decimal]] = []
-    for j in range(count):
-        k = k_top - j
+    k = k_top
+    while len(levels) < count:
         p = Decimal(k) * step
         if p <= 0:
             break
-        levels.append((k, p))
+        if p not in held:
+            levels.append((k, p))
+        k -= 1
     return levels
 
 
@@ -347,9 +353,12 @@ def _grid_state(step: Decimal) -> tuple[dict[Decimal, tuple[int, str]], set[Deci
         )
     }
     held: set[Decimal] = set()
-    for entry in Position.objects.filter(
-        status=PositionStatus.OPEN, level_index__lt=_ADOPTED_LEVEL_BASE
-    ).values_list("entry_price", flat=True):
+    # Any open position covers its (round) level — don't re-buy inventory we hold.
+    # The far-above manual bag rounds to prices well outside the buy band, so it is
+    # harmless here.
+    for entry in Position.objects.filter(status=PositionStatus.OPEN).values_list(
+        "entry_price", flat=True
+    ):
         k = int((entry / step).to_integral_value(rounding=ROUND_HALF_UP))
         held.add(Decimal(k) * step)
     return resting, held
