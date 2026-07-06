@@ -123,8 +123,11 @@ class TraderRuntime:
             try:
                 await self._om.client.cancel_order(self._om.symbol, order_id)
             except Exception as exc:
-                log.warning("grid.prune_failed", price=str(p), error=str(exc))
-                continue
+                # "order does not exist" ⇒ it already filled/cancelled; idle the stale
+                # level anyway so it doesn't linger as phantom drift.
+                if "170213" not in str(exc) and "does not exist" not in str(exc).lower():
+                    log.warning("grid.prune_failed", price=str(p), error=str(exc))
+                    continue
             await sync_to_async(_idle_level)(k)
             log.info("grid.pruned", price=str(p))
         # Fill any missing band levels (skip ones already resting or held).
