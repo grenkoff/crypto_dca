@@ -108,9 +108,18 @@ class TraderRuntime:
         cfg = self._om.config
         step: Decimal = cfg.grid_step
         price = self._current_price
-        n = int(cfg.max_open_orders)
-        if step <= 0 or price <= 0 or n <= 0:
+        per_order: Decimal = cfg.order_qty_quote
+        if step <= 0 or price <= 0 or per_order <= 0:
             return
+
+        # Size the grid to available capital: as many buys as our total USDT can
+        # fund (free + already locked in resting buys), capped by max_open_orders as
+        # a safety limit. As buys fill into held inventory USDT drops and the grid
+        # shrinks; as positions sell it grows back.
+        balances = await self._om.client.get_balances()
+        quote = balances.get(self._om.instrument.quote_coin)
+        total_quote = (quote.free + quote.locked) if quote is not None else Decimal(0)
+        n = min(int(total_quote / per_order), int(cfg.max_open_orders))
 
         resting, held = await sync_to_async(_grid_state)(step)
         targets = resting_buy_levels(price, step, n, held)

@@ -168,14 +168,27 @@ class OrderManager:
             min_profit_quote=self.config.min_profit_quote,
             maker_fee=self.config.maker_fee,
             tick_size=self.instrument.tick_size,
+            min_order_amt=self.instrument.min_order_amt,
         )
-        tp_order_id = await self.client.place_limit(
-            self.symbol,
-            Side.SELL,
-            execution.qty,
-            tp_price,
-            order_link_id=_link_id("grid-tp", level.level_index),
-        )
+        try:
+            tp_order_id = await self.client.place_limit(
+                self.symbol,
+                Side.SELL,
+                execution.qty,
+                tp_price,
+                order_link_id=_link_id("grid-tp", level.level_index),
+            )
+        except Exception as exc:
+            # TP could not be placed — the bought coin is now unmanaged. Log loudly
+            # (recover with `readopt_free_balance`) rather than silently swallow.
+            log.error(
+                "buy_fill.tp_failed_coin_free",
+                level=level.level_index,
+                qty=str(execution.qty),
+                tp=str(tp_price),
+                error=str(exc)[:100],
+            )
+            raise
         await sync_to_async(_persist_buy_fill)(
             execution=execution,
             level_index=level.level_index,
