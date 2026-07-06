@@ -31,6 +31,7 @@ from core.services.reconciliation import reconcile_once
 from core.strategy.grid import generate_levels
 from core.trading.models import (
     BotStatus,
+    ExecutionLog,
     GridLevel,
     LevelStatus,
     Position,
@@ -220,6 +221,7 @@ class TraderRuntime:
             try:
                 self._current_price = await self._client.get_last_price(self._om.symbol)
                 await reconcile_once(self._client, self._om.symbol)
+                await self._recover_missed_fills()  # replay fills dropped by WS hiccups
                 await self._ensure_grid()  # self-heal the band even without fills
             except Exception as exc:
                 log.exception("reconcile.error", error=str(exc))
@@ -227,6 +229,29 @@ class TraderRuntime:
                 await asyncio.wait_for(self._stop.wait(), timeout=RECONCILE_INTERVAL_S)
             except TimeoutError:
                 continue
+
+    async def _recover_missed_fills(self) -> None:
+        """Replay TP fills the WS stream dropped (e.g. on a connection reset).
+
+        A sell execution matching an open position's TP order that we never logged
+        is fed back through the normal fill path — idempotent on ``exec_id``, so it
+        closes the phantom-open position with the correct PnL (and compensation).
+        """
+        assert self._om is not None
+        tp_ids = await sync_to_async(_open_tp_order_ids)()
+        if not tp_ids:
+            return
+        for execution in await self._om.client.get_executions(self._om.symbol, limit=100):
+            if execution.side != Side.SELL or execution.order_id not in tp_ids:
+                continue
+            if await sync_to_async(_exec_logged)(execution.exec_id):
+                continue
+            log.warning(
+                "reconcile.replaying_missed_sell",
+                exec_id=execution.exec_id,
+                order_id=execution.order_id,
+            )
+            await self._om.handle_sell_fill(execution, self._current_price)
 
     async def _wait_for_stop(self) -> None:
         await self._stop.wait()
@@ -315,6 +340,18 @@ def _idle_level(level_index: int) -> None:
     GridLevel.objects.filter(level_index=level_index).update(
         status=LevelStatus.IDLE, current_buy_order_id=""
     )
+
+
+def _open_tp_order_ids() -> set[str]:
+    return set(
+        Position.objects.filter(status=PositionStatus.OPEN)
+        .exclude(tp_order_id="")
+        .values_list("tp_order_id", flat=True)
+    )
+
+
+def _exec_logged(exec_id: str) -> bool:
+    return ExecutionLog.objects.filter(exec_id=exec_id).exists()
 
 
 def _is_paused() -> bool:
