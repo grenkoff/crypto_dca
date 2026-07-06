@@ -5,15 +5,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('trading', '0001_initial'),
+        ("trading", "0001_initial"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='position',
-            name='compensation_credit',
-            field=models.DecimalField(decimal_places=12, default=Decimal('0'), max_digits=28),
+            model_name="position",
+            name="compensation_credit",
+            field=models.DecimalField(decimal_places=12, default=Decimal("0"), max_digits=28),
         ),
     ]

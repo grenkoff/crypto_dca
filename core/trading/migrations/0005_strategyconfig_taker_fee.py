@@ -5,15 +5,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('trading', '0004_position_filled_qty_position_sell_value'),
+        ("trading", "0004_position_filled_qty_position_sell_value"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='strategyconfig',
-            name='taker_fee',
-            field=models.DecimalField(decimal_places=8, default=Decimal('0.00075'), max_digits=10),
+            model_name="strategyconfig",
+            name="taker_fee",
+            field=models.DecimalField(decimal_places=8, default=Decimal("0.00075"), max_digits=10),
         ),
     ]
