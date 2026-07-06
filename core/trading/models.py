@@ -105,6 +105,13 @@ class Position(models.Model):
     fees_out = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
     )
+    # Cumulative sold quantity and gross sell proceeds — support partial TP fills.
+    filled_qty = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+    )
+    sell_value = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+    )
     tp_order_id = models.CharField(max_length=64, blank=True)
     tp_price = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, null=True, blank=True

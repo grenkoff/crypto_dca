@@ -241,6 +241,83 @@ async def test_handle_sell_fill_closes_position_and_runs_compensation(
     assert "compensation.applied" in kinds
 
 
+async def _open_pos() -> Position:
+    return await Position.objects.acreate(
+        level_index=5,
+        entry_price=Decimal("60000"),
+        qty=Decimal("0.001"),
+        fees_in=Decimal("0.06"),
+        tp_order_id="tp-partial",
+        tp_price=Decimal("60600"),
+        status=PositionStatus.OPEN,
+        opened_at=datetime.now(tz=UTC),
+    )
+
+
+async def test_sell_partial_fill_keeps_position_open(
+    om: OrderManager, bus: RecordingEventBus
+) -> None:
+    pos = await _open_pos()
+    execution = _exec(
+        exec_id="p1",
+        order_id="tp-partial",
+        side=Side.SELL,
+        price=Decimal("60600"),
+        qty=Decimal("0.0004"),  # partial of 0.001
+        fee=Decimal("0.024"),
+        fee_coin="USDT",
+    )
+    result = await om.handle_sell_fill(execution, current_price=Decimal("60000"))
+    assert result is None  # not fully closed
+    await pos.arefresh_from_db()
+    assert pos.status == PositionStatus.OPEN
+    assert pos.filled_qty == Decimal("0.0004")
+    assert await CompensationLink.objects.acount() == 0
+    assert "position.closed" not in [e[0] for e in bus.events]
+
+
+async def test_sell_completing_fill_closes_with_correct_pnl(om: OrderManager) -> None:
+    pos = await _open_pos()
+    for eid, q in (("c1", "0.0004"), ("c2", "0.0006")):
+        await om.handle_sell_fill(
+            _exec(
+                exec_id=eid,
+                order_id="tp-partial",
+                side=Side.SELL,
+                price=Decimal("60600"),
+                qty=Decimal(q),
+                fee=Decimal("60600") * Decimal(q) * Decimal("0.001"),
+                fee_coin="USDT",
+            ),
+            current_price=Decimal("60000"),
+        )
+    await pos.arefresh_from_db()
+    assert pos.status == PositionStatus.CLOSED
+    assert pos.filled_qty == Decimal("0.001")
+    # PnL from full proceeds and full cost, not a partial-vs-full mismatch.
+    proceeds = Decimal("60600") * Decimal("0.001")
+    expected = proceeds - pos.fees_out - Decimal("60000") * Decimal("0.001") - Decimal("0.06")
+    assert pos.realized_pnl == expected
+    assert pos.realized_pnl > 0
+
+
+async def test_sell_fill_idempotent_on_exec_id(om: OrderManager) -> None:
+    pos = await _open_pos()
+    ex = _exec(
+        exec_id="dup",
+        order_id="tp-partial",
+        side=Side.SELL,
+        price=Decimal("60600"),
+        qty=Decimal("0.0004"),
+        fee=Decimal("0.024"),
+        fee_coin="USDT",
+    )
+    await om.handle_sell_fill(ex, current_price=Decimal("60000"))
+    await om.handle_sell_fill(ex, current_price=Decimal("60000"))  # redelivered
+    await pos.arefresh_from_db()
+    assert pos.filled_qty == Decimal("0.0004")  # not doubled
+
+
 async def test_compensation_skips_below_min_notional_without_cancelling(
     om: OrderManager, client: FakeBybitClient
 ) -> None:

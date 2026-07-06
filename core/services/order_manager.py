@@ -7,6 +7,7 @@ blocks wrapped in `sync_to_async`.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -151,35 +152,39 @@ class OrderManager:
             log.warning("sell_fill.no_position", order_id=execution.order_id)
             return None
         fees_out = fee_in_quote(execution, self.instrument.quote_coin)
-        realized = (
-            execution.price * execution.qty
-            - fees_out
-            - position.entry_price * position.qty
-            - position.fees_in
-        )
-        await sync_to_async(_persist_sell_fill)(
+        result = await sync_to_async(_apply_sell_fill)(
             position=position,
-            fees_out=fees_out,
-            realized=realized,
             execution=execution,
+            fees_out=fees_out,
+            lot_size=self.instrument.lot_size,
         )
+        if not result.closed:
+            # Partial TP fill: keep the position open, accumulate, do nothing else
+            # until the remainder fills. (Prevents phantom loss + orphaned base coin.)
+            log.info(
+                "sell.partial",
+                level=position.level_index,
+                filled=str(result.filled_qty),
+                remaining=str(result.remaining),
+            )
+            return None
         log.info(
             "sell.filled",
             level=position.level_index,
-            realized=str(realized),
-            qty=str(execution.qty),
+            realized=str(result.realized),
+            qty=str(result.filled_qty),
         )
         await self.bus.publish(
             "position.closed",
             {
                 "level": position.level_index,
-                "realized": str(realized),
+                "realized": str(result.realized),
                 "position_id": position.id,
             },
         )
-        if realized > 0:
+        if result.realized > 0:
             await self._apply_compensation(
-                profit=realized, source_position_id=position.id, current_price=current_price
+                profit=result.realized, source_position_id=position.id, current_price=current_price
             )
         return int(position.level_index)
 
@@ -356,23 +361,65 @@ def _persist_buy_fill(
         _log_execution(execution)
 
 
-def _persist_sell_fill(
+@dataclass
+class SellFillResult:
+    closed: bool
+    realized: Decimal
+    filled_qty: Decimal
+    remaining: Decimal
+
+
+def _apply_sell_fill(
     *,
     position: Position,
-    fees_out: Decimal,
-    realized: Decimal,
     execution: BybitExecution,
-) -> None:
+    fees_out: Decimal,
+    lot_size: Decimal,
+) -> SellFillResult:
+    """Accumulate one (possibly partial) TP fill onto the position.
+
+    The position closes only once the unsold remainder drops below one lot;
+    realized PnL is then computed from the *actual* accumulated proceeds and the
+    full entry cost. Idempotent on ``exec_id`` (WS may redeliver).
+    """
     with transaction.atomic():
-        position.fees_out = fees_out
-        position.realized_pnl = realized
-        position.status = PositionStatus.CLOSED
-        position.closed_at = execution.executed_at
+        if ExecutionLog.objects.filter(exec_id=execution.exec_id).exists():
+            remaining = max(position.qty - position.filled_qty, Decimal(0))
+            return SellFillResult(
+                closed=position.status == PositionStatus.CLOSED,
+                realized=position.realized_pnl,
+                filled_qty=position.filled_qty,
+                remaining=remaining,
+            )
+        position.filled_qty += execution.qty
+        position.sell_value += execution.price * execution.qty
+        position.fees_out += fees_out
+        remaining = position.qty - position.filled_qty
+        closed = remaining < lot_size
+        if closed:
+            realized = (
+                position.sell_value
+                - position.fees_out
+                - position.entry_price * position.qty
+                - position.fees_in
+            )
+            position.realized_pnl = realized
+            position.status = PositionStatus.CLOSED
+            position.closed_at = execution.executed_at
+        else:
+            realized = Decimal(0)
         position.save()
-        GridLevel.objects.filter(level_index=position.level_index).update(
-            status=LevelStatus.IDLE, current_buy_order_id=""
-        )
+        if closed:
+            GridLevel.objects.filter(level_index=position.level_index).update(
+                status=LevelStatus.IDLE, current_buy_order_id=""
+            )
         _log_execution(execution)
+    return SellFillResult(
+        closed=closed,
+        realized=realized,
+        filled_qty=position.filled_qty,
+        remaining=max(remaining, Decimal(0)),
+    )
 
 
 def _open_positions_view() -> list[OpenPosition]:
