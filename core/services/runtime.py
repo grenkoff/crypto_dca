@@ -353,12 +353,13 @@ def _grid_state(step: Decimal) -> tuple[dict[Decimal, tuple[int, str]], set[Deci
         )
     }
     held: set[Decimal] = set()
-    # Any open position covers its (round) level — don't re-buy inventory we hold.
-    # The far-above manual bag rounds to prices well outside the buy band, so it is
-    # harmless here.
-    for entry in Position.objects.filter(status=PositionStatus.OPEN).values_list(
-        "entry_price", flat=True
-    ):
+    # Only *grid* positions cover a buy level — a filled grid buy sells one step up,
+    # so we don't re-buy that level until it clears. Sell-band seeds, re-adopted lots
+    # and the manual bag are separate inventory committed to their own (higher) TPs,
+    # so they must NOT block the buy grid.
+    for entry in Position.objects.filter(
+        status=PositionStatus.OPEN, level_index__lt=_ADOPTED_LEVEL_BASE
+    ).values_list("entry_price", flat=True):
         k = int((entry / step).to_integral_value(rounding=ROUND_HALF_UP))
         held.add(Decimal(k) * step)
     return resting, held
