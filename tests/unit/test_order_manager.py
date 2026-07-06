@@ -318,6 +318,22 @@ async def test_sell_fill_idempotent_on_exec_id(om: OrderManager) -> None:
     assert pos.filled_qty == Decimal("0.0004")  # not doubled
 
 
+async def test_seed_sell_level_buys_at_market_and_rests_tp(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    seeded = await om.seed_sell_level(tp_price=Decimal("60600"), market_price=Decimal("60000"))
+    assert seeded is True
+    sides = [(o["side"], o["price"]) for o in client.placed]
+    # an aggressive buy near market, then a resting take-profit at the hole
+    assert any(side == Side.BUY for side, _ in sides)
+    assert (Side.SELL, Decimal("60600")) in sides
+    pos = await Position.objects.aget(level_index__gte=3000)
+    assert pos.entry_price == Decimal("60000")
+    assert pos.tp_price == Decimal("60600")
+    assert pos.tp_order_id != ""
+    assert pos.status == PositionStatus.OPEN
+
+
 async def test_compensation_skips_below_min_notional_without_cancelling(
     om: OrderManager, client: FakeBybitClient
 ) -> None:

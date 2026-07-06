@@ -64,6 +64,7 @@ class StrategyConfig(_Singleton):
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal("0.01")
     )
     maker_fee = models.DecimalField(max_digits=10, decimal_places=8, default=Decimal("0.001"))
+    taker_fee = models.DecimalField(max_digits=10, decimal_places=8, default=Decimal("0.00075"))
     max_open_orders = models.PositiveIntegerField(default=20)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -2,7 +2,55 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from core.services.runtime import band_levels
+from core.services.runtime import band_levels, sell_band_gaps
+
+
+def test_sell_band_gaps_fills_holes_in_near_cluster() -> None:
+    # near cluster 0.0306..0.0312 with holes at 0.0307/0.0308; bag far above is ignored
+    sells = [
+        Decimal("0.03060"),
+        Decimal("0.03090"),
+        Decimal("0.03100"),
+        Decimal("0.03110"),
+        Decimal("0.03120"),
+        Decimal("0.04275"),  # bag
+        Decimal("0.05325"),  # bag
+    ]
+    gaps = sell_band_gaps(
+        sells,
+        step=Decimal("0.0001"),
+        max_cluster_gap=Decimal("0.001"),
+        min_sell=Decimal("0.03055"),
+    )
+    assert gaps == [Decimal("0.03070"), Decimal("0.03080")]
+
+
+def test_sell_band_gaps_excludes_bag_entirely() -> None:
+    # a contiguous near cluster with no holes -> nothing, bag never considered
+    sells = [Decimal("0.03060"), Decimal("0.03070"), Decimal("0.05000")]
+    gaps = sell_band_gaps(
+        sells,
+        step=Decimal("0.0001"),
+        max_cluster_gap=Decimal("0.001"),
+        min_sell=Decimal("0.03055"),
+    )
+    assert gaps == []
+
+
+def test_sell_band_gaps_respects_min_sell_floor() -> None:
+    sells = [Decimal("0.03060"), Decimal("0.03090")]
+    # floor at 0.03080 drops 0.03070 (too close to market / below break-even)
+    gaps = sell_band_gaps(
+        sells,
+        step=Decimal("0.0001"),
+        max_cluster_gap=Decimal("0.001"),
+        min_sell=Decimal("0.03080"),
+    )
+    assert gaps == [Decimal("0.03080")]
+
+
+def test_sell_band_gaps_empty_input() -> None:
+    assert sell_band_gaps([], Decimal("0.0001"), Decimal("0.001"), Decimal("0.03")) == []
 
 
 def test_band_is_contiguous_and_strictly_below_price() -> None:
