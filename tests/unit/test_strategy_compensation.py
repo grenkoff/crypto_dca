@@ -113,11 +113,12 @@ def test_compensation_step_smaller_than_tick_still_moves_one_tick() -> None:
 
 
 def test_compute_compensation_caps_at_market_floor() -> None:
-    # A step that would land at/below market is floored one tick above it.
-    target = _pos(1, "60000", qty="0.001", fees_in="0", tp="59000.05")
+    # Low entry (break-even below market) + credit: a full step would land below
+    # market, so it is floored one tick above it.
+    target = _pos(1, "59000", qty="0.001", fees_in="0", tp="59000.05", credit="0.10")
     decision = compute_compensation(
         target=target,
-        profit_from_other=Decimal("0.10"),
+        profit_from_other=Decimal("0.05"),
         maker_fee=Decimal("0.001"),
         current_price=Decimal("59000"),
         tick_size=Decimal("0.01"),
@@ -126,14 +127,15 @@ def test_compute_compensation_caps_at_market_floor() -> None:
     assert decision is not None and decision.new_tp_price == Decimal("59000.01")
 
 
-def test_compute_compensation_skips_when_already_at_floor() -> None:
-    # TP is already one tick above market — no room left, skip.
-    target = _pos(1, "60000", qty="0.001", fees_in="0", tp="59000.01")
+def test_compute_compensation_skips_when_credit_insufficient() -> None:
+    # TP already far below break-even; the tiny credit can't cover the loss -> skip
+    # (the credit floor sits above the current TP), so the profit is kept instead.
+    target = _pos(1, "60000", qty="0.001", fees_in="0", tp="59000.05", credit="0")
     decision = compute_compensation(
         target=target,
         profit_from_other=Decimal("0.10"),
         maker_fee=Decimal("0.001"),
-        current_price=Decimal("59000"),
+        current_price=Decimal("57000"),
         tick_size=Decimal("0.01"),
         tp_step=Decimal("100"),
     )
