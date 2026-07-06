@@ -36,11 +36,6 @@ from core.trading.models import (
 
 log = structlog.get_logger()
 
-# Aggressive-buy slippage cap when seeding a sell-ladder hole (fills at ~market).
-SEED_BUY_SLIPPAGE = Decimal("0.002")
-# Seeded (sell-band) positions get their own level_index range.
-SEED_LEVEL_BASE = 3000
-
 
 def fee_in_quote(execution: BybitExecution, quote_coin: str) -> Decimal:
     """Normalize exchange fee to quote currency (USDT)."""
@@ -112,47 +107,6 @@ class OrderManager:
             {"side": "buy", "level": level_index, "price": str(price), "order_id": order_id},
         )
         return order_id
-
-    async def seed_sell_level(self, tp_price: Decimal, market_price: Decimal) -> bool:
-        """Fill a hole in the take-profit ladder: buy inventory at market, then rest
-        a take-profit at ``tp_price`` (a round level above market). Returns True if a
-        position was seeded. The market buy is an aggressive (taker) limit; if the
-        resting sell then fails, the bought coin is left free for later re-adoption.
-        """
-        qty = compute_buy_qty(self.config.order_qty_quote, market_price, self.instrument)
-        if qty < self.instrument.min_order_qty or qty * tp_price < self.instrument.min_order_amt:
-            return False
-        buy_price = round_up_to_tick(
-            market_price * (Decimal(1) + SEED_BUY_SLIPPAGE), self.instrument.tick_size
-        )
-        await self.client.place_limit(
-            self.symbol,
-            Side.BUY,
-            qty,
-            buy_price,
-            order_link_id=_link_id("seed-buy", 0),
-            post_only=False,
-        )
-        try:
-            sell_id = await self.client.place_limit(
-                self.symbol, Side.SELL, qty, tp_price, order_link_id=_link_id("seed-tp", 0)
-            )
-        except Exception:
-            log.error("seed.sell_failed_coin_left_free", tp=str(tp_price), qty=str(qty))
-            raise
-        await sync_to_async(_persist_seed)(
-            entry=market_price,
-            qty=qty,
-            tp_price=tp_price,
-            tp_order_id=sell_id,
-            maker_fee=self.config.maker_fee,
-        )
-        log.info("sellband.seeded", tp=str(tp_price), entry=str(market_price), qty=str(qty))
-        await self.bus.publish(
-            "order.placed",
-            {"side": "seed", "price": str(tp_price), "order_id": sell_id},
-        )
-        return True
 
     async def handle_buy_fill(self, execution: BybitExecution) -> int | None:
         level = await sync_to_async(_find_level_by_order_id)(execution.order_id)
@@ -267,6 +221,7 @@ class OrderManager:
             maker_fee=self.config.maker_fee,
             current_price=current_price,
             tick_size=self.instrument.tick_size,
+            min_order_amt=self.instrument.min_order_amt,
         )
         if decision is None:
             return
@@ -402,33 +357,6 @@ def _log_execution(execution: BybitExecution) -> None:
             "fee_coin": execution.fee_coin,
             "executed_at": execution.executed_at,
         },
-    )
-
-
-def _persist_seed(
-    *,
-    entry: Decimal,
-    qty: Decimal,
-    tp_price: Decimal,
-    tp_order_id: str,
-    maker_fee: Decimal,
-) -> None:
-    last = (
-        Position.objects.filter(level_index__gte=SEED_LEVEL_BASE)
-        .order_by("-level_index")
-        .values_list("level_index", flat=True)
-        .first()
-    )
-    level_index = SEED_LEVEL_BASE if last is None else int(last) + 1
-    Position.objects.create(
-        level_index=level_index,
-        entry_price=entry,
-        qty=qty,
-        fees_in=entry * qty * maker_fee,
-        tp_order_id=tp_order_id,
-        tp_price=tp_price,
-        status=PositionStatus.OPEN,
-        opened_at=datetime.now(tz=UTC),
     )
 
 

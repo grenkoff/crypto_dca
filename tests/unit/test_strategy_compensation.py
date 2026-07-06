@@ -28,24 +28,23 @@ def _pos(
     )
 
 
-def test_select_picks_highest_tp() -> None:
+def test_select_picks_second_nearest_tp_above_market() -> None:
     positions = [
-        _pos(1, "60000", tp="61000"),  # tail — highest TP, hardest to fill
-        _pos(2, "58000", tp="59000"),
-        _pos(3, "55000", tp="56000"),
-    ]
-    victim = select_compensation_target(positions, Decimal("57000"), Decimal("0.01"))
-    assert victim is not None and victim.id == 1
-
-
-def test_select_is_sticky_on_in_progress() -> None:
-    # id=2 has a lower TP but is already in progress (credit>0) -> keep working it.
-    positions = [
-        _pos(1, "60000", tp="61000", credit="0"),
-        _pos(2, "58000", tp="59000", credit="0.50"),
+        _pos(1, "60000", tp="61000"),  # farthest
+        _pos(2, "58000", tp="59000"),  # second-nearest — the victim
+        _pos(3, "55000", tp="58000"),  # nearest — left to fill on its own
     ]
     victim = select_compensation_target(positions, Decimal("57000"), Decimal("0.01"))
     assert victim is not None and victim.id == 2
+
+
+def test_select_falls_back_to_single_candidate() -> None:
+    positions = [
+        _pos(1, "60000", tp="61000"),
+        _pos(2, "50000", tp="56000"),  # below market — not a candidate
+    ]
+    victim = select_compensation_target(positions, Decimal("57000"), Decimal("0.01"))
+    assert victim is not None and victim.id == 1
 
 
 def test_select_skips_tp_at_or_below_market() -> None:
@@ -169,5 +168,22 @@ def test_plan_compensation_end_to_end() -> None:
         tick_size=Decimal("0.01"),
     )
     assert decision is not None
-    # Position 1 is more underwater, so it should be selected
+    # Nearest TP (59000) is left alone; the second-nearest (61000) is selected
     assert decision.target_position_id == 1
+
+
+def test_compute_compensation_floors_at_min_notional() -> None:
+    # 164.91 KAS bought at 0.0302 (~$4.98): credit would pull the TP below the
+    # $5 exchange minimum — floor lifts it so the sell is placeable.
+    target = _pos(1, "0.0302", qty="164.91", fees_in="0", tp="0.0304", credit="0.10")
+    decision = compute_compensation(
+        target=target,
+        profit_from_other=Decimal("0.05"),
+        maker_fee=Decimal("0.000625"),
+        current_price=Decimal("0.0295"),
+        tick_size=Decimal("0.00001"),
+        min_order_amt=Decimal("5"),
+    )
+    assert decision is not None
+    assert decision.new_tp_price * target.qty >= Decimal("5")
+    assert decision.new_tp_price < target.current_tp_price

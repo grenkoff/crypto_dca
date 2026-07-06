@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import signal
 from datetime import UTC, datetime
-from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 
 import structlog
@@ -29,7 +29,6 @@ from core.services.events import EventBus, NoOpEventBus
 from core.services.order_manager import OrderManager
 from core.services.reconciliation import reconcile_once
 from core.strategy.grid import generate_levels
-from core.strategy.rounding import round_up_to_tick
 from core.trading.models import (
     BotStatus,
     GridLevel,
@@ -42,8 +41,6 @@ from core.trading.models import (
 log = structlog.get_logger()
 
 RECONCILE_INTERVAL_S = 30
-# A gap wider than this many steps splits the near-market TP ladder from the bag.
-_NEAR_CLUSTER_GAP_STEPS = 10
 
 
 class TraderRuntime:
@@ -148,29 +145,6 @@ class TraderRuntime:
                 await self._om.place_buy_at_level(k, p)
             except Exception as exc:
                 log.warning("grid.place_skipped", price=str(p), error=str(exc)[:100])
-
-        await self._ensure_sell_band(price, step)
-
-    async def _ensure_sell_band(self, price: Decimal, step: Decimal) -> None:
-        """Keep the near-market take-profit ladder contiguous: fill holes between the
-        lowest and highest near TP by buying inventory at market and resting a TP.
-
-        The far-away manual bag is isolated by the cluster-gap split, so only the
-        active near-market ladder is kept gap-free. Levels below the fee break-even
-        floor are skipped."""
-        assert self._om is not None
-        cfg = self._om.config
-        tick = self._om.instrument.tick_size
-        min_sell = round_up_to_tick(
-            price * (Decimal(1) + cfg.taker_fee) / (Decimal(1) - cfg.maker_fee), tick
-        )
-        sells = await sync_to_async(_open_sell_prices)()
-        gaps = sell_band_gaps(sells, step, step * _NEAR_CLUSTER_GAP_STEPS, min_sell)
-        for tp in gaps:
-            try:
-                await self._om.seed_sell_level(tp, price)
-            except Exception as exc:
-                log.warning("sellband.seed_skipped", tp=str(tp), error=str(exc)[:100])
 
     async def _ensure_grid_percent(self) -> None:
         """Legacy percent-mode grid (relative levels off a moving anchor)."""
@@ -287,43 +261,6 @@ def _existing_active_levels() -> set[int]:
 _ADOPTED_LEVEL_BASE = 1000
 
 
-def sell_band_gaps(
-    sell_prices: list[Decimal],
-    step: Decimal,
-    max_cluster_gap: Decimal,
-    min_sell: Decimal,
-) -> list[Decimal]:
-    """Empty step-aligned levels inside the near-market take-profit cluster.
-
-    The near cluster is the contiguous run of TPs from the lowest, split at the
-    first gap wider than ``max_cluster_gap`` (this isolates the far-away manual
-    bag). Returns the round levels between the cluster's low and high that carry no
-    sell and sit at/above ``min_sell`` (the fee-break-even floor) — the holes to
-    fill by buying at market and resting a take-profit there.
-    """
-    if step <= 0 or not sell_prices:
-        return []
-    ordered = sorted(sell_prices)
-    cluster = [ordered[0]]
-    for p in ordered[1:]:
-        if p - cluster[-1] <= max_cluster_gap:
-            cluster.append(p)
-        else:
-            break
-    covered = set(cluster)
-    hi = cluster[-1]
-    gaps: list[Decimal] = []
-    k = int((cluster[0] / step).to_integral_value(rounding=ROUND_CEILING))
-    while True:
-        level = Decimal(k) * step
-        if level > hi:
-            break
-        if level >= min_sell and level not in covered:
-            gaps.append(level)
-        k += 1
-    return gaps
-
-
 def resting_buy_levels(
     price: Decimal, step: Decimal, count: int, held: set[Decimal]
 ) -> list[tuple[int, Decimal]]:
@@ -372,16 +309,6 @@ def _grid_state(step: Decimal) -> tuple[dict[Decimal, tuple[int, str]], set[Deci
         k = int((entry / step).to_integral_value(rounding=ROUND_HALF_UP))
         held.add(Decimal(k) * step)
     return resting, held
-
-
-def _open_sell_prices() -> list[Decimal]:
-    return [
-        p
-        for p in Position.objects.filter(status=PositionStatus.OPEN).values_list(
-            "tp_price", flat=True
-        )
-        if p is not None
-    ]
 
 
 def _idle_level(level_index: int) -> None:
