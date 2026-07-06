@@ -91,6 +91,7 @@ def config() -> StrategyConfig:
     cfg.min_profit_quote = Decimal("0.05")
     cfg.maker_fee = Decimal("0.001")
     cfg.max_open_orders = 10
+    cfg.tp_step = Decimal("100")  # BTC-scale absolute TP offset
     cfg.save()
     return cfg
 

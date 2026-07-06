@@ -221,6 +221,7 @@ class OrderManager:
             maker_fee=self.config.maker_fee,
             current_price=current_price,
             tick_size=self.instrument.tick_size,
+            tp_step=self.config.tp_step,
             min_order_amt=self.instrument.min_order_amt,
         )
         if decision is None:

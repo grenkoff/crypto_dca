@@ -1,30 +1,26 @@
-"""Pairwise compensation: redirect realized profit into pulling a near-market
-take-profit down toward the market so it fills sooner and frees capital.
-
-Profit is **accumulated per position** in ``compensation_credit``. Given total
-credit C already applied plus a fresh profit X, the target's TP is re-priced so
-its realized loss equals C+X — the pair (winner + compensated close) nets zero:
-
-    new_tp = (entry * qty + fees_in - (C + X)) / (qty * (1 - fee))
+"""Pairwise compensation: each realized profit pulls a near-market take-profit
+one ``tp_step`` closer to the market so it fills sooner and frees capital.
 
 Target selection: the **second-nearest** TP above the market. The nearest one is
 likely to fill on its own; helping the next one down releases locked capital
-soonest. (With a single candidate, that one is taken.)
+soonest. (With a single candidate, that one is taken.) Several TPs may end up
+stacked on the same price level — that is intended; holes left higher up are not
+re-seeded.
+
+Each application lowers the target's TP by exactly one ``tp_step`` and books the
+triggering profit into ``compensation_credit`` (the fund that covers the loss
+when the pulled-down TP eventually fills below break-even).
 
 The re-priced TP always rests as a maker limit: it is floored one tick above the
 market (never crosses into a taker fill) and at ``min_order_amt / qty`` so the
-exchange accepts it. Pulled-down TPs leave holes in the sell ladder by design —
-they are not re-seeded.
-
-The real per-pair outcome is ``(entry - true_cost) * qty`` regardless of how far
-the TP is walked, so an over-estimated entry keeps every close non-negative.
+exchange accepts it.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal
 
-from core.strategy.rounding import round_up_to_tick
+from core.strategy.rounding import round_down_to_tick, round_up_to_tick
 from core.strategy.types import CompensationDecision, OpenPosition
 
 
@@ -39,7 +35,7 @@ def select_compensation_target(
     """Pick the position whose TP to pull down: second-nearest above the market.
 
     Only TPs strictly above the market floor are workable. The nearest is left to
-    fill naturally; the one behind it gets the credit. With a single candidate,
+    fill naturally; the one behind it gets the step down. With a single candidate,
     take it.
     """
     floor = _market_floor(current_price, tick_size)
@@ -56,18 +52,16 @@ def compute_compensation(
     *,
     target: OpenPosition,
     profit_from_other: Decimal,
-    maker_fee: Decimal,
+    maker_fee: Decimal,  # kept for call-site symmetry; step size no longer depends on fees
     current_price: Decimal,
     tick_size: Decimal,
+    tp_step: Decimal,
     min_order_amt: Decimal = Decimal(0),
 ) -> CompensationDecision | None:
-    if profit_from_other <= 0:
+    if profit_from_other <= 0 or tp_step <= 0:
         return None
     new_credit = target.compensation_credit + profit_from_other
-    raw = (target.entry_price * target.qty + target.fees_in - new_credit) / (
-        target.qty * (Decimal(1) - maker_fee)
-    )
-    new_tp = round_up_to_tick(raw, tick_size)
+    new_tp = round_down_to_tick(target.current_tp_price - tp_step, tick_size)
     floor = _market_floor(current_price, tick_size)
     if min_order_amt > 0:
         # The sell must clear the exchange's minimum notional to be accepted.
@@ -75,7 +69,7 @@ def compute_compensation(
     if new_tp < floor:
         new_tp = floor  # rest as a maker order; never cross into a taker fill
     if new_tp >= target.current_tp_price:
-        return None  # already at/below this price — no improvement
+        return None  # already at the floor — no improvement possible
     return CompensationDecision(
         target_position_id=target.id, new_tp_price=new_tp, new_credit=new_credit
     )
@@ -88,6 +82,7 @@ def plan_compensation(
     maker_fee: Decimal,
     current_price: Decimal,
     tick_size: Decimal,
+    tp_step: Decimal,
     min_order_amt: Decimal = Decimal(0),
 ) -> CompensationDecision | None:
     """Convenience: pick victim and compute decision in one call."""
@@ -100,5 +95,6 @@ def plan_compensation(
         maker_fee=maker_fee,
         current_price=current_price,
         tick_size=tick_size,
+        tp_step=tp_step,
         min_order_amt=min_order_amt,
     )
