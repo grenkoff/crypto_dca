@@ -17,7 +17,9 @@ def generate_levels(
     """Generate up to `count` buy levels descending from `top_anchor`.
 
     For ``mode="percent"`` step is a fraction (0.005 = 0.5%); each level multiplies
-    by ``(1 - step)``. For ``mode="absolute"`` step is a plain price delta.
+    by ``(1 - step)``. For ``mode="absolute"`` step is a plain price delta and the
+    anchor is snapped down to a multiple of ``step`` so every level lands on a
+    round, step-aligned price (e.g. step 0.0001 → 0.03110, 0.03100, 0.03090…).
 
     Prices are floored to ``tick_size``; generation stops when a level would be
     non-positive (i.e., the deposit is theoretically deep enough to reach zero).
@@ -30,6 +32,9 @@ def generate_levels(
         raise ValueError("percent step must be < 1")
     if top_anchor <= 0:
         return []
+
+    if mode == "absolute":
+        top_anchor = round_down_to_tick(top_anchor, step)
 
     levels: list[GridLevelSpec] = []
     for i in range(count):

@@ -48,6 +48,12 @@ class StrategyConfig(_Singleton):
     grid_step = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal("0.005")
     )
+    tp_step = models.DecimalField(
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        default=Decimal("0.00005"),
+        help_text="Absolute price offset above entry for the take-profit.",
+    )
     order_qty_quote = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal("10")
     )
@@ -58,6 +64,7 @@ class StrategyConfig(_Singleton):
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal("0.01")
     )
     maker_fee = models.DecimalField(max_digits=10, decimal_places=8, default=Decimal("0.001"))
+    taker_fee = models.DecimalField(max_digits=10, decimal_places=8, default=Decimal("0.00075"))
     max_open_orders = models.PositiveIntegerField(default=20)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -99,6 +106,13 @@ class Position(models.Model):
     fees_out = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
     )
+    # Cumulative sold quantity and gross sell proceeds — support partial TP fills.
+    filled_qty = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+    )
+    sell_value = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+    )
     tp_order_id = models.CharField(max_length=64, blank=True)
     tp_price = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, null=True, blank=True
@@ -107,6 +121,9 @@ class Position(models.Model):
         max_length=16, choices=PositionStatus.choices, default=PositionStatus.OPEN
     )
     realized_pnl = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+    )
+    compensation_credit = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
     )
     opened_at = models.DateTimeField()

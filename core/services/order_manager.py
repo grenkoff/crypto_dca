@@ -7,6 +7,7 @@ blocks wrapped in `sync_to_async`.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -20,7 +21,7 @@ from core.exchange.types import Instrument, Side
 from core.services.events import EventBus
 from core.strategy.compensation import plan_compensation
 from core.strategy.pricing import compute_tp_price
-from core.strategy.rounding import round_down_to_tick
+from core.strategy.rounding import round_down_to_tick, round_up_to_tick
 from core.strategy.types import GridMode, OpenPosition
 from core.trading.models import (
     CompensationLink,
@@ -35,6 +36,11 @@ from core.trading.models import (
 
 log = structlog.get_logger()
 
+# Aggressive-buy slippage cap when seeding a sell-ladder hole (fills at ~market).
+SEED_BUY_SLIPPAGE = Decimal("0.002")
+# Seeded (sell-band) positions get their own level_index range.
+SEED_LEVEL_BASE = 3000
+
 
 def fee_in_quote(execution: BybitExecution, quote_coin: str) -> Decimal:
     """Normalize exchange fee to quote currency (USDT)."""
@@ -44,7 +50,17 @@ def fee_in_quote(execution: BybitExecution, quote_coin: str) -> Decimal:
 
 
 def compute_buy_qty(quote_amount: Decimal, price: Decimal, instrument: Instrument) -> Decimal:
-    return round_down_to_tick(quote_amount / price, instrument.lot_size)
+    """Base-coin qty for spending ~``quote_amount``, rounded to the lot size.
+
+    Rounding down can drop the notional a hair below ``min_order_amt`` at the
+    boundary (e.g. $5 target → $4.9998), which the exchange rejects. Bump one lot
+    up in that case so a min-sized order still clears — the same nudge you'd do by
+    hand.
+    """
+    qty = round_down_to_tick(quote_amount / price, instrument.lot_size)
+    if qty * price < instrument.min_order_amt:
+        qty += instrument.lot_size
+    return qty
 
 
 def _link_id(prefix: str, level: int) -> str:
@@ -97,6 +113,47 @@ class OrderManager:
         )
         return order_id
 
+    async def seed_sell_level(self, tp_price: Decimal, market_price: Decimal) -> bool:
+        """Fill a hole in the take-profit ladder: buy inventory at market, then rest
+        a take-profit at ``tp_price`` (a round level above market). Returns True if a
+        position was seeded. The market buy is an aggressive (taker) limit; if the
+        resting sell then fails, the bought coin is left free for later re-adoption.
+        """
+        qty = compute_buy_qty(self.config.order_qty_quote, market_price, self.instrument)
+        if qty < self.instrument.min_order_qty or qty * tp_price < self.instrument.min_order_amt:
+            return False
+        buy_price = round_up_to_tick(
+            market_price * (Decimal(1) + SEED_BUY_SLIPPAGE), self.instrument.tick_size
+        )
+        await self.client.place_limit(
+            self.symbol,
+            Side.BUY,
+            qty,
+            buy_price,
+            order_link_id=_link_id("seed-buy", 0),
+            post_only=False,
+        )
+        try:
+            sell_id = await self.client.place_limit(
+                self.symbol, Side.SELL, qty, tp_price, order_link_id=_link_id("seed-tp", 0)
+            )
+        except Exception:
+            log.error("seed.sell_failed_coin_left_free", tp=str(tp_price), qty=str(qty))
+            raise
+        await sync_to_async(_persist_seed)(
+            entry=market_price,
+            qty=qty,
+            tp_price=tp_price,
+            tp_order_id=sell_id,
+            maker_fee=self.config.maker_fee,
+        )
+        log.info("sellband.seeded", tp=str(tp_price), entry=str(market_price), qty=str(qty))
+        await self.bus.publish(
+            "order.placed",
+            {"side": "seed", "price": str(tp_price), "order_id": sell_id},
+        )
+        return True
+
     async def handle_buy_fill(self, execution: BybitExecution) -> int | None:
         level = await sync_to_async(_find_level_by_order_id)(execution.order_id)
         if level is None:
@@ -107,8 +164,7 @@ class OrderManager:
             entry_price=execution.price,
             qty=execution.qty,
             fees_in=fees_quote,
-            mode=self.grid_mode,
-            step=self.config.grid_step,
+            tp_step=self.config.tp_step,
             min_profit_quote=self.config.min_profit_quote,
             maker_fee=self.config.maker_fee,
             tick_size=self.instrument.tick_size,
@@ -152,35 +208,39 @@ class OrderManager:
             log.warning("sell_fill.no_position", order_id=execution.order_id)
             return None
         fees_out = fee_in_quote(execution, self.instrument.quote_coin)
-        realized = (
-            execution.price * execution.qty
-            - fees_out
-            - position.entry_price * position.qty
-            - position.fees_in
-        )
-        await sync_to_async(_persist_sell_fill)(
+        result = await sync_to_async(_apply_sell_fill)(
             position=position,
-            fees_out=fees_out,
-            realized=realized,
             execution=execution,
+            fees_out=fees_out,
+            lot_size=self.instrument.lot_size,
         )
+        if not result.closed:
+            # Partial TP fill: keep the position open, accumulate, do nothing else
+            # until the remainder fills. (Prevents phantom loss + orphaned base coin.)
+            log.info(
+                "sell.partial",
+                level=position.level_index,
+                filled=str(result.filled_qty),
+                remaining=str(result.remaining),
+            )
+            return None
         log.info(
             "sell.filled",
             level=position.level_index,
-            realized=str(realized),
-            qty=str(execution.qty),
+            realized=str(result.realized),
+            qty=str(result.filled_qty),
         )
         await self.bus.publish(
             "position.closed",
             {
                 "level": position.level_index,
-                "realized": str(realized),
+                "realized": str(result.realized),
                 "position_id": position.id,
             },
         )
-        if realized > 0:
+        if result.realized > 0:
             await self._apply_compensation(
-                profit=realized, source_position_id=position.id, current_price=current_price
+                profit=result.realized, source_position_id=position.id, current_price=current_price
             )
         return int(position.level_index)
 
@@ -201,22 +261,39 @@ class OrderManager:
         if not target.tp_order_id:
             log.warning("compensation.target_has_no_tp", id=target.id)
             return
+        # Guard BEFORE cancelling: a re-priced sell below the exchange minimum would
+        # be rejected, leaving the position with no protective order. Skip instead.
+        new_notional = decision.new_tp_price * target.qty
+        if new_notional < self.instrument.min_order_amt:
+            log.warning(
+                "compensation.skip_below_min_notional",
+                id=target.id,
+                new_tp=str(decision.new_tp_price),
+                notional=str(new_notional),
+            )
+            return
         try:
             await self.client.cancel_order(self.symbol, target.tp_order_id)
         except Exception as exc:
             log.warning("compensation.cancel_failed", id=target.id, error=str(exc))
             return
-        new_tp_order_id = await self.client.place_limit(
-            self.symbol,
-            Side.SELL,
-            target.qty,
-            decision.new_tp_price,
-            order_link_id=_link_id("grid-tp-comp", target.level_index),
-        )
+        try:
+            new_tp_order_id = await self.client.place_limit(
+                self.symbol,
+                Side.SELL,
+                target.qty,
+                decision.new_tp_price,
+                order_link_id=_link_id("grid-tp-comp", target.level_index),
+            )
+        except Exception as exc:
+            # Cancelled but could not re-place: restore protection so it is never naked.
+            await self._restore_protection(target, exc)
+            return
         await sync_to_async(_record_compensation)(
             target=target,
             new_tp_price=decision.new_tp_price,
             new_tp_order_id=new_tp_order_id,
+            new_credit=decision.new_credit,
             profit_applied=profit,
             source_position_id=source_position_id,
         )
@@ -236,8 +313,48 @@ class OrderManager:
             },
         )
 
+    async def _restore_protection(self, target: Position, place_error: Exception) -> None:
+        """Re-place a protective sell after a failed compensation placement.
+
+        Priced at the higher of the old TP and the minimum notional price so it
+        always clears the exchange minimum — the position is never left naked.
+        """
+        min_price = round_up_to_tick(
+            self.instrument.min_order_amt / target.qty, self.instrument.tick_size
+        )
+        price = max(target.tp_price or Decimal(0), min_price)
+        try:
+            order_id = await self.client.place_limit(
+                self.symbol,
+                Side.SELL,
+                target.qty,
+                price,
+                order_link_id=_link_id("grid-tp-restore", target.level_index),
+            )
+        except Exception as restore_error:
+            log.error(
+                "compensation.restore_failed",
+                id=target.id,
+                place_error=str(place_error),
+                restore_error=str(restore_error),
+            )
+            return
+        await sync_to_async(_set_tp)(target=target, tp_price=price, tp_order_id=order_id)
+        log.error(
+            "compensation.restored_after_place_failure",
+            id=target.id,
+            price=str(price),
+            error=str(place_error),
+        )
+
 
 # --- sync helpers (invoked via sync_to_async from async methods) -----------
+
+
+def _set_tp(*, target: Position, tp_price: Decimal, tp_order_id: str) -> None:
+    target.tp_price = tp_price
+    target.tp_order_id = tp_order_id
+    target.save(update_fields=["tp_price", "tp_order_id"])
 
 
 def _upsert_grid_level(level_index: int, price: Decimal, order_id: str) -> None:
@@ -275,6 +392,33 @@ def _log_execution(execution: BybitExecution) -> None:
     )
 
 
+def _persist_seed(
+    *,
+    entry: Decimal,
+    qty: Decimal,
+    tp_price: Decimal,
+    tp_order_id: str,
+    maker_fee: Decimal,
+) -> None:
+    last = (
+        Position.objects.filter(level_index__gte=SEED_LEVEL_BASE)
+        .order_by("-level_index")
+        .values_list("level_index", flat=True)
+        .first()
+    )
+    level_index = SEED_LEVEL_BASE if last is None else int(last) + 1
+    Position.objects.create(
+        level_index=level_index,
+        entry_price=entry,
+        qty=qty,
+        fees_in=entry * qty * maker_fee,
+        tp_order_id=tp_order_id,
+        tp_price=tp_price,
+        status=PositionStatus.OPEN,
+        opened_at=datetime.now(tz=UTC),
+    )
+
+
 def _persist_buy_fill(
     *,
     execution: BybitExecution,
@@ -300,23 +444,65 @@ def _persist_buy_fill(
         _log_execution(execution)
 
 
-def _persist_sell_fill(
+@dataclass
+class SellFillResult:
+    closed: bool
+    realized: Decimal
+    filled_qty: Decimal
+    remaining: Decimal
+
+
+def _apply_sell_fill(
     *,
     position: Position,
-    fees_out: Decimal,
-    realized: Decimal,
     execution: BybitExecution,
-) -> None:
+    fees_out: Decimal,
+    lot_size: Decimal,
+) -> SellFillResult:
+    """Accumulate one (possibly partial) TP fill onto the position.
+
+    The position closes only once the unsold remainder drops below one lot;
+    realized PnL is then computed from the *actual* accumulated proceeds and the
+    full entry cost. Idempotent on ``exec_id`` (WS may redeliver).
+    """
     with transaction.atomic():
-        position.fees_out = fees_out
-        position.realized_pnl = realized
-        position.status = PositionStatus.CLOSED
-        position.closed_at = execution.executed_at
+        if ExecutionLog.objects.filter(exec_id=execution.exec_id).exists():
+            remaining = max(position.qty - position.filled_qty, Decimal(0))
+            return SellFillResult(
+                closed=position.status == PositionStatus.CLOSED,
+                realized=position.realized_pnl,
+                filled_qty=position.filled_qty,
+                remaining=remaining,
+            )
+        position.filled_qty += execution.qty
+        position.sell_value += execution.price * execution.qty
+        position.fees_out += fees_out
+        remaining = position.qty - position.filled_qty
+        closed = remaining < lot_size
+        if closed:
+            realized = (
+                position.sell_value
+                - position.fees_out
+                - position.entry_price * position.qty
+                - position.fees_in
+            )
+            position.realized_pnl = realized
+            position.status = PositionStatus.CLOSED
+            position.closed_at = execution.executed_at
+        else:
+            realized = Decimal(0)
         position.save()
-        GridLevel.objects.filter(level_index=position.level_index).update(
-            status=LevelStatus.IDLE, current_buy_order_id=""
-        )
+        if closed:
+            GridLevel.objects.filter(level_index=position.level_index).update(
+                status=LevelStatus.IDLE, current_buy_order_id=""
+            )
         _log_execution(execution)
+    return SellFillResult(
+        closed=closed,
+        realized=realized,
+        filled_qty=position.filled_qty,
+        remaining=max(remaining, Decimal(0)),
+    )
 
 
 def _open_positions_view() -> list[OpenPosition]:
@@ -327,6 +513,7 @@ def _open_positions_view() -> list[OpenPosition]:
             qty=p.qty,
             fees_in=p.fees_in,
             current_tp_price=p.tp_price if p.tp_price is not None else Decimal(0),
+            compensation_credit=p.compensation_credit,
         )
         for p in Position.objects.filter(status=PositionStatus.OPEN)
     ]
@@ -337,12 +524,14 @@ def _record_compensation(
     target: Position,
     new_tp_price: Decimal,
     new_tp_order_id: str,
+    new_credit: Decimal,
     profit_applied: Decimal,
     source_position_id: int,
 ) -> None:
     with transaction.atomic():
         target.tp_price = new_tp_price
         target.tp_order_id = new_tp_order_id
+        target.compensation_credit = new_credit
         target.save()
         CompensationLink.objects.create(
             profitable_position_id=source_position_id,

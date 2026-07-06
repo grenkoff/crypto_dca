@@ -26,6 +26,23 @@ def test_absolute_grid_descending() -> None:
     assert [lv.level_index for lv in levels] == [0, 1, 2, 3, 4]
 
 
+def test_absolute_grid_snaps_anchor_to_round_prices() -> None:
+    # Anchor 0.03118 with step 0.0001 snaps down to 0.03110, then round levels.
+    levels = generate_levels(
+        top_anchor=Decimal("0.03118"),
+        mode="absolute",
+        step=Decimal("0.0001"),
+        count=4,
+        tick_size=Decimal("0.00001"),
+    )
+    assert [lv.price for lv in levels] == [
+        Decimal("0.03110"),
+        Decimal("0.03100"),
+        Decimal("0.03090"),
+        Decimal("0.03080"),
+    ]
+
+
 def test_percent_grid_descending() -> None:
     levels = generate_levels(
         top_anchor=Decimal("60000"),

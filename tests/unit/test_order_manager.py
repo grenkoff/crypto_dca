@@ -241,6 +241,141 @@ async def test_handle_sell_fill_closes_position_and_runs_compensation(
     assert "compensation.applied" in kinds
 
 
+async def _open_pos() -> Position:
+    return await Position.objects.acreate(
+        level_index=5,
+        entry_price=Decimal("60000"),
+        qty=Decimal("0.001"),
+        fees_in=Decimal("0.06"),
+        tp_order_id="tp-partial",
+        tp_price=Decimal("60600"),
+        status=PositionStatus.OPEN,
+        opened_at=datetime.now(tz=UTC),
+    )
+
+
+async def test_sell_partial_fill_keeps_position_open(
+    om: OrderManager, bus: RecordingEventBus
+) -> None:
+    pos = await _open_pos()
+    execution = _exec(
+        exec_id="p1",
+        order_id="tp-partial",
+        side=Side.SELL,
+        price=Decimal("60600"),
+        qty=Decimal("0.0004"),  # partial of 0.001
+        fee=Decimal("0.024"),
+        fee_coin="USDT",
+    )
+    result = await om.handle_sell_fill(execution, current_price=Decimal("60000"))
+    assert result is None  # not fully closed
+    await pos.arefresh_from_db()
+    assert pos.status == PositionStatus.OPEN
+    assert pos.filled_qty == Decimal("0.0004")
+    assert await CompensationLink.objects.acount() == 0
+    assert "position.closed" not in [e[0] for e in bus.events]
+
+
+async def test_sell_completing_fill_closes_with_correct_pnl(om: OrderManager) -> None:
+    pos = await _open_pos()
+    for eid, q in (("c1", "0.0004"), ("c2", "0.0006")):
+        await om.handle_sell_fill(
+            _exec(
+                exec_id=eid,
+                order_id="tp-partial",
+                side=Side.SELL,
+                price=Decimal("60600"),
+                qty=Decimal(q),
+                fee=Decimal("60600") * Decimal(q) * Decimal("0.001"),
+                fee_coin="USDT",
+            ),
+            current_price=Decimal("60000"),
+        )
+    await pos.arefresh_from_db()
+    assert pos.status == PositionStatus.CLOSED
+    assert pos.filled_qty == Decimal("0.001")
+    # PnL from full proceeds and full cost, not a partial-vs-full mismatch.
+    proceeds = Decimal("60600") * Decimal("0.001")
+    expected = proceeds - pos.fees_out - Decimal("60000") * Decimal("0.001") - Decimal("0.06")
+    assert pos.realized_pnl == expected
+    assert pos.realized_pnl > 0
+
+
+async def test_sell_fill_idempotent_on_exec_id(om: OrderManager) -> None:
+    pos = await _open_pos()
+    ex = _exec(
+        exec_id="dup",
+        order_id="tp-partial",
+        side=Side.SELL,
+        price=Decimal("60600"),
+        qty=Decimal("0.0004"),
+        fee=Decimal("0.024"),
+        fee_coin="USDT",
+    )
+    await om.handle_sell_fill(ex, current_price=Decimal("60000"))
+    await om.handle_sell_fill(ex, current_price=Decimal("60000"))  # redelivered
+    await pos.arefresh_from_db()
+    assert pos.filled_qty == Decimal("0.0004")  # not doubled
+
+
+async def test_seed_sell_level_buys_at_market_and_rests_tp(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    seeded = await om.seed_sell_level(tp_price=Decimal("60600"), market_price=Decimal("60000"))
+    assert seeded is True
+    sides = [(o["side"], o["price"]) for o in client.placed]
+    # an aggressive buy near market, then a resting take-profit at the hole
+    assert any(side == Side.BUY for side, _ in sides)
+    assert (Side.SELL, Decimal("60600")) in sides
+    pos = await Position.objects.aget(level_index__gte=3000)
+    assert pos.entry_price == Decimal("60000")
+    assert pos.tp_price == Decimal("60600")
+    assert pos.tp_order_id != ""
+    assert pos.status == PositionStatus.OPEN
+
+
+async def test_compensation_skips_below_min_notional_without_cancelling(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    # Underwater position so small that a re-priced sell would fall below the $5
+    # exchange minimum — compensation must SKIP and leave the old order untouched.
+    underwater = await Position.objects.acreate(
+        level_index=1,
+        entry_price=Decimal("60000"),
+        qty=Decimal("0.00005"),  # notional ~$3 — below min_order_amt
+        fees_in=Decimal("0"),
+        tp_order_id="tp-under",
+        tp_price=Decimal("61000"),
+        status=PositionStatus.OPEN,
+        opened_at=datetime.now(tz=UTC),
+    )
+    await Position.objects.acreate(
+        level_index=0,
+        entry_price=Decimal("58000"),
+        qty=Decimal("0.001"),
+        fees_in=Decimal("0.058"),
+        tp_order_id="tp-win",
+        tp_price=Decimal("58580"),
+        status=PositionStatus.OPEN,
+        opened_at=datetime.now(tz=UTC),
+    )
+    execution = _exec(
+        exec_id="es3",
+        order_id="tp-win",
+        side=Side.SELL,
+        price=Decimal("58580"),
+        qty=Decimal("0.001"),
+        fee=Decimal("0.0586"),
+        fee_coin="USDT",
+    )
+    await om.handle_sell_fill(execution, current_price=Decimal("57000"))
+    # Old order left in place, nothing cancelled, no compensation recorded.
+    await underwater.arefresh_from_db()
+    assert underwater.tp_order_id == "tp-under"
+    assert ("BTCUSDT", "tp-under") not in client.cancelled
+    assert await CompensationLink.objects.acount() == 0
+
+
 async def test_handle_sell_fill_no_compensation_when_all_profitable(
     om: OrderManager, client: FakeBybitClient
 ) -> None:
