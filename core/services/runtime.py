@@ -125,10 +125,15 @@ class TraderRuntime:
             await sync_to_async(_idle_level)(k)
             log.info("grid.pruned", price=str(p))
         # Fill any missing band levels (skip ones already resting or held).
+        # A single placement failure (e.g. insufficient USDT when capital is fully
+        # deployed) must not abort the pass or spam tracebacks — skip and go on.
         for k, p in targets:
             if p in resting or p in held:
                 continue
-            await self._om.place_buy_at_level(k, p)
+            try:
+                await self._om.place_buy_at_level(k, p)
+            except Exception as exc:
+                log.warning("grid.place_skipped", price=str(p), error=str(exc)[:100])
 
     async def _ensure_grid_percent(self) -> None:
         """Legacy percent-mode grid (relative levels off a moving anchor)."""
