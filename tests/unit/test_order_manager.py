@@ -172,6 +172,28 @@ async def test_handle_buy_fill_creates_position_and_places_tp(
     assert any(e[0] == "position.opened" for e in bus.events)
 
 
+async def test_handle_buy_fill_too_small_leaves_coin_free(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    # A dust partial fill (notional below the $5 minimum) must not create a
+    # position with an absurd min-notional TP — leave the coin free.
+    client.next_id = "buy-dust"
+    await om.place_buy_at_level(0, Decimal("60000"))
+    execution = _exec(
+        exec_id="ed",
+        order_id="buy-dust",
+        side=Side.BUY,
+        price=Decimal("60000"),
+        qty=Decimal("0.00001"),  # $0.60 < $5 min
+        fee=Decimal("0"),
+        fee_coin="BTC",
+    )
+    assert await om.handle_buy_fill(execution) is None
+    assert not await Position.objects.filter(level_index=0).aexists()
+    # no take-profit sell was placed
+    assert not any(p["side"] == Side.SELL for p in client.placed)
+
+
 async def test_handle_buy_fill_with_no_matching_level_warns_and_returns_none(
     om: OrderManager,
 ) -> None:

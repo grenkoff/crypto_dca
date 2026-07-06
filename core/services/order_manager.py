@@ -113,6 +113,18 @@ class OrderManager:
         if level is None:
             log.warning("buy_fill.no_level", order_id=execution.order_id)
             return None
+        # A fill too small to carry a valid sell (notional below the exchange
+        # minimum) is left as free coin — placing a min-notional TP here would sit
+        # absurdly far from the market. `readopt_free_balance` merges such dust into
+        # a proper position; the stale grid level is idled by the prune pass.
+        if execution.qty * execution.price < self.instrument.min_order_amt:
+            log.warning(
+                "buy_fill.too_small_left_free",
+                level=level.level_index,
+                qty=str(execution.qty),
+                notional=str(execution.qty * execution.price),
+            )
+            return None
         fees_quote = fee_in_quote(execution, self.instrument.quote_coin)
         tp_price = compute_tp_price(
             entry_price=execution.price,
