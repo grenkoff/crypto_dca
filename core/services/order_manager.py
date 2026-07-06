@@ -50,7 +50,17 @@ def fee_in_quote(execution: BybitExecution, quote_coin: str) -> Decimal:
 
 
 def compute_buy_qty(quote_amount: Decimal, price: Decimal, instrument: Instrument) -> Decimal:
-    return round_down_to_tick(quote_amount / price, instrument.lot_size)
+    """Base-coin qty for spending ~``quote_amount``, rounded to the lot size.
+
+    Rounding down can drop the notional a hair below ``min_order_amt`` at the
+    boundary (e.g. $5 target → $4.9998), which the exchange rejects. Bump one lot
+    up in that case so a min-sized order still clears — the same nudge you'd do by
+    hand.
+    """
+    qty = round_down_to_tick(quote_amount / price, instrument.lot_size)
+    if qty * price < instrument.min_order_amt:
+        qty += instrument.lot_size
+    return qty
 
 
 def _link_id(prefix: str, level: int) -> str:
