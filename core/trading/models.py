@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import time
 from decimal import Decimal
 from typing import Self
 
@@ -80,6 +81,30 @@ class BotStatus(_Singleton):
 
     def __str__(self) -> str:
         return "paused" if self.paused else "running"
+
+
+class NotificationSettings(_Singleton):
+    """Which Telegram notifications are enabled, plus the daily-digest schedule.
+
+    Digest time is stored in UTC; the Telegram UI shows and accepts it in Astana
+    local time (UTC+5, no DST). ``digest_last_sent`` dedupes the scheduler across
+    restarts so a bounce near the trigger minute cannot double-send.
+    """
+
+    notify_errors = models.BooleanField(default=True)
+    notify_closed = models.BooleanField(default=True)
+    notify_compensation = models.BooleanField(default=True)
+    notify_opened = models.BooleanField(default=True)
+    notify_order_placed = models.BooleanField(default=True)
+
+    digest_enabled = models.BooleanField(default=True)
+    digest_time_utc = models.TimeField(default=time(19, 0))  # 00:00 Astana (UTC+5)
+    digest_last_sent = models.DateField(null=True, blank=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"NotificationSettings(digest={self.digest_enabled}@{self.digest_time_utc}Z)"
 
 
 class GridLevel(models.Model):

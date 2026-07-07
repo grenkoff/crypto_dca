@@ -12,6 +12,7 @@ from asgiref.sync import sync_to_async
 from core.services.redis_bus import RedisEventBus
 from core.trading.models import TelegramUser
 from tgbot.formatters import format_event
+from tgbot.notify_settings import event_enabled
 
 log = structlog.get_logger()
 
@@ -27,6 +28,8 @@ async def run_subscriber(bus: RedisEventBus, bot: Bot, stop: asyncio.Event) -> N
         async for event in bus.subscribe():
             if stop.is_set():
                 break
+            if not await event_enabled(event.get("type", "")):
+                continue
             chat_ids = await _admin_chat_ids()
             text = format_event(event)
             await _broadcast(bot, chat_ids, text)

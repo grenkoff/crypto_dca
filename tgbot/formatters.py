@@ -32,6 +32,20 @@ class PnlSnapshot:
 
 
 @dataclass(frozen=True)
+class DigestSnapshot:
+    when_astana: datetime
+    closed_24h: int
+    pnl_24h: Decimal
+    pnl_week: Decimal
+    pnl_total: Decimal
+    compensations_24h: int
+    open_positions: int
+    deployed: Decimal
+    free_usdt: Decimal
+    price: Decimal | None
+
+
+@dataclass(frozen=True)
 class OrderRow:
     level_index: int
     entry_price: Decimal
@@ -92,6 +106,27 @@ def build_orders(snap: OrdersSnapshot) -> str:
         for row in snap.open_positions
     ]
     return "*Open positions:*\n" + "\n".join(rows)
+
+
+def _q(amount: Decimal, places: str = "0.0001") -> Decimal:
+    return amount.quantize(Decimal(places))
+
+
+def _signed(amount: Decimal, places: str = "0.0001") -> str:
+    q = _q(amount, places)
+    return f"+{q}" if q >= 0 else str(q)
+
+
+def build_digest(snap: DigestSnapshot) -> str:
+    price = f"`{snap.price}`" if snap.price is not None else "_n/a_"
+    return (
+        f"📊 *Daily digest* — {snap.when_astana:%d %b %H:%M} Astana\n"
+        f"*Closed (24h):* {snap.closed_24h} → `{_signed(snap.pnl_24h)}` USDT\n"
+        f"*PnL week:* `{_signed(snap.pnl_week)}` · *total:* `{_signed(snap.pnl_total)}`\n"
+        f"*Compensations (24h):* {snap.compensations_24h}\n"
+        f"*Open positions:* {snap.open_positions} · deployed `{_q(snap.deployed, '0.01')}` USDT\n"
+        f"*Free USDT:* `{_q(snap.free_usdt, '0.01')}` · *KAS:* {price}"
+    )
 
 
 def format_event(event: dict[str, Any]) -> str:

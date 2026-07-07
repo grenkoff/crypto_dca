@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+from datetime import time
+
+import pytest
+
+from tgbot.notify_settings import (
+    EVENT_TOGGLE,
+    TOGGLE_LABELS,
+    astana_to_utc,
+    event_enabled,
+    set_digest_time_astana,
+    toggle_field,
+    utc_to_astana,
+)
+
+
+def test_astana_utc_roundtrip() -> None:
+    # 00:00 Astana is 19:00 UTC (UTC+5)
+    assert astana_to_utc(time(0, 0)) == time(19, 0)
+    assert utc_to_astana(time(19, 0)) == time(0, 0)
+    # wraps across midnight both ways
+    assert utc_to_astana(time(23, 30)) == time(4, 30)
+    assert astana_to_utc(time(3, 0)) == time(22, 0)
+
+
+def test_every_event_toggle_field_is_a_real_toggle() -> None:
+    fields = {f for f, _ in TOGGLE_LABELS}
+    for field in EVENT_TOGGLE.values():
+        assert field in fields
+
+
+pytestmark = pytest.mark.django_db(transaction=True)
+
+
+async def test_toggle_field_flips_and_persists() -> None:
+    before = await event_enabled("position.closed")
+    new = await toggle_field("notify_closed")
+    assert new is (not before)
+    assert await event_enabled("position.closed") is new
+
+
+async def test_toggle_field_rejects_unknown() -> None:
+    with pytest.raises(ValueError):
+        await toggle_field("notify_bogus")
+
+
+async def test_unknown_event_type_never_suppressed() -> None:
+    assert await event_enabled("something.new") is True
+
+
+async def test_set_digest_time_stores_utc() -> None:
+    stored = await set_digest_time_astana(time(0, 0))
+    assert stored == time(19, 0)
