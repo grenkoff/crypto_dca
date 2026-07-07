@@ -6,18 +6,20 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from asgiref.sync import sync_to_async
-from django.db.models import Sum
+from django.db.models import F, Sum
 
 from core.config.settings import bybit_settings
 from core.exchange.bybit import BybitClient
-from core.trading.models import BotStatus, Position, PositionStatus
+from core.trading.models import BotStatus, CompensationLink, Position, PositionStatus
 from tgbot.formatters import (
     BalanceSnapshot,
+    DigestSnapshot,
     OrderRow,
     OrdersSnapshot,
     PnlSnapshot,
     StatusSnapshot,
 )
+from tgbot.notify_settings import ASTANA_OFFSET
 
 
 @sync_to_async
@@ -63,6 +65,67 @@ def orders_snapshot() -> OrdersSnapshot:
     return OrdersSnapshot(open_positions=rows)
 
 
+@sync_to_async
+def _digest_db() -> dict:  # type: ignore[type-arg]
+    now = datetime.now(tz=UTC)
+    d24 = now - timedelta(hours=24)
+    week = now - timedelta(days=7)
+    closed = Position.objects.filter(status=PositionStatus.CLOSED)
+    open_qs = Position.objects.filter(status=PositionStatus.OPEN)
+
+    def _sum(qs, field: str = "realized_pnl") -> Decimal:  # type: ignore[no-untyped-def]
+        return qs.aggregate(s=Sum(field))["s"] or Decimal(0)
+
+    return {
+        "closed_24h": closed.filter(closed_at__gte=d24).count(),
+        "pnl_24h": _sum(closed.filter(closed_at__gte=d24)),
+        "pnl_week": _sum(closed.filter(closed_at__gte=week)),
+        "pnl_total": _sum(closed),
+        "compensations_24h": CompensationLink.objects.filter(created_at__gte=d24).count(),
+        "open_positions": open_qs.count(),
+        "deployed": open_qs.aggregate(s=Sum(F("entry_price") * F("qty")))["s"] or Decimal(0),
+    }
+
+
+async def digest_snapshot() -> DigestSnapshot:
+    db = await _digest_db()
+    settings = bybit_settings()
+    client = BybitClient.from_credentials(
+        settings.api_key, settings.api_secret, testnet=settings.testnet
+    )
+    free_usdt = Decimal(0)
+    price: Decimal | None = None
+    try:
+        balances = await client.get_balances()
+        usdt = balances.get("USDT")
+        if usdt is not None:
+            free_usdt = usdt.free
+        cfg = await _symbol()
+        price = await client.get_last_price(cfg)
+    except Exception:  # pragma: no cover - live API best-effort
+        pass
+    when_astana = (datetime.now(tz=UTC) + ASTANA_OFFSET).replace(tzinfo=None)
+    return DigestSnapshot(
+        when_astana=when_astana,
+        closed_24h=db["closed_24h"],
+        pnl_24h=db["pnl_24h"],
+        pnl_week=db["pnl_week"],
+        pnl_total=db["pnl_total"],
+        compensations_24h=db["compensations_24h"],
+        open_positions=db["open_positions"],
+        deployed=db["deployed"],
+        free_usdt=free_usdt,
+        price=price,
+    )
+
+
+@sync_to_async
+def _symbol() -> str:
+    from core.trading.models import StrategyConfig
+
+    return str(StrategyConfig.objects.get(pk=1).symbol)
+
+
 async def balance_snapshot() -> BalanceSnapshot:
     settings = bybit_settings()
     client = BybitClient.from_credentials(
@@ -70,13 +133,6 @@ async def balance_snapshot() -> BalanceSnapshot:
     )
     balances = await client.get_balances()
     return BalanceSnapshot(balances={coin: b.free for coin, b in balances.items() if b.total > 0})
-
-
-@sync_to_async
-def set_paused(paused: bool) -> None:
-    bot = BotStatus.load()
-    bot.paused = paused
-    bot.save()
 
 
 @sync_to_async

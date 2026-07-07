@@ -22,6 +22,7 @@ async def run() -> None:
 
     from core.config.settings import redis_settings, telegram_settings
     from core.services.redis_bus import RedisEventBus
+    from tgbot.digest import run_digest_scheduler
     from tgbot.handlers import router
     from tgbot.notifications import run_subscriber
 
@@ -44,6 +45,7 @@ async def run() -> None:
     log.info("tgbot.starting", has_redis=bus is not None)
 
     polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+    digest_task = asyncio.create_task(run_digest_scheduler(bot, stop))
     subscriber_task: asyncio.Task[None] | None = None
     if bus is not None:
         subscriber_task = asyncio.create_task(run_subscriber(bus, bot, stop))
@@ -53,9 +55,10 @@ async def run() -> None:
 
     await dp.stop_polling()
     polling_task.cancel()
+    digest_task.cancel()
     if subscriber_task is not None:
         subscriber_task.cancel()
-    for task in (polling_task, subscriber_task):
+    for task in (polling_task, digest_task, subscriber_task):
         if task is None:
             continue
         with contextlib.suppress(asyncio.CancelledError):
