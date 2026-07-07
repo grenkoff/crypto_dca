@@ -136,13 +136,6 @@ async def balance_snapshot() -> BalanceSnapshot:
 
 
 @sync_to_async
-def set_paused(paused: bool) -> None:
-    bot = BotStatus.load()
-    bot.paused = paused
-    bot.save()
-
-
-@sync_to_async
 def list_open_buy_order_ids() -> list[str]:
     from core.trading.models import GridLevel, LevelStatus
 
