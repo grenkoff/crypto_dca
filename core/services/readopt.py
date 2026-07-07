@@ -79,6 +79,10 @@ async def plan_free_readopt(
         qty = _floor(raw_qty, instrument.lot_size)
         if qty < instrument.min_order_qty:
             continue
+        # Do NOT pass min_order_amt here: lifting the TP to reach the minimum
+        # notional would price a dust lot absurdly far above market (e.g. a 15-coin
+        # lot needing a +900% price to clear $5). Instead compute the honest TP and
+        # skip the lot if its notional is still sub-minimum — dust stays free.
         tp = compute_tp_price(
             entry_price=entry,
             qty=qty,
@@ -87,7 +91,6 @@ async def plan_free_readopt(
             min_profit_quote=config.min_profit_quote,
             maker_fee=config.maker_fee,
             tick_size=instrument.tick_size,
-            min_order_amt=instrument.min_order_amt,
         )
         tp = max(tp, market_floor)
         if qty * tp < instrument.min_order_amt:

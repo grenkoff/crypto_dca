@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from asgiref.sync import sync_to_async
 
+from core.exchange.bybit import BybitClient
 from core.exchange.types import Balance, Execution, Instrument, Side
 from core.services.readopt import (
     READOPT_LEVEL_BASE,
@@ -88,10 +89,10 @@ async def test_plan_early_out_when_free_below_min_notional() -> None:
     # 100 KAS * 0.03 = $3 < $5 min notional -> nothing, and history is never pulled.
     client = FakeClient(free=Decimal("100"), execs=[_buy("0.0300", "100", 1)])
     plan = await plan_free_readopt(
-        client=client,
+        client=cast(BybitClient, client),
         config=await _config(),
         instrument=_instrument(),
-        price=Decimal("0.0300"),  # type: ignore[arg-type]
+        price=Decimal("0.0300"),
     )
     assert plan == []
     assert client.executions_calls == 0
@@ -101,10 +102,10 @@ async def test_plan_reconstructs_entry_and_tp_above_market() -> None:
     # Bought 300 @ 0.0298, none sold -> free 300. TP = entry + tp_step, above market.
     client = FakeClient(free=Decimal("300"), execs=[_buy("0.0298", "300", 1)])
     plan = await plan_free_readopt(
-        client=client,
+        client=cast(BybitClient, client),
         config=await _config(),
         instrument=_instrument(),
-        price=Decimal("0.0297"),  # type: ignore[arg-type]
+        price=Decimal("0.0297"),
     )
     assert len(plan) == 1
     (p,) = plan
@@ -121,25 +122,50 @@ async def test_plan_floors_tp_above_market_when_entry_below_price() -> None:
     # market, so the TP is floored one tick above the market instead.
     client = FakeClient(free=Decimal("300"), execs=[_buy("0.0295", "300", 1)])
     plan = await plan_free_readopt(
-        client=client,
+        client=cast(BybitClient, client),
         config=await _config(),
         instrument=_instrument(),
-        price=Decimal("0.0300"),  # type: ignore[arg-type]
+        price=Decimal("0.0300"),
     )
     (p,) = plan
     assert p.tp_price == Decimal("0.03001")  # one tick above 0.0300
+
+
+async def test_plan_skips_sub_minimum_lots_instead_of_absurd_tp() -> None:
+    # Free coin is enough overall ($8+), but reconstructs into one ~$5 lot plus two
+    # dust lots. The dust must be SKIPPED (left free) — never adopted with a TP
+    # priced far above market just to reach the $5 minimum notional.
+    execs = [
+        _buy("0.0294", "170", 1),
+        _buy("0.0295", "100", 2),
+        _buy("0.0296", "16", 3),
+    ]
+    client = FakeClient(free=Decimal("286"), execs=execs)
+    plan = await plan_free_readopt(
+        client=cast(BybitClient, client),
+        config=await _config(),
+        instrument=_instrument(),
+        price=Decimal("0.0293"),
+    )
+    assert len(plan) == 1  # only the ~$5 lot survives
+    (p,) = plan
+    assert p.entry == Decimal("0.0294")
+    assert p.tp_price == Decimal("0.02950")  # entry + tp_step, sane — no absurd lift
+    assert all(x.qty * x.tp_price >= Decimal("5") for x in plan)
 
 
 async def test_commit_places_sells_and_writes_positions() -> None:
     client = FakeClient(free=Decimal("300"), execs=[_buy("0.0298", "300", 1)])
     cfg = await _config()
     plan = await plan_free_readopt(
-        client=client,
+        client=cast(BybitClient, client),
         config=cfg,
         instrument=_instrument(),
-        price=Decimal("0.0297"),  # type: ignore[arg-type]
+        price=Decimal("0.0297"),
     )
-    placed = await commit_readopt(client=client, symbol="KASUSDT", config=cfg, plan=plan)  # type: ignore[arg-type]
+    placed = await commit_readopt(
+        client=cast(BybitClient, client), symbol="KASUSDT", config=cfg, plan=plan
+    )
 
     assert len(placed) == 1
     assert len(client.placed) == 1
@@ -165,9 +191,9 @@ async def test_next_level_increments_over_existing_readopts() -> None:
     )
     client = FakeClient(free=Decimal("300"), execs=[_buy("0.0298", "300", 1)])
     plan = await plan_free_readopt(
-        client=client,
+        client=cast(BybitClient, client),
         config=await _config(),
         instrument=_instrument(),
-        price=Decimal("0.0297"),  # type: ignore[arg-type]
+        price=Decimal("0.0297"),
     )
     assert plan[0].level_index == READOPT_LEVEL_BASE + 1
