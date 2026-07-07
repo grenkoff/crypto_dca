@@ -1,10 +1,13 @@
 """Re-adopt untracked (free) base coin at its REAL entry price.
 
 Base coin can end up free and unmanaged — a grid buy that filled while the trader
-was down, or a fill-handling bug. This reconstructs the actual purchase prices of
+was down, or a partial TP fill. This reconstructs the actual purchase prices of
 the currently-held inventory by FIFO-matching the fill history, takes the lowest-
-priced lots up to the free balance, and re-adopts each as a position whose
-take-profit sits one ``tp_step`` above its **real** entry (never below break-even).
+priced lots up to the free balance, and re-adopts each as a position whose take-
+profit sits one ``tp_step`` above its **real** entry (never below break-even).
+
+The same sweep runs automatically inside the trader's reconcile loop; this command
+is the manual/preview entry point onto the shared logic in ``core.services.readopt``.
 
 Dry-run by default; pass ``--commit`` to place the sells and write the positions.
 
@@ -15,35 +18,15 @@ Dry-run by default; pass ``--commit`` to place the sells and write the positions
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.core.management.base import BaseCommand, CommandParser
-from django.db import transaction
 
 from core.config.settings import bybit_settings
 from core.exchange.bybit import BybitClient
-from core.exchange.types import Side
-from core.strategy.pricing import compute_tp_price
-from core.strategy.reconstruction import Fill, fifo_residual, select_free_lots
-from core.strategy.rounding import round_up_to_tick
-from core.trading.models import Position, PositionStatus, StrategyConfig
-
-# Re-adopted positions live above the manual bag (>=1000) at their own base.
-READOPT_LEVEL_BASE = 2000
-# Leave a sliver of base coin unsold to absorb rounding / fee dust.
-DUST_KEEP = Decimal("0.999")
-
-
-@dataclass
-class Planned:
-    level_index: int
-    entry: Decimal
-    qty: Decimal
-    tp_price: Decimal
+from core.services.readopt import commit_readopt, plan_free_readopt
+from core.trading.models import StrategyConfig
 
 
 class Command(BaseCommand):
@@ -67,47 +50,11 @@ class Command(BaseCommand):
         config = await sync_to_async(StrategyConfig.load)()
         symbol = str(config.symbol)
         instrument = await client.get_instrument(symbol)
-        balances = await client.get_balances()
-        free_base = (
-            balances[instrument.base_coin].free if instrument.base_coin in balances else Decimal(0)
-        ) * DUST_KEEP
         price = await client.get_last_price(symbol)
-        # Never rest a sell at/below market — PostOnly would reject it, and if it did
-        # fill it would be an unrecorded taker. Floor every TP one tick above market.
-        market_floor = round_up_to_tick(price + instrument.tick_size, instrument.tick_size)
-        execs = await client.get_executions(symbol, limit=200)
-        execs = sorted(execs, key=lambda e: e.executed_at)
-        fills = [Fill(side=e.side.value, price=e.price, qty=e.qty) for e in execs]
 
-        residual = fifo_residual(fills)
-        free_lots = select_free_lots(residual, free_base)
-
-        self.stdout.write(f"symbol={symbol} free={free_base} tp_step={config.tp_step}")
-        self.stdout.write(
-            "reconstructed residual lots (real entries): "
-            + ", ".join(f"{p}:{q}" for p, q in sorted(residual))
+        plan = await plan_free_readopt(
+            client=client, config=config, instrument=instrument, price=price
         )
-
-        base_level = await sync_to_async(_next_level)()
-        plan: list[Planned] = []
-        for i, (entry, qty) in enumerate(free_lots):
-            qty = _floor(qty, instrument.lot_size)
-            if qty < instrument.min_order_qty:
-                continue
-            tp = compute_tp_price(
-                entry_price=entry,
-                qty=qty,
-                fees_in=entry * qty * config.maker_fee,
-                tp_step=config.tp_step,
-                min_profit_quote=config.min_profit_quote,
-                maker_fee=config.maker_fee,
-                tick_size=instrument.tick_size,
-            )
-            tp = max(tp, market_floor)
-            if qty * tp < instrument.min_order_amt:
-                self.stdout.write(f"  skip dust lot {qty}@{entry} (< min notional)")
-                continue
-            plan.append(Planned(level_index=base_level + i, entry=entry, qty=qty, tp_price=tp))
 
         self.stdout.write(
             self.style.MIGRATE_HEADING("\n=== RE-ADOPT PLAN (TP = real entry + tp_step) ===")
@@ -125,45 +72,7 @@ class Command(BaseCommand):
             )
             return
 
-        stamp = int(datetime.now(tz=UTC).timestamp() * 1000)
-        for p in plan:
-            order_id = await client.place_limit(
-                symbol,
-                Side.SELL,
-                p.qty,
-                p.tp_price,
-                order_link_id=f"readopt-{p.level_index}-{stamp}",
-            )
-            await sync_to_async(_write_position)(
-                planned=p, tp_order_id=order_id, maker_fee=config.maker_fee
-            )
-            self.stdout.write(f"placed L{p.level_index}: {order_id}")
-        self.stdout.write(self.style.SUCCESS(f"\nRe-adopted {len(plan)} position(s)."))
-
-
-def _floor(qty: Decimal, lot: Decimal) -> Decimal:
-    return (qty / lot).to_integral_value(rounding="ROUND_FLOOR") * lot
-
-
-def _next_level() -> int:
-    last = (
-        Position.objects.filter(level_index__gte=READOPT_LEVEL_BASE)
-        .order_by("-level_index")
-        .values_list("level_index", flat=True)
-        .first()
-    )
-    return READOPT_LEVEL_BASE if last is None else int(last) + 1
-
-
-def _write_position(*, planned: Planned, tp_order_id: str, maker_fee: Decimal) -> None:
-    with transaction.atomic():
-        Position.objects.create(
-            level_index=planned.level_index,
-            entry_price=planned.entry,
-            qty=planned.qty,
-            fees_in=planned.entry * planned.qty * maker_fee,
-            tp_order_id=tp_order_id,
-            tp_price=planned.tp_price,
-            status=PositionStatus.OPEN,
-            opened_at=datetime.now(tz=UTC),
-        )
+        placed = await commit_readopt(client=client, symbol=symbol, config=config, plan=plan)
+        for p in placed:
+            self.stdout.write(f"placed L{p.level_index}: {p.qty} @ {p.tp_price}")
+        self.stdout.write(self.style.SUCCESS(f"\nRe-adopted {len(placed)} position(s)."))

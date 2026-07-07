@@ -27,6 +27,7 @@ from core.exchange.types import Side
 from core.exchange.ws import BybitPrivateStream, StreamEvent
 from core.services.events import EventBus, NoOpEventBus
 from core.services.order_manager import OrderManager
+from core.services.readopt import commit_readopt, plan_free_readopt
 from core.services.reconciliation import reconcile_once
 from core.strategy.grid import generate_levels
 from core.trading.models import (
@@ -222,6 +223,7 @@ class TraderRuntime:
                 self._current_price = await self._client.get_last_price(self._om.symbol)
                 await reconcile_once(self._client, self._om.symbol)
                 await self._recover_missed_fills()  # replay fills dropped by WS hiccups
+                await self._sweep_free_inventory()  # re-adopt free base coin (partial fills)
                 await self._ensure_grid()  # self-heal the band even without fills
             except Exception as exc:
                 log.exception("reconcile.error", error=str(exc))
@@ -229,6 +231,48 @@ class TraderRuntime:
                 await asyncio.wait_for(self._stop.wait(), timeout=RECONCILE_INTERVAL_S)
             except TimeoutError:
                 continue
+
+    async def _sweep_free_inventory(self) -> None:
+        """Re-adopt base coin left free by partial TP fills into managed positions.
+
+        A partially-filled sell leaves the unsold remainder untracked in the wallet;
+        left alone it accrues as dead inventory. This reconstructs its real entry and
+        rests a fresh take-profit above market — the automatic form of the
+        ``readopt_free_balance`` command. Serialised with grid maintenance so the two
+        never place orders against a stale balance snapshot.
+        """
+        assert self._om is not None
+        async with self._grid_lock:
+            plan = await plan_free_readopt(
+                client=self._om.client,
+                config=self._om.config,
+                instrument=self._om.instrument,
+                price=self._current_price,
+            )
+            if not plan:
+                return
+            placed = await commit_readopt(
+                client=self._om.client,
+                symbol=self._om.symbol,
+                config=self._om.config,
+                plan=plan,
+            )
+        for p in placed:
+            log.info(
+                "readopt.adopted",
+                level=p.level_index,
+                qty=str(p.qty),
+                entry=str(p.entry),
+                tp=str(p.tp_price),
+            )
+            await self._bus.publish(
+                "position.opened",
+                {
+                    "level": p.level_index,
+                    "entry_price": str(p.entry),
+                    "tp_price": str(p.tp_price),
+                },
+            )
 
     async def _recover_missed_fills(self) -> None:
         """Replay TP fills the WS stream dropped (e.g. on a connection reset).
