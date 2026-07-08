@@ -95,9 +95,9 @@ def build_balance(snap: BalanceSnapshot) -> str:
 def build_pnl(snap: PnlSnapshot) -> str:
     return (
         "*Realized PnL (USDT)*\n"
-        f"Today `{_q(snap.today, '0.01')}` · "
-        f"Week `{_q(snap.week, '0.01')}` · "
-        f"Total `{_q(snap.total, '0.01')}`"
+        f"Today `{_q(snap.today, '0.0001')}` · "
+        f"Week `{_q(snap.week, '0.0001')}` · "
+        f"Total `{_q(snap.total, '0.0001')}`"
     )
 
 
@@ -135,8 +135,8 @@ def build_digest(snap: DigestSnapshot) -> str:
         f"*Closed (24h):* {snap.closed_24h} → `{_signed(snap.pnl_24h)}` USDT\n"
         f"*PnL week:* `{_signed(snap.pnl_week)}` · *total:* `{_signed(snap.pnl_total)}`\n"
         f"*Compensations (24h):* {snap.compensations_24h}\n"
-        f"*Open positions:* {snap.open_positions} · deployed `{_q(snap.deployed, '0.01')}` USDT\n"
-        f"*Free USDT:* `{_q(snap.free_usdt, '0.01')}` · *KAS:* {price}"
+        f"*Open positions:* {snap.open_positions} · deployed `{_q(snap.deployed, '0.0001')}` USDT\n"
+        f"*Free USDT:* `{_q(snap.free_usdt, '0.0001')}` · *KAS:* {price}"
     )
 
 
@@ -154,13 +154,13 @@ def format_event(event: dict[str, Any]) -> str:
             realized = Decimal(str(payload.get("realized", "0")))
         except (InvalidOperation, TypeError, ValueError):
             realized = Decimal(0)
-        return f"💰 `{_price5(payload.get('price'))}` → `{_signed(realized, '0.01')}` USDT"
+        return f"💰 `{_price5(payload.get('price'))}` → `{_signed(realized, '0.0001')}` USDT"
     if etype == "compensation.applied":
         try:
             profit = Decimal(str(payload.get("profit", "0")))
         except (InvalidOperation, TypeError, ValueError):
             profit = Decimal(0)
-        return f"💊 `{_price5(payload.get('new_tp'))}` → `{_signed(profit, '0.01')}` USDT"
+        return f"💊 `{_price5(payload.get('new_tp'))}` → `{_signed(profit, '0.0001')}` USDT"
     if etype == "error":
         return f"❌ Error: {payload.get('message', '?')}"
     return f"📨 {etype}: `{payload}`"

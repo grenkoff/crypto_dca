@@ -52,13 +52,13 @@ def test_build_balance_sorted() -> None:
 
 def test_build_pnl() -> None:
     text = build_pnl(PnlSnapshot(today=Decimal("1.50"), week=Decimal("8.00"), total=Decimal("42")))
-    assert "Today `1.50`" in text
-    assert "Total `42.00`" in text
+    assert "Today `1.5000`" in text
+    assert "Total `42.0000`" in text
     # single line for the three figures
     assert text.count("\n") == 1
 
 
-def test_build_pnl_rounds_to_two_decimals() -> None:
+def test_build_pnl_rounds_to_four_decimals() -> None:
     text = build_pnl(
         PnlSnapshot(
             today=Decimal("0.212272180125"),
@@ -66,9 +66,9 @@ def test_build_pnl_rounds_to_two_decimals() -> None:
             total=Decimal("1.038725796753"),
         )
     )
-    assert "Today `0.21`" in text
-    assert "Week `1.04`" in text
-    assert "Total `1.04`" in text
+    assert "Today `0.2123`" in text
+    assert "Week `1.0387`" in text
+    assert "Total `1.0387`" in text
 
 
 def test_build_orders_empty() -> None:
@@ -129,7 +129,7 @@ def test_format_event_position_closed_profit() -> None:
             "payload": {"level": 293, "price": "0.029", "realized": "0.010804278125"},
         }
     )
-    assert text == "💰 `0.02900` → `+0.01` USDT"
+    assert text == "💰 `0.02900` → `+0.0108` USDT"
 
 
 def test_format_event_position_closed_loss() -> None:
@@ -139,7 +139,7 @@ def test_format_event_position_closed_loss() -> None:
             "payload": {"level": 291, "price": "0.0289", "realized": "-0.00625031625"},
         }
     )
-    assert text == "💰 `0.02890` → `-0.01` USDT"
+    assert text == "💰 `0.02890` → `-0.0063` USDT"
 
 
 def test_format_event_compensation() -> None:
@@ -154,7 +154,7 @@ def test_format_event_compensation() -> None:
             },
         }
     )
-    assert text == "💊 `0.02940` → `+0.01` USDT"
+    assert text == "💊 `0.02940` → `+0.0109` USDT"
 
 
 def test_format_event_unknown_falls_back_to_raw() -> None:
