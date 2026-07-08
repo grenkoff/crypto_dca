@@ -23,7 +23,7 @@ from asgiref.sync import sync_to_async
 from core.config.settings import bybit_settings, trader_settings
 from core.exchange.bybit import BybitClient
 from core.exchange.dry_run import DryRunBybitClient
-from core.exchange.types import Side
+from core.exchange.types import Execution, Side
 from core.exchange.ws import BybitPrivateStream, StreamEvent
 from core.services.events import EventBus, NoOpEventBus
 from core.services.order_manager import OrderManager
@@ -223,6 +223,7 @@ class TraderRuntime:
                 self._current_price = await self._client.get_last_price(self._om.symbol)
                 await reconcile_once(self._client, self._om.symbol)
                 await self._recover_missed_fills()  # replay fills dropped by WS hiccups
+                await self._heal_stale_buy_levels()  # unstick levels whose buy vanished
                 await self._sweep_free_inventory()  # re-adopt free base coin (partial fills)
                 await self._ensure_grid()  # self-heal the band even without fills
             except Exception as exc:
@@ -273,6 +274,42 @@ class TraderRuntime:
                     "tp_price": str(p.tp_price),
                 },
             )
+
+    async def _heal_stale_buy_levels(self) -> None:
+        """Unstick grid levels whose buy order left the exchange unseen.
+
+        A level marked ``awaiting_fill`` still points at its buy order, so the grid
+        treats the level as covered and never re-places it. If that order was
+        cancelled during a restart or filled while the WS was down, the level is a
+        permanent hole (``reconcile.drift`` keeps flagging ``missing_buys``). Here we
+        cross-check every awaiting level against the live open orders: a vanished
+        order that actually FILLED is replayed as a buy (booking the position); one
+        with no fill is idled so the grid re-places it next pass.
+        """
+        assert self._om is not None
+        awaiting = await sync_to_async(_awaiting_buy_levels)()
+        if not awaiting:
+            return
+        orders = await self._om.client.get_open_orders(self._om.symbol)
+        open_ids = {o.order_id for o in orders}
+        if all(oid in open_ids for _, oid in awaiting):
+            return  # every level still resting — nothing vanished
+        stale_ids = {oid for _, oid in awaiting if oid not in open_ids}
+        fills_by_order: dict[str, Execution] = {}
+        for execution in await self._om.client.get_executions(self._om.symbol, limit=100):
+            if execution.side == Side.BUY and execution.order_id in stale_ids:
+                fills_by_order.setdefault(execution.order_id, execution)
+        idle, replay = plan_level_heal(awaiting, open_ids, fills_by_order)
+        for idx in idle:
+            log.warning("grid.heal_idle_stale_level", level=idx)
+            await sync_to_async(_idle_level)(idx)
+        for idx, fill in replay:
+            if await sync_to_async(_exec_logged)(fill.exec_id):
+                # already booked into a position — just clear the stale marker
+                await sync_to_async(_idle_level)(idx)
+                continue
+            log.warning("grid.heal_replaying_buy", level=idx, order_id=fill.order_id)
+            await self._om.handle_buy_fill(fill)
 
     async def _recover_missed_fills(self) -> None:
         """Replay TP fills the WS stream dropped (e.g. on a connection reset).
@@ -384,6 +421,41 @@ def _idle_level(level_index: int) -> None:
     GridLevel.objects.filter(level_index=level_index).update(
         status=LevelStatus.IDLE, current_buy_order_id=""
     )
+
+
+def _awaiting_buy_levels() -> list[tuple[int, str]]:
+    """(level_index, order_id) for every grid level still expecting a buy fill."""
+    return [
+        (int(idx), oid)
+        for idx, oid in GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL)
+        .exclude(current_buy_order_id="")
+        .values_list("level_index", "current_buy_order_id")
+    ]
+
+
+def plan_level_heal(
+    awaiting: list[tuple[int, str]],
+    open_order_ids: set[str],
+    fills_by_order: dict[str, Execution],
+) -> tuple[list[int], list[tuple[int, Execution]]]:
+    """Classify awaiting-fill levels whose buy order is no longer on the exchange.
+
+    A level still on the exchange is healthy and skipped. A vanished order that has
+    a matching fill is scheduled for **replay** (it filled unseen → book the
+    position); one with no fill was cancelled/lost and is scheduled to be **idled**
+    so the grid re-places it. Returns ``(idle_indices, [(level_index, fill)])``.
+    """
+    idle: list[int] = []
+    replay: list[tuple[int, Execution]] = []
+    for idx, order_id in awaiting:
+        if order_id in open_order_ids:
+            continue
+        fill = fills_by_order.get(order_id)
+        if fill is None:
+            idle.append(idx)
+        else:
+            replay.append((idx, fill))
+    return idle, replay
 
 
 def _open_tp_order_ids() -> set[str]:

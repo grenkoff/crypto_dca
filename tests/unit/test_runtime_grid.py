@@ -1,8 +1,48 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
-from core.services.runtime import resting_buy_levels
+from core.exchange.types import Execution, Side
+from core.services.runtime import plan_level_heal, resting_buy_levels
+
+
+def _exec(order_id: str) -> Execution:
+    return Execution(
+        exec_id=f"x-{order_id}",
+        order_id=order_id,
+        symbol="KASUSDT",
+        side=Side.BUY,
+        price=Decimal("0.0291"),
+        qty=Decimal("171"),
+        fee=Decimal(0),
+        fee_coin="KAS",
+        executed_at=datetime(2026, 7, 8, tzinfo=UTC),
+    )
+
+
+def test_plan_level_heal_idles_vanished_without_fill() -> None:
+    # order 'gone' left the exchange with no fill -> idle the level for re-placement
+    awaiting = [(291, "gone"), (290, "live")]
+    idle, replay = plan_level_heal(awaiting, {"live"}, {})
+    assert idle == [291]
+    assert replay == []
+
+
+def test_plan_level_heal_replays_vanished_with_fill() -> None:
+    # order 'filled' vanished but has a matching fill -> replay to book the position
+    fill = _exec("filled")
+    awaiting = [(291, "filled")]
+    idle, replay = plan_level_heal(awaiting, set(), {"filled": fill})
+    assert idle == []
+    assert replay == [(291, fill)]
+
+
+def test_plan_level_heal_skips_levels_still_on_exchange() -> None:
+    awaiting = [(291, "live1"), (290, "live2")]
+    idle, replay = plan_level_heal(awaiting, {"live1", "live2"}, {})
+    assert idle == []
+    assert replay == []
 
 
 def test_resting_levels_contiguous_when_nothing_held() -> None:
