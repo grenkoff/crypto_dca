@@ -144,10 +144,7 @@ def format_event(event: dict[str, Any]) -> str:
     etype = event.get("type", "?")
     payload = event.get("payload", {})
     if etype == "order.placed":
-        return (
-            f"📌 Buy placed: L{payload.get('level')} @ `{payload.get('price')}`\n"
-            f"`{payload.get('order_id', '')}`"
-        )
+        return f"🔵 `{_price5(payload.get('price'))}`"
     if etype == "position.opened":
         return (
             f"🟢 `{_price5(payload.get('entry_price'))}` → TP `{_price5(payload.get('tp_price'))}`"

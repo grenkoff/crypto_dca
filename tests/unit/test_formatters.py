@@ -97,6 +97,16 @@ def test_build_orders_rows() -> None:
     assert "60600" in text
 
 
+def test_format_event_order_placed() -> None:
+    text = format_event(
+        {
+            "type": "order.placed",
+            "payload": {"level": 291, "price": "0.0291", "order_id": "2254818261395047680"},
+        }
+    )
+    assert text == "🔵 `0.02910`"
+
+
 def test_format_event_position_opened() -> None:
     text = format_event(
         {
