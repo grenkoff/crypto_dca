@@ -52,8 +52,8 @@ def test_build_balance_sorted() -> None:
 
 def test_build_pnl() -> None:
     text = build_pnl(PnlSnapshot(today=Decimal("1.50"), week=Decimal("8.00"), total=Decimal("42")))
-    assert "Today `1.5000`" in text
-    assert "Total `42.0000`" in text
+    assert "Today `+1.5000`" in text
+    assert "Total `+42.0000`" in text
     # single line for the three figures
     assert text.count("\n") == 1
 
@@ -66,9 +66,9 @@ def test_build_pnl_rounds_to_four_decimals() -> None:
             total=Decimal("1.038725796753"),
         )
     )
-    assert "Today `0.2123`" in text
-    assert "Week `1.0387`" in text
-    assert "Total `1.0387`" in text
+    assert "Today `+0.2123`" in text
+    assert "Week `+1.0387`" in text
+    assert "Total `+1.0387`" in text
 
 
 def test_build_orders_empty() -> None:
