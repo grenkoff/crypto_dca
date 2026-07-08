@@ -154,7 +154,7 @@ def format_event(event: dict[str, Any]) -> str:
             realized = Decimal(str(payload.get("realized", "0")))
         except (InvalidOperation, TypeError, ValueError):
             realized = Decimal(0)
-        return f"💵 `{_price5(payload.get('price'))}` → `{_signed(realized, '0.01')}` USDT"
+        return f"💰 `{_price5(payload.get('price'))}` → `{_signed(realized, '0.01')}` USDT"
     if etype == "compensation.applied":
         try:
             profit = Decimal(str(payload.get("profit", "0")))
