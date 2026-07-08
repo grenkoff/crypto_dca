@@ -153,14 +153,11 @@ def format_event(event: dict[str, Any]) -> str:
             f"🟢 `{_price5(payload.get('entry_price'))}` → TP `{_price5(payload.get('tp_price'))}`"
         )
     if etype == "position.closed":
-        realized = payload.get("realized", "0")
-        emoji = (
-            "💰"
-            if str(realized).lstrip("-").replace(".", "").isdigit()
-            and not str(realized).startswith("-")
-            else "🔴"
-        )
-        return f"{emoji} Position closed: L{payload.get('level')} → `{realized}` USDT"
+        try:
+            realized = Decimal(str(payload.get("realized", "0")))
+        except (InvalidOperation, TypeError, ValueError):
+            realized = Decimal(0)
+        return f"💵 `{_price5(payload.get('price'))}` → `{_signed(realized, '0.01')}` USDT"
     if etype == "compensation.applied":
         return (
             f"🩹 Compensation: pos #{payload.get('target_position')} "

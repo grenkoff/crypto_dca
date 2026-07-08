@@ -112,6 +112,26 @@ def test_format_event_position_opened() -> None:
     assert text == "🟢 `0.02890` → TP `0.02900`"
 
 
+def test_format_event_position_closed_profit() -> None:
+    text = format_event(
+        {
+            "type": "position.closed",
+            "payload": {"level": 293, "price": "0.029", "realized": "0.010804278125"},
+        }
+    )
+    assert text == "💵 `0.02900` → `+0.01` USDT"
+
+
+def test_format_event_position_closed_loss() -> None:
+    text = format_event(
+        {
+            "type": "position.closed",
+            "payload": {"level": 291, "price": "0.0289", "realized": "-0.00625031625"},
+        }
+    )
+    assert text == "💵 `0.02890` → `-0.01` USDT"
+
+
 def test_format_event_compensation() -> None:
     text = format_event(
         {

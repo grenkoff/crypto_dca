@@ -214,6 +214,7 @@ class OrderManager:
             {
                 "level": position.level_index,
                 "realized": str(result.realized),
+                "price": str(position.tp_price),
                 "position_id": position.id,
             },
         )
