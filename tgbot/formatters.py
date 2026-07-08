@@ -94,7 +94,10 @@ def build_balance(snap: BalanceSnapshot) -> str:
 
 def build_pnl(snap: PnlSnapshot) -> str:
     return (
-        f"*Realized PnL (USDT)*\nToday: `{snap.today}`\nWeek: `{snap.week}`\nTotal: `{snap.total}`"
+        "*Realized PnL (USDT)*\n"
+        f"Today: `{_q(snap.today, '0.01')}`\n"
+        f"Week: `{_q(snap.week, '0.01')}`\n"
+        f"Total: `{_q(snap.total, '0.01')}`"
     )
 
 
