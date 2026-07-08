@@ -147,15 +147,14 @@ def test_format_event_compensation() -> None:
         {
             "type": "compensation.applied",
             "payload": {
-                "target_position": 7,
+                "target_position": 179,
                 "source_position": 3,
-                "new_tp": "59500",
-                "profit": "0.50",
+                "new_tp": "0.0294",
+                "profit": "0.0108603075",
             },
         }
     )
-    assert "#7" in text
-    assert "59500" in text
+    assert text == "🩹 `0.02940` → `+0.01` USDT"
 
 
 def test_format_event_unknown_falls_back_to_raw() -> None:
