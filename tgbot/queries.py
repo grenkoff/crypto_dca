@@ -39,6 +39,8 @@ def pnl_snapshot() -> PnlSnapshot:
     now = datetime.now(tz=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=7)
+    month_start = today_start - timedelta(days=30)
+    year_start = today_start - timedelta(days=365)
     base = Position.objects.filter(status=PositionStatus.CLOSED)
 
     def _sum(qs) -> Decimal:  # type: ignore[no-untyped-def]
@@ -47,6 +49,8 @@ def pnl_snapshot() -> PnlSnapshot:
     return PnlSnapshot(
         today=_sum(base.filter(closed_at__gte=today_start)),
         week=_sum(base.filter(closed_at__gte=week_start)),
+        month=_sum(base.filter(closed_at__gte=month_start)),
+        year=_sum(base.filter(closed_at__gte=year_start)),
         total=_sum(base),
     )
 

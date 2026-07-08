@@ -28,6 +28,8 @@ class BalanceSnapshot:
 class PnlSnapshot:
     today: Decimal
     week: Decimal
+    month: Decimal
+    year: Decimal
     total: Decimal
 
 
@@ -97,6 +99,8 @@ def build_pnl(snap: PnlSnapshot) -> str:
         "*Realized PnL (USDT)*\n"
         f"Today `{_signed(snap.today, '0.0001')}` 💰 "
         f"Week `{_signed(snap.week, '0.0001')}` 💰 "
+        f"Month `{_signed(snap.month, '0.0001')}` 💰 "
+        f"Year `{_signed(snap.year, '0.0001')}` 💰 "
         f"Total `{_signed(snap.total, '0.0001')}`"
     )
 
