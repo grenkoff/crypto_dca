@@ -104,11 +104,12 @@ def test_format_event_position_opened() -> None:
             "payload": {"level": 289, "entry_price": "0.0289", "tp_price": "0.029"},
         }
     )
-    assert text.startswith("⬆️")  # green up arrow, not a circle
+    assert text.startswith("🟢")  # green circle
     assert "\n" not in text  # single line
-    assert "L289" in text
-    assert "entry `0.02890`" in text  # 5 decimals
-    assert "TP `0.02900`" in text
+    assert "Position opened" not in text  # label dropped
+    assert "L289" not in text  # level dropped
+    assert "entry" not in text  # label dropped
+    assert text == "🟢 `0.02890` → TP `0.02900`"
 
 
 def test_format_event_compensation() -> None:

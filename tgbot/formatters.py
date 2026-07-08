@@ -150,9 +150,7 @@ def format_event(event: dict[str, Any]) -> str:
         )
     if etype == "position.opened":
         return (
-            f"⬆️ Position opened: L{payload.get('level')} · "
-            f"entry `{_price5(payload.get('entry_price'))}` → "
-            f"TP `{_price5(payload.get('tp_price'))}`"
+            f"🟢 `{_price5(payload.get('entry_price'))}` → TP `{_price5(payload.get('tp_price'))}`"
         )
     if etype == "position.closed":
         realized = payload.get("realized", "0")
