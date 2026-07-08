@@ -154,7 +154,7 @@ def test_format_event_compensation() -> None:
             },
         }
     )
-    assert text == "🩹 `0.02940` → `+0.01` USDT"
+    assert text == "💊 `0.02940` → `+0.01` USDT"
 
 
 def test_format_event_unknown_falls_back_to_raw() -> None:

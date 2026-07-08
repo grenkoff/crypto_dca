@@ -160,7 +160,7 @@ def format_event(event: dict[str, Any]) -> str:
             profit = Decimal(str(payload.get("profit", "0")))
         except (InvalidOperation, TypeError, ValueError):
             profit = Decimal(0)
-        return f"🩹 `{_price5(payload.get('new_tp'))}` → `{_signed(profit, '0.01')}` USDT"
+        return f"💊 `{_price5(payload.get('new_tp'))}` → `{_signed(profit, '0.01')}` USDT"
     if etype == "error":
         return f"❌ Error: {payload.get('message', '?')}"
     return f"📨 {etype}: `{payload}`"
