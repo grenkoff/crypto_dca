@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
@@ -115,6 +115,14 @@ def _q(amount: Decimal, places: str = "0.0001") -> Decimal:
     return amount.quantize(Decimal(places))
 
 
+def _price5(value: Any) -> str:
+    """Render a price string/Decimal with a fixed 5 decimals (e.g. 0.02890)."""
+    try:
+        return str(Decimal(str(value)).quantize(Decimal("0.00001")))
+    except (InvalidOperation, TypeError, ValueError):
+        return str(value)
+
+
 def _signed(amount: Decimal, places: str = "0.0001") -> str:
     q = _q(amount, places)
     return f"+{q}" if q >= 0 else str(q)
@@ -142,8 +150,9 @@ def format_event(event: dict[str, Any]) -> str:
         )
     if etype == "position.opened":
         return (
-            f"🟢 Position opened: L{payload.get('level')}\n"
-            f"entry `{payload.get('entry_price')}` → TP `{payload.get('tp_price')}`"
+            f"⬆️ Position opened: L{payload.get('level')} · "
+            f"entry `{_price5(payload.get('entry_price'))}` → "
+            f"TP `{_price5(payload.get('tp_price'))}`"
         )
     if etype == "position.closed":
         realized = payload.get("realized", "0")
