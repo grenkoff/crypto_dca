@@ -10,6 +10,7 @@ from core.services.runtime import (
     _grid_params_changed,
     _record_applied_grid_params,
     _reset_all_grid_levels,
+    buys_to_prune,
     plan_level_heal,
     resting_buy_levels,
 )
@@ -68,6 +69,31 @@ def test_resting_levels_contiguous_when_nothing_held() -> None:
         Decimal("0.03020"),
     ]
     assert Decimal("0.03086") - prices[0] >= Decimal("0.0001")  # a full step of clearance
+
+
+def test_buys_to_prune_keeps_buys_the_falling_market_will_fill() -> None:
+    # band (targets) is 0.02945..0.02925; the market has dropped and old near-market
+    # buys 0.02965/60/55 sit ABOVE the band — they must be KEPT to fill, not pruned.
+    targets = {
+        Decimal("0.02945"),
+        Decimal("0.02940"),
+        Decimal("0.02935"),
+        Decimal("0.02930"),
+        Decimal("0.02925"),
+    }
+    resting = [Decimal("0.02965"), Decimal("0.02960"), Decimal("0.02955"), Decimal("0.02940")]
+    assert buys_to_prune(resting, targets) == []
+
+
+def test_buys_to_prune_cancels_only_below_band_bottom() -> None:
+    # price rose: buys stranded strictly below the deepest target are pruned
+    targets = {Decimal("0.02950"), Decimal("0.02945"), Decimal("0.02940")}
+    resting = [Decimal("0.02945"), Decimal("0.02935"), Decimal("0.02930")]
+    assert sorted(buys_to_prune(resting, targets)) == [Decimal("0.02930"), Decimal("0.02935")]
+
+
+def test_buys_to_prune_empty_targets_prunes_nothing() -> None:
+    assert buys_to_prune([Decimal("0.02950")], set()) == []
 
 
 def test_resting_levels_full_step_gap() -> None:

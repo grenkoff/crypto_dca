@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
@@ -124,9 +125,14 @@ class TraderRuntime:
         resting, held = await sync_to_async(_grid_state)(step)
         targets = resting_buy_levels(price, step, n, held)
         target_prices = {p for _, p in targets}
-        # Prune resting buys that fell outside the target set (market moved / held).
+        # Prune ONLY buys stranded below the grid (price rose away from them) so their
+        # capital can redeploy near the market. A resting buy at or above the band
+        # bottom is either in-band or one a falling market is dropping toward — it must
+        # be left to FILL, never cancelled and re-chased lower (that would forfeit the
+        # very dip it was placed to catch).
+        prune = set(buys_to_prune(resting.keys(), target_prices))
         for p, (k, order_id) in list(resting.items()):
-            if p in target_prices:
+            if p not in prune:
                 continue
             try:
                 await self._om.client.cancel_order(self._om.symbol, order_id)
@@ -428,6 +434,20 @@ def resting_buy_levels(
             levels.append((k, p))
         k -= 1
     return levels
+
+
+def buys_to_prune(resting_prices: Iterable[Decimal], target_prices: set[Decimal]) -> list[Decimal]:
+    """Resting buy prices to cancel: only those stranded strictly below the grid.
+
+    The band bottom is the deepest target level. Buys below it sit uselessly deep
+    (the market rose away from them) — cancel to redeploy near price. Buys at or
+    above the band bottom are in-band, or above it where a falling market will fill
+    them, so they are kept. With no targets (no capital) nothing is pruned.
+    """
+    if not target_prices:
+        return []
+    bottom = min(target_prices)
+    return [p for p in resting_prices if p < bottom]
 
 
 def _grid_state(step: Decimal) -> tuple[dict[Decimal, tuple[int, str]], set[Decimal]]:
