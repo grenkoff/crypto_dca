@@ -55,17 +55,33 @@ def test_plan_level_heal_skips_levels_still_on_exchange() -> None:
 
 
 def test_resting_levels_contiguous_when_nothing_held() -> None:
+    # full-step clearance: 0.03080 sits only 0.00006 below 0.03086, so the top buy
+    # is one step lower at 0.03070.
     levels = resting_buy_levels(Decimal("0.03086"), Decimal("0.0001"), 6, set())
     prices = [p for _, p in levels]
     assert prices == [
-        Decimal("0.03080"),
         Decimal("0.03070"),
         Decimal("0.03060"),
         Decimal("0.03050"),
         Decimal("0.03040"),
         Decimal("0.03030"),
+        Decimal("0.03020"),
     ]
-    assert all(p < Decimal("0.03086") for p in prices)
+    assert Decimal("0.03086") - prices[0] >= Decimal("0.0001")  # a full step of clearance
+
+
+def test_resting_levels_full_step_gap() -> None:
+    # fractional price: top buy a full step below (0.02978 -> 0.02970, not 0.02975)
+    frac = resting_buy_levels(Decimal("0.02978"), Decimal("0.00005"), 3, set())
+    assert [p for _, p in frac] == [
+        Decimal("0.02970"),
+        Decimal("0.02965"),
+        Decimal("0.02960"),
+    ]
+    # on an exact round level the clearance is exactly one step: 0.02975 becomes a
+    # buy only once the market reaches 0.02980.
+    boundary = resting_buy_levels(Decimal("0.02980"), Decimal("0.00005"), 1, set())
+    assert [p for _, p in boundary] == [Decimal("0.02975")]
 
 
 def test_resting_levels_skip_held_and_go_deeper() -> None:
@@ -91,8 +107,8 @@ def test_resting_levels_excludes_price_on_round_level() -> None:
 
 def test_resting_levels_index_matches_price_over_step() -> None:
     levels = resting_buy_levels(Decimal("0.03086"), Decimal("0.0001"), 2, set())
-    assert levels[0] == (308, Decimal("0.03080"))
-    assert levels[1] == (307, Decimal("0.03070"))
+    assert levels[0] == (307, Decimal("0.03070"))
+    assert levels[1] == (306, Decimal("0.03060"))
 
 
 def test_resting_levels_stop_at_zero() -> None:

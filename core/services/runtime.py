@@ -406,12 +406,18 @@ def resting_buy_levels(
     covered by an open position, until ``count`` resting-buy levels are collected.
     This keeps a constant number of live buy orders — when one fills, the next
     deeper unheld level takes its place. Levels at/below zero stop the walk.
+
+    The topmost buy keeps a **full ``step`` of clearance** below the market: it sits
+    at least one step under the price, so a level only earns a buy once the market
+    has risen a full step above it (price 0.02978 → top 0.02970; the 0.02975 level
+    gets a buy only at price 0.02980).
     """
     if step <= 0 or price <= 0 or count <= 0:
         return []
-    k_top = int(price / step)
-    if Decimal(k_top) * step >= price:
-        k_top -= 1
+    k_floor = int(price / step)
+    if Decimal(k_floor) * step > price:  # guard against any rounding overshoot
+        k_floor -= 1
+    k_top = k_floor - 1  # one full step of clearance below the market
     levels: list[tuple[int, Decimal]] = []
     k = k_top
     while len(levels) < count:
