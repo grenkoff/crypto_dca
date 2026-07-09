@@ -120,6 +120,11 @@ def test_format_event_order_placed() -> None:
     assert text == "🔵 `0.02910`"
 
 
+def test_format_event_order_cancelled() -> None:
+    text = format_event({"type": "order.cancelled", "payload": {"price": "0.02775"}})
+    assert text == "❌ `0.02775`"
+
+
 def test_format_event_position_opened() -> None:
     text = format_event(
         {

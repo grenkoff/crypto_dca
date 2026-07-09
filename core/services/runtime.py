@@ -134,8 +134,10 @@ class TraderRuntime:
         for p, (k, order_id) in list(resting.items()):
             if p not in prune:
                 continue
+            cancelled = False
             try:
                 await self._om.client.cancel_order(self._om.symbol, order_id)
+                cancelled = True
             except Exception as exc:
                 # "order does not exist" ⇒ it already filled/cancelled; idle the stale
                 # level anyway so it doesn't linger as phantom drift.
@@ -144,6 +146,8 @@ class TraderRuntime:
                     continue
             await sync_to_async(_idle_level)(k)
             log.info("grid.pruned", price=str(p))
+            if cancelled:  # announce only a real cancel (a vanished order likely filled)
+                await self._bus.publish("order.cancelled", {"price": str(p)})
         # Fill any missing band levels (skip ones already resting or held).
         # A single placement failure (e.g. insufficient USDT when capital is fully
         # deployed) must not abort the pass or spam tracebacks — skip and go on.

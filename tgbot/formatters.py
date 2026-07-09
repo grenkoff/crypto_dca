@@ -149,6 +149,8 @@ def format_event(event: dict[str, Any]) -> str:
     payload = event.get("payload", {})
     if etype == "order.placed":
         return f"🔵 `{_price5(payload.get('price'))}`"
+    if etype == "order.cancelled":
+        return f"❌ `{_price5(payload.get('price'))}`"
     if etype == "position.opened":
         return (
             f"🟢 `{_price5(payload.get('entry_price'))}` → TP `{_price5(payload.get('tp_price'))}`"
