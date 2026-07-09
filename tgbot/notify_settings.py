@@ -23,7 +23,7 @@ EVENT_TOGGLE: dict[str, str] = {
     "compensation.applied": "notify_compensation",
     "position.opened": "notify_opened",
     "order.placed": "notify_order_placed",
-    "order.cancelled": "notify_order_placed",  # same housekeeping toggle as placed
+    "order.cancelled": "notify_order_cancelled",
 }
 
 # Ordered (field, label) pairs for the /notify inline menu.
@@ -32,7 +32,8 @@ TOGGLE_LABELS: list[tuple[str, str]] = [
     ("notify_closed", "Closes (profit)"),
     ("notify_compensation", "Compensation"),
     ("notify_opened", "Position opened"),
-    ("notify_order_placed", "Buy placed / cancelled"),
+    ("notify_order_placed", "Buy placed"),
+    ("notify_order_cancelled", "Buy cancelled"),
     ("digest_enabled", "Daily digest"),
 ]
 

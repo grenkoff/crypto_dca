@@ -105,6 +105,7 @@ class NotificationSettings(_Singleton):
     notify_compensation = models.BooleanField(default=True)
     notify_opened = models.BooleanField(default=True)
     notify_order_placed = models.BooleanField(default=True)
+    notify_order_cancelled = models.BooleanField(default=True)
 
     digest_enabled = models.BooleanField(default=True)
     digest_time_utc = models.TimeField(default=time(19, 0))  # 00:00 Astana (UTC+5)
