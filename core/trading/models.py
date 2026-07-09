@@ -78,6 +78,15 @@ class BotStatus(_Singleton):
     last_heartbeat = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
+    # Grid geometry the resting buy orders were last built with. When the live
+    # StrategyConfig diverges from these, the buy grid is torn down and rebuilt so
+    # every order matches the new step/size (no lingering mixed-size orders).
+    applied_grid_step = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, null=True, blank=True
+    )
+    applied_order_qty = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, null=True, blank=True
+    )
 
     def __str__(self) -> str:
         return "paused" if self.paused else "running"

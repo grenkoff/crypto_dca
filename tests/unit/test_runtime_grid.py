@@ -3,8 +3,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
 from core.exchange.types import Execution, Side
-from core.services.runtime import plan_level_heal, resting_buy_levels
+from core.services.runtime import (
+    _grid_params_changed,
+    _record_applied_grid_params,
+    _reset_all_grid_levels,
+    plan_level_heal,
+    resting_buy_levels,
+)
+from core.trading.models import BotStatus, GridLevel, LevelStatus
 
 
 def _exec(order_id: str) -> Execution:
@@ -95,3 +104,49 @@ def test_resting_levels_empty_on_invalid_input() -> None:
     assert resting_buy_levels(Decimal("0"), Decimal("0.0001"), 6, set()) == []
     assert resting_buy_levels(Decimal("0.03"), Decimal("0"), 6, set()) == []
     assert resting_buy_levels(Decimal("0.03"), Decimal("0.0001"), 0, set()) == []
+
+
+pytestmark_db = pytest.mark.django_db(transaction=True)
+
+
+@pytestmark_db
+def test_grid_params_first_run_adopts_without_change() -> None:
+    bot = BotStatus.load()
+    bot.applied_grid_step = None
+    bot.applied_order_qty = None
+    bot.save()
+    # first sight: adopt current geometry, report "no change" (no spurious rebuild)
+    assert _grid_params_changed(Decimal("0.0001"), Decimal("5")) is False
+    bot.refresh_from_db()
+    assert bot.applied_grid_step == Decimal("0.0001")
+    assert bot.applied_order_qty == Decimal("5")
+
+
+@pytestmark_db
+def test_grid_params_detects_step_and_qty_change() -> None:
+    _record_applied_grid_params(Decimal("0.0001"), Decimal("5"))
+    assert _grid_params_changed(Decimal("0.0001"), Decimal("5")) is False
+    assert _grid_params_changed(Decimal("0.00005"), Decimal("5")) is True  # step changed
+    assert _grid_params_changed(Decimal("0.0001"), Decimal("10")) is True  # qty changed
+
+
+@pytestmark_db
+def test_reset_all_grid_levels_idles_awaiting() -> None:
+    GridLevel.objects.create(
+        level_index=291,
+        target_buy_price=Decimal("0.0291"),
+        status=LevelStatus.AWAITING_FILL,
+        current_buy_order_id="ord-1",
+    )
+    GridLevel.objects.create(
+        level_index=292,
+        target_buy_price=Decimal("0.0292"),
+        status=LevelStatus.FILLED,
+        current_buy_order_id="",
+    )
+    _reset_all_grid_levels()
+    g = GridLevel.objects.get(level_index=291)
+    assert g.status == LevelStatus.IDLE
+    assert g.current_buy_order_id == ""
+    # a FILLED level (holds a position) is untouched
+    assert GridLevel.objects.get(level_index=292).status == LevelStatus.FILLED

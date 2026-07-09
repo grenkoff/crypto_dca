@@ -80,6 +80,7 @@ class TraderRuntime:
             current_price=str(self._current_price),
             tick=str(instrument.tick_size),
         )
+        await self._rebuild_grid_on_param_change()
         await self._ensure_grid()
 
     async def _ensure_grid(self) -> None:
@@ -275,6 +276,34 @@ class TraderRuntime:
                 },
             )
 
+    async def _rebuild_grid_on_param_change(self) -> None:
+        """Tear the buy grid down and rebuild it when grid geometry changed.
+
+        Live orders are never resized in place, so after ``grid_step`` or
+        ``order_qty_quote`` changes the band would otherwise carry a mix of old- and
+        new-sized buys. When the config diverges from the last-applied geometry we
+        cancel **every resting buy** (SELL take-profits are left untouched) and idle
+        their levels; the following ``_ensure_grid`` then lays a fresh, uniform grid.
+        """
+        assert self._om is not None
+        cfg = self._om.config
+        if not await sync_to_async(_grid_params_changed)(cfg.grid_step, cfg.order_qty_quote):
+            return
+        log.warning(
+            "grid.params_changed_rebuild",
+            grid_step=str(cfg.grid_step),
+            order_qty=str(cfg.order_qty_quote),
+        )
+        for order in await self._om.client.get_open_orders(self._om.symbol):
+            if order.side != Side.BUY:
+                continue  # take-profits (SELL) keep working as before
+            try:
+                await self._om.client.cancel_order(self._om.symbol, order.order_id)
+            except Exception as exc:  # pragma: no cover - depends on live API
+                log.warning("grid.rebuild_cancel_failed", order_id=order.order_id, error=str(exc))
+        await sync_to_async(_reset_all_grid_levels)()
+        await sync_to_async(_record_applied_grid_params)(cfg.grid_step, cfg.order_qty_quote)
+
     async def _heal_stale_buy_levels(self) -> None:
         """Unstick grid levels whose buy order left the exchange unseen.
 
@@ -421,6 +450,34 @@ def _idle_level(level_index: int) -> None:
     GridLevel.objects.filter(level_index=level_index).update(
         status=LevelStatus.IDLE, current_buy_order_id=""
     )
+
+
+def _grid_params_changed(grid_step: Decimal, order_qty: Decimal) -> bool:
+    """Whether grid geometry differs from what the buy grid was last built with.
+
+    On the very first run the applied values are unset — we adopt the current geometry
+    without forcing a rebuild (the existing grid already matches the live config).
+    """
+    bot = BotStatus.load()
+    if bot.applied_grid_step is None or bot.applied_order_qty is None:
+        bot.applied_grid_step = grid_step
+        bot.applied_order_qty = order_qty
+        bot.save(update_fields=["applied_grid_step", "applied_order_qty"])
+        return False
+    return bot.applied_grid_step != grid_step or bot.applied_order_qty != order_qty
+
+
+def _reset_all_grid_levels() -> None:
+    GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL).update(
+        status=LevelStatus.IDLE, current_buy_order_id=""
+    )
+
+
+def _record_applied_grid_params(grid_step: Decimal, order_qty: Decimal) -> None:
+    bot = BotStatus.load()
+    bot.applied_grid_step = grid_step
+    bot.applied_order_qty = order_qty
+    bot.save(update_fields=["applied_grid_step", "applied_order_qty"])
 
 
 def _awaiting_buy_levels() -> list[tuple[int, str]]:
