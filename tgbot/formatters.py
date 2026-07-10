@@ -160,7 +160,8 @@ def format_event(event: dict[str, Any]) -> str:
             realized = Decimal(str(payload.get("realized", "0")))
         except (InvalidOperation, TypeError, ValueError):
             realized = Decimal(0)
-        return f"💰 `{_price5(payload.get('price'))}` → `{_signed(realized, '0.0001')}` USDT"
+        emoji = "💰" if realized >= 0 else "🔴"  # losses stand out, don't blend in
+        return f"{emoji} `{_price5(payload.get('price'))}` → `{_signed(realized, '0.0001')}` USDT"
     if etype == "compensation.applied":
         # A TP being pulled toward market — not a realised gain, so no amount shown
         # (the profit that funds it is already reported by its own close).
