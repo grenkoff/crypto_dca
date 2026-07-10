@@ -434,3 +434,26 @@ def _exec(
         fee_coin=fee_coin,
         executed_at=datetime.now(tz=UTC),
     )
+
+
+async def test_reprotect_places_maker_sell_above_market(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    pos = await sync_to_async(Position.objects.create)(
+        level_index=5,
+        entry_price=Decimal("59000"),
+        qty=Decimal("0.001"),
+        tp_price=Decimal("59500"),
+        status=PositionStatus.OPEN,
+        opened_at=datetime.now(tz=UTC),
+    )
+    # market ran up to 60000: the original TP (59500) now sits below market, so the
+    # reprotected sell is floored one tick above market instead of crossing.
+    order_id = await om.reprotect(pos, current_price=Decimal("60000"))
+    placed = client.placed[-1]
+    assert placed["side"] == Side.SELL
+    assert placed["qty"] == Decimal("0.001")
+    assert placed["price"] == Decimal("60000.01")  # one tick above market
+    await sync_to_async(pos.refresh_from_db)()
+    assert pos.tp_price == Decimal("60000.01")
+    assert pos.tp_order_id == order_id

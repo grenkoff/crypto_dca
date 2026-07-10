@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import signal
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 
@@ -44,6 +44,9 @@ from core.trading.models import (
 log = structlog.get_logger()
 
 RECONCILE_INTERVAL_S = 30
+# Only heal a position whose TP order is missing if it's older than this — so a
+# freshly-opened position's just-placed TP is never raced and double-protected.
+_NAKED_MIN_AGE_S = 120
 
 
 class TraderRuntime:
@@ -234,6 +237,7 @@ class TraderRuntime:
                 self._current_price = await self._client.get_last_price(self._om.symbol)
                 await reconcile_once(self._client, self._om.symbol)
                 await self._recover_missed_fills()  # replay fills dropped by WS hiccups
+                await self._heal_naked_positions()  # settle/reprotect positions with a lost TP
                 await self._heal_stale_buy_levels()  # unstick levels whose buy vanished
                 await self._sweep_free_inventory()  # re-adopt free base coin (partial fills)
                 await self._ensure_grid()  # self-heal the band even without fills
@@ -313,6 +317,46 @@ class TraderRuntime:
                 log.warning("grid.rebuild_cancel_failed", order_id=order.order_id, error=str(exc))
         await sync_to_async(_reset_all_grid_levels)()
         await sync_to_async(_record_applied_grid_params)(cfg.grid_step, cfg.order_qty_quote)
+
+    async def _heal_naked_positions(self) -> None:
+        """Settle or reprotect open positions whose take-profit order left the exchange.
+
+        A position's protective sell can vanish — an interrupted compensation cancel,
+        or a fill dropped beyond the recent-execution window (leaving it phantom-open).
+        For each open position older than the guard window (so a freshly-placed TP is
+        never raced) whose TP order is no longer live, we look up that order's own
+        executions: if it SOLD, replay the fill to close it properly (idempotent on
+        exec_id); if it did not, re-place a protective TP so the coin is never naked.
+        """
+        assert self._om is not None
+        candidates = await sync_to_async(_naked_candidates)(_NAKED_MIN_AGE_S)
+        if not candidates:
+            return
+        orders = await self._om.client.get_open_orders(self._om.symbol)
+        live = {o.order_id for o in orders}
+        for pos_id, tp_order_id in naked_positions(candidates, live):
+            try:
+                execs = await self._om.client.get_order_executions(self._om.symbol, tp_order_id)
+            except Exception as exc:  # pragma: no cover - depends on live API
+                log.warning("heal.naked_lookup_failed", id=pos_id, error=str(exc)[:100])
+                continue
+            sells = [e for e in execs if e.side == Side.SELL]
+            if sells:  # the TP filled unseen — replay to close with the real PnL
+                for execution in sells:
+                    if await sync_to_async(_exec_logged)(execution.exec_id):
+                        continue
+                    log.warning("heal.naked_settle", id=pos_id, order_id=tp_order_id)
+                    await self._om.handle_sell_fill(execution, self._current_price)
+                continue
+            # No fill: the TP was cancelled/lost but the coin is still held — reprotect.
+            pos = await sync_to_async(_get_open_position)(pos_id)
+            if pos is None:
+                continue
+            log.warning("heal.naked_reprotect", id=pos_id, order_id=tp_order_id)
+            try:
+                await self._om.reprotect(pos, self._current_price)
+            except Exception as exc:  # pragma: no cover - depends on live API
+                log.error("heal.reprotect_failed", id=pos_id, error=str(exc)[:100])
 
     async def _heal_stale_buy_levels(self) -> None:
         """Unstick grid levels whose buy order left the exchange unseen.
@@ -438,6 +482,28 @@ def resting_buy_levels(
             levels.append((k, p))
         k -= 1
     return levels
+
+
+def naked_positions(
+    candidates: list[tuple[int, str]], live_order_ids: set[str]
+) -> list[tuple[int, str]]:
+    """Of the (position_id, tp_order_id) candidates, those whose TP order is no longer
+    live on the exchange — i.e. positions left without a resting protective sell."""
+    return [(pid, oid) for pid, oid in candidates if oid not in live_order_ids]
+
+
+def _naked_candidates(min_age_seconds: int) -> list[tuple[int, str]]:
+    cutoff = datetime.now(tz=UTC) - timedelta(seconds=min_age_seconds)
+    return [
+        (int(pid), str(oid))
+        for pid, oid in Position.objects.filter(status=PositionStatus.OPEN, opened_at__lt=cutoff)
+        .exclude(tp_order_id="")
+        .values_list("id", "tp_order_id")
+    ]
+
+
+def _get_open_position(pos_id: int) -> Position | None:
+    return Position.objects.filter(id=pos_id, status=PositionStatus.OPEN).first()
 
 
 def buys_to_prune(resting_prices: Iterable[Decimal], target_prices: set[Decimal]) -> list[Decimal]:

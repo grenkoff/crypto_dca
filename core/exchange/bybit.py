@@ -170,6 +170,21 @@ class BybitClient:
         result = _raise_for_ret(resp)
         return [_parse_execution(item) for item in (result.get("list") or [])]
 
+    async def get_order_executions(
+        self, symbol: str, order_id: str, *, limit: int = 50
+    ) -> list[Execution]:
+        """Executions for one specific order (7-day retention), regardless of age —
+        used to settle a naked position whose fill fell outside the recent window."""
+        resp = await asyncio.to_thread(
+            self._http.get_executions,
+            category=CATEGORY,
+            symbol=symbol,
+            orderId=order_id,
+            limit=limit,
+        )
+        result = _raise_for_ret(resp)
+        return [_parse_execution(item) for item in (result.get("list") or [])]
+
 
 def _parse_order(item: dict[str, Any]) -> Order:
     return Order(

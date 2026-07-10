@@ -11,6 +11,7 @@ from core.services.runtime import (
     _record_applied_grid_params,
     _reset_all_grid_levels,
     buys_to_prune,
+    naked_positions,
     plan_level_heal,
     resting_buy_levels,
 )
@@ -94,6 +95,17 @@ def test_buys_to_prune_cancels_only_below_band_bottom() -> None:
 
 def test_buys_to_prune_empty_targets_prunes_nothing() -> None:
     assert buys_to_prune([Decimal("0.02950")], set()) == []
+
+
+def test_naked_positions_flags_only_missing_tp_orders() -> None:
+    candidates = [(1, "tp-live"), (2, "tp-gone"), (3, "tp-live2")]
+    live = {"tp-live", "tp-live2", "some-buy"}
+    assert naked_positions(candidates, live) == [(2, "tp-gone")]
+
+
+def test_naked_positions_none_when_all_live() -> None:
+    candidates = [(1, "a"), (2, "b")]
+    assert naked_positions(candidates, {"a", "b"}) == []
 
 
 def test_resting_levels_full_step_gap() -> None:

@@ -295,6 +295,32 @@ class OrderManager:
             },
         )
 
+    async def reprotect(self, position: Position, current_price: Decimal) -> str:
+        """Re-place a protective take-profit for a position whose sell order vanished.
+
+        Priced at the higher of the original TP, one tick above the market (so it
+        rests as a maker and never crosses), and the exchange minimum notional — so a
+        position recovered from a lost/cancelled TP is never left naked. Returns the
+        new order id.
+        """
+        market_floor = round_up_to_tick(
+            current_price + self.instrument.tick_size, self.instrument.tick_size
+        )
+        min_price = round_up_to_tick(
+            self.instrument.min_order_amt / position.qty, self.instrument.tick_size
+        )
+        price = max(position.tp_price or Decimal(0), market_floor, min_price)
+        order_id = await self.client.place_limit(
+            self.symbol,
+            Side.SELL,
+            position.qty,
+            price,
+            order_link_id=_link_id("grid-tp-heal", position.level_index),
+        )
+        await sync_to_async(_set_tp)(target=position, tp_price=price, tp_order_id=order_id)
+        log.warning("position.reprotected", id=position.id, price=str(price))
+        return order_id
+
     async def _restore_protection(self, target: Position, place_error: Exception) -> None:
         """Re-place a protective sell after a failed compensation placement.
 
