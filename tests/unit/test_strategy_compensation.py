@@ -113,13 +113,13 @@ def test_compensation_step_smaller_than_tick_still_moves_one_tick() -> None:
 
 
 def test_compute_compensation_caps_at_market_floor() -> None:
-    # Low entry (break-even below market) + credit: a full step would land below
-    # market, so it is floored one tick above it.
-    target = _pos(1, "59000", qty="0.001", fees_in="0", tp="59000.05", credit="0.10")
+    # A full step down would land below the market; with break-even at entry
+    # (zero fee here) the binding floor is the market floor, one tick above market.
+    target = _pos(1, "59000", qty="0.001", fees_in="0", tp="59000.50", credit="0")
     decision = compute_compensation(
         target=target,
         profit_from_other=Decimal("0.05"),
-        maker_fee=Decimal("0.001"),
+        maker_fee=Decimal("0"),
         current_price=Decimal("59000"),
         tick_size=Decimal("0.01"),
         tp_step=Decimal("100"),
@@ -127,9 +127,30 @@ def test_compute_compensation_caps_at_market_floor() -> None:
     assert decision is not None and decision.new_tp_price == Decimal("59000.01")
 
 
-def test_compute_compensation_skips_when_credit_insufficient() -> None:
-    # TP already far below break-even; the tiny credit can't cover the loss -> skip
-    # (the credit floor sits above the current TP), so the profit is kept instead.
+def test_compute_compensation_never_lowers_below_break_even() -> None:
+    # A grid position (TP one step above entry): compensation pulls the TP toward
+    # market but stops at break-even, so the close nets >= 0 — never a minus trade.
+    qty = Decimal("170")
+    entry = Decimal("0.02975")
+    fee = Decimal("0.000625")
+    fees_in = entry * qty * fee
+    target = _pos(1, str(entry), qty=str(qty), fees_in=str(fees_in), tp="0.02985", credit="0")
+    decision = compute_compensation(
+        target=target,
+        profit_from_other=Decimal("0.01"),
+        maker_fee=fee,
+        current_price=Decimal("0.0295"),
+        tick_size=Decimal("0.00001"),
+        tp_step=Decimal("0.0001"),
+    )
+    assert decision is not None
+    realized = decision.new_tp_price * qty * (Decimal(1) - fee) - entry * qty - fees_in
+    assert realized >= 0  # the compensated close is never a loss
+
+
+def test_compute_compensation_skips_when_tp_already_below_break_even() -> None:
+    # TP already below the position's break-even (selling there is already a loss) ->
+    # never lower it further; keep the profit as realised USDT instead.
     target = _pos(1, "60000", qty="0.001", fees_in="0", tp="59000.05", credit="0")
     decision = compute_compensation(
         target=target,
