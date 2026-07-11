@@ -356,7 +356,15 @@ class TraderRuntime:
             try:
                 await self._om.reprotect(pos, self._current_price)
             except Exception as exc:  # pragma: no cover - depends on live API
-                log.error("heal.reprotect_failed", id=pos_id, error=str(exc)[:100])
+                msg = str(exc)
+                if "170131" in msg or "insufficient" in msg.lower():
+                    # Can't place the sell — the coin is gone: the TP filled under a
+                    # superseded order id we couldn't trace. Settle the phantom-open
+                    # position (book it at its TP) instead of retrying forever.
+                    log.warning("heal.naked_settle_phantom", id=pos_id)
+                    await self._om.settle_phantom(pos)
+                else:
+                    log.error("heal.reprotect_failed", id=pos_id, error=msg[:100])
 
     async def _heal_stale_buy_levels(self) -> None:
         """Unstick grid levels whose buy order left the exchange unseen.

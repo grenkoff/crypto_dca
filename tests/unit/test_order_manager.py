@@ -457,3 +457,36 @@ async def test_reprotect_places_maker_sell_above_market(
     await sync_to_async(pos.refresh_from_db)()
     assert pos.tp_price == Decimal("60000.01")
     assert pos.tp_order_id == order_id
+
+
+async def test_settle_phantom_closes_at_tp_and_frees_level(
+    om: OrderManager, bus: RecordingEventBus
+) -> None:
+    await sync_to_async(GridLevel.objects.create)(
+        level_index=7, target_buy_price=Decimal("59000"), status=LevelStatus.FILLED
+    )
+    pos = await sync_to_async(Position.objects.create)(
+        level_index=7,
+        entry_price=Decimal("59000"),
+        qty=Decimal("0.001"),
+        fees_in=Decimal("0"),
+        tp_price=Decimal("59100"),
+        status=PositionStatus.OPEN,
+        opened_at=datetime.now(tz=UTC),
+    )
+    realized = await om.settle_phantom(pos)
+
+    await sync_to_async(pos.refresh_from_db)()
+    assert pos.status == PositionStatus.CLOSED
+    assert pos.filled_qty == Decimal("0.001")
+    # booked at the recorded TP price, net of the maker sell fee
+    expected = Decimal("59100") * Decimal("0.001") * (Decimal(1) - om.config.maker_fee) - Decimal(
+        "59000"
+    ) * Decimal("0.001")
+    assert pos.realized_pnl == expected
+    assert realized == expected
+    # its grid level is freed for re-use
+    level = await sync_to_async(GridLevel.objects.get)(level_index=7)
+    assert level.status == LevelStatus.IDLE
+    # and a position.closed event is emitted
+    assert any(t == "position.closed" for t, _ in bus.events)

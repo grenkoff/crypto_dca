@@ -321,6 +321,30 @@ class OrderManager:
         log.warning("position.reprotected", id=position.id, price=str(price))
         return order_id
 
+    async def settle_phantom(self, position: Position) -> Decimal:
+        """Close a phantom-open position whose coin is already gone — its TP filled
+        under a superseded order id we can no longer trace (so we can't reprotect: the
+        base coin isn't there). Book it at its recorded TP price (the maker price it
+        would have filled at) so the DB matches the wallet. Returns realized PnL.
+        """
+        price = position.tp_price or position.entry_price
+        realized = await sync_to_async(_close_at_price)(
+            position=position, price=price, maker_fee=self.config.maker_fee
+        )
+        log.warning(
+            "position.settled_phantom", id=position.id, price=str(price), realized=str(realized)
+        )
+        await self.bus.publish(
+            "position.closed",
+            {
+                "level": position.level_index,
+                "realized": str(realized),
+                "price": str(price),
+                "position_id": position.id,
+            },
+        )
+        return realized
+
     async def _restore_protection(self, target: Position, place_error: Exception) -> None:
         """Re-place a protective sell after a failed compensation placement.
 
@@ -363,6 +387,34 @@ def _set_tp(*, target: Position, tp_price: Decimal, tp_order_id: str) -> None:
     target.tp_price = tp_price
     target.tp_order_id = tp_order_id
     target.save(update_fields=["tp_price", "tp_order_id"])
+
+
+def _close_at_price(*, position: Position, price: Decimal, maker_fee: Decimal) -> Decimal:
+    """Mark a position sold in full at ``price`` (maker) and free its grid level."""
+    with transaction.atomic():
+        sell_value = price * position.qty
+        fees_out = sell_value * maker_fee
+        realized = sell_value - fees_out - position.entry_price * position.qty - position.fees_in
+        position.filled_qty = position.qty
+        position.sell_value = sell_value
+        position.fees_out = fees_out
+        position.realized_pnl = realized
+        position.status = PositionStatus.CLOSED
+        position.closed_at = datetime.now(tz=UTC)
+        position.save(
+            update_fields=[
+                "filled_qty",
+                "sell_value",
+                "fees_out",
+                "realized_pnl",
+                "status",
+                "closed_at",
+            ]
+        )
+        GridLevel.objects.filter(level_index=position.level_index).update(
+            status=LevelStatus.IDLE, current_buy_order_id=""
+        )
+    return realized
 
 
 def _upsert_grid_level(level_index: int, price: Decimal, order_id: str) -> None:
