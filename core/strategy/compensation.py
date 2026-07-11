@@ -1,5 +1,6 @@
 """Pairwise compensation: each realized profit pulls a near-market take-profit
-one ``tp_step`` closer to the market so it fills sooner and frees capital.
+one ``step`` closer to the market so it fills sooner and frees capital. The step
+is the grid spacing (``grid_step``), independent of the take-profit distance.
 
 Target selection: the **second-nearest** TP above the market. The nearest one is
 likely to fill on its own; helping the next one down releases locked capital
@@ -7,7 +8,7 @@ soonest. (With a single candidate, that one is taken.) Several TPs may end up
 stacked on the same price level — that is intended; holes left higher up are not
 re-seeded.
 
-Each application lowers the target's TP by one ``tp_step`` and books the profit
+Each application lowers the target's TP by one ``step`` and books the profit
 into ``compensation_credit``. The step is bounded by the **credit floor** — the
 lowest TP whose realised loss is still fully covered by the accumulated credit —
 so the compensated pair (winner + this close) never nets below zero. When the
@@ -58,15 +59,15 @@ def compute_compensation(
     maker_fee: Decimal,
     current_price: Decimal,
     tick_size: Decimal,
-    tp_step: Decimal,
+    step: Decimal,
     min_order_amt: Decimal = Decimal(0),
 ) -> CompensationDecision | None:
-    if profit_from_other <= 0 or tp_step <= 0:
+    if profit_from_other <= 0 or step <= 0:
         return None
     new_credit = target.compensation_credit + profit_from_other
 
     # One step down is the target pace...
-    step_target = round_down_to_tick(target.current_tp_price - tp_step, tick_size)
+    step_target = round_down_to_tick(target.current_tp_price - step, tick_size)
     # ...but never below the credit floor: the lowest TP whose realised loss is
     # still covered by the accumulated credit, so the pair nets >= 0.
     credit_floor = round_up_to_tick(
@@ -94,7 +95,7 @@ def plan_compensation(
     maker_fee: Decimal,
     current_price: Decimal,
     tick_size: Decimal,
-    tp_step: Decimal,
+    step: Decimal,
     min_order_amt: Decimal = Decimal(0),
 ) -> CompensationDecision | None:
     """Convenience: pick victim and compute decision in one call."""
@@ -107,6 +108,6 @@ def plan_compensation(
         maker_fee=maker_fee,
         current_price=current_price,
         tick_size=tick_size,
-        tp_step=tp_step,
+        step=step,
         min_order_amt=min_order_amt,
     )

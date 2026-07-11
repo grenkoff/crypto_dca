@@ -65,10 +65,10 @@ def test_compensation_lowers_tp_by_exactly_one_step() -> None:
         maker_fee=Decimal("0.001"),
         current_price=Decimal("57000"),
         tick_size=Decimal("0.01"),
-        tp_step=Decimal("100"),
+        step=Decimal("100"),
     )
     assert decision is not None
-    assert decision.new_tp_price == Decimal("60900")  # one tp_step down, no more
+    assert decision.new_tp_price == Decimal("60900")  # one step down, no more
     assert decision.new_credit == Decimal("0.50")  # profit booked as credit
 
 
@@ -80,7 +80,7 @@ def test_compensation_steps_accumulate_credit_across_calls() -> None:
         maker_fee=Decimal("0.001"),
         current_price=Decimal("57000"),
         tick_size=Decimal("0.01"),
-        tp_step=Decimal("100"),
+        step=Decimal("100"),
     )
     assert d1 is not None and d1.new_tp_price == Decimal("60900")
     t2 = _pos(1, "60000", qty="0.001", fees_in="0.06", tp=str(d1.new_tp_price), credit="0.50")
@@ -90,7 +90,7 @@ def test_compensation_steps_accumulate_credit_across_calls() -> None:
         maker_fee=Decimal("0.001"),
         current_price=Decimal("57000"),
         tick_size=Decimal("0.01"),
-        tp_step=Decimal("100"),
+        step=Decimal("100"),
     )
     assert d2 is not None
     assert d2.new_tp_price == Decimal("60800")  # another single step
@@ -98,7 +98,7 @@ def test_compensation_steps_accumulate_credit_across_calls() -> None:
 
 
 def test_compensation_step_smaller_than_tick_still_moves_one_tick() -> None:
-    # tp_step below tick granularity must still produce a real (one-tick) decrease.
+    # step below tick granularity must still produce a real (one-tick) decrease.
     target = _pos(1, "60000", qty="0.001", fees_in="0", tp="61000")
     decision = compute_compensation(
         target=target,
@@ -106,7 +106,7 @@ def test_compensation_step_smaller_than_tick_still_moves_one_tick() -> None:
         maker_fee=Decimal("0.001"),
         current_price=Decimal("57000"),
         tick_size=Decimal("0.01"),
-        tp_step=Decimal("0.001"),
+        step=Decimal("0.001"),
     )
     assert decision is not None
     assert decision.new_tp_price == Decimal("60999.99")
@@ -122,7 +122,7 @@ def test_compute_compensation_caps_at_market_floor() -> None:
         maker_fee=Decimal("0.001"),
         current_price=Decimal("59000"),
         tick_size=Decimal("0.01"),
-        tp_step=Decimal("100"),
+        step=Decimal("100"),
     )
     assert decision is not None and decision.new_tp_price == Decimal("59000.01")
 
@@ -137,7 +137,7 @@ def test_compute_compensation_skips_when_credit_insufficient() -> None:
         maker_fee=Decimal("0.001"),
         current_price=Decimal("57000"),
         tick_size=Decimal("0.01"),
-        tp_step=Decimal("100"),
+        step=Decimal("100"),
     )
     assert decision is None
 
@@ -151,7 +151,7 @@ def test_compute_compensation_skips_when_profit_nonpositive() -> None:
             maker_fee=Decimal("0.001"),
             current_price=Decimal("57000"),
             tick_size=Decimal("0.01"),
-            tp_step=Decimal("100"),
+            step=Decimal("100"),
         )
         is None
     )
@@ -168,7 +168,7 @@ def test_plan_compensation_end_to_end() -> None:
         maker_fee=Decimal("0.001"),
         current_price=Decimal("57000"),
         tick_size=Decimal("0.01"),
-        tp_step=Decimal("100"),
+        step=Decimal("100"),
     )
     assert decision is not None
     # Nearest TP (59000) is left alone; the second-nearest (61000) steps down.
@@ -186,7 +186,7 @@ def test_compute_compensation_floors_at_min_notional() -> None:
         maker_fee=Decimal("0.000625"),
         current_price=Decimal("0.0295"),
         tick_size=Decimal("0.00001"),
-        tp_step=Decimal("0.0001"),
+        step=Decimal("0.0001"),
         min_order_amt=Decimal("5"),
     )
     assert decision is not None
