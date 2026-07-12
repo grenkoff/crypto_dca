@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from asgiref.sync import sync_to_async
 
 from core.exchange.types import Execution, Side
 from core.services.runtime import (
@@ -204,3 +205,82 @@ def test_reset_all_grid_levels_idles_awaiting() -> None:
     assert g.current_buy_order_id == ""
     # a FILLED level (holds a position) is untouched
     assert GridLevel.objects.get(level_index=292).status == LevelStatus.FILLED
+
+
+async def test_heal_stale_buy_replay_failure_idles_level_no_loop() -> None:
+    # A stale awaiting-fill level whose buy filled but whose TP can't be placed
+    # (insufficient balance) must be idled, not crash the cycle or loop forever.
+    from core.exchange.types import Instrument
+    from core.services.order_manager import OrderManager
+    from core.services.runtime import TraderRuntime
+    from core.trading.models import StrategyConfig
+
+    @sync_to_async
+    def _setup() -> None:
+        cfg = StrategyConfig.load()
+        cfg.symbol = "KASUSDT"
+        cfg.grid_mode = "absolute"
+        cfg.grid_step = Decimal("0.00005")
+        cfg.tp_step = Decimal("0.0001")
+        cfg.order_qty_quote = Decimal("5")
+        cfg.maker_fee = Decimal("0.000625")
+        cfg.min_profit_quote = Decimal("0")
+        cfg.save()
+        GridLevel.objects.create(
+            level_index=590,
+            target_buy_price=Decimal("0.0295"),
+            status=LevelStatus.AWAITING_FILL,
+            current_buy_order_id="OID",
+        )
+
+    await _setup()
+    cfg = await sync_to_async(StrategyConfig.load)()
+
+    fill = Execution(
+        exec_id="e-OID",
+        order_id="OID",
+        symbol="KASUSDT",
+        side=Side.BUY,
+        price=Decimal("0.0295"),
+        qty=Decimal("170"),
+        fee=Decimal("0"),
+        fee_coin="KAS",
+        executed_at=datetime(2026, 7, 12, tzinfo=UTC),
+    )
+
+    class FailingClient:
+        async def get_open_orders(self, symbol: str) -> list:  # type: ignore[type-arg]
+            return []  # OID no longer live -> stale
+
+        async def get_executions(self, symbol: str, *, limit: int = 50) -> list:  # type: ignore[type-arg]
+            return [fill]  # OID's buy did fill (recent history)
+
+        async def place_limit(self, *a: object, **k: object) -> str:
+            raise RuntimeError("Insufficient balance. (ErrCode: 170131)")
+
+    instrument = Instrument(
+        symbol="KASUSDT",
+        base_coin="KAS",
+        quote_coin="USDT",
+        tick_size=Decimal("0.00001"),
+        lot_size=Decimal("0.01"),
+        min_order_qty=Decimal("0.01"),
+        min_order_amt=Decimal("5"),
+    )
+    from core.services.events import NoOpEventBus
+
+    om = OrderManager(client=FailingClient(), instrument=instrument, config=cfg, bus=NoOpEventBus())  # type: ignore[arg-type]
+    rt = TraderRuntime()
+    rt._om = om
+    rt._current_price = Decimal("0.0295")
+
+    await rt._heal_stale_buy_levels()  # must not raise
+
+    level = await sync_to_async(GridLevel.objects.get)(level_index=590)
+    assert level.status == LevelStatus.IDLE
+    assert level.current_buy_order_id == ""
+
+
+test_heal_stale_buy_replay_failure_idles_level_no_loop = pytest.mark.django_db(transaction=True)(
+    test_heal_stale_buy_replay_failure_idles_level_no_loop
+)

@@ -400,7 +400,15 @@ class TraderRuntime:
                 await sync_to_async(_idle_level)(idx)
                 continue
             log.warning("grid.heal_replaying_buy", level=idx, order_id=fill.order_id)
-            await self._om.handle_buy_fill(fill)
+            try:
+                await self._om.handle_buy_fill(fill)
+            except Exception as exc:
+                # The buy filled but we can't book it — its coin is gone (the TP also
+                # filled while we were down) or a TP can't be placed for it right now.
+                # Idle the level so the heal doesn't crash the cycle or loop forever;
+                # any coin that IS free gets reclaimed by the readopt sweep.
+                log.warning("grid.heal_replay_failed", level=idx, error=str(exc)[:120])
+                await sync_to_async(_idle_level)(idx)
 
     async def _recover_missed_fills(self) -> None:
         """Replay TP fills the WS stream dropped (e.g. on a connection reset).
