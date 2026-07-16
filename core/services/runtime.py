@@ -53,9 +53,7 @@ _NAKED_MIN_AGE_S = 120
 _INSTANCE_LEASE_S = RECONCILE_INTERVAL_S * 3
 
 
-def another_instance_alive(
-    last_heartbeat: datetime | None, now: datetime, lease_s: int
-) -> bool:
+def another_instance_alive(last_heartbeat: datetime | None, now: datetime, lease_s: int) -> bool:
     """Whether another trader is still running, judged by a fresh heartbeat.
 
     ``None`` (never started) or a stale heartbeat (older than the lease ⇒ the writer

@@ -200,9 +200,7 @@ def _apply_merge(*, group: MergeGroup, new_tp_order_id: str) -> None:
         survivor.fees_in = group.combined_fees_in
         survivor.tp_order_id = new_tp_order_id
         survivor.tp_price = group.new_tp_price
-        survivor.save(
-            update_fields=["qty", "entry_price", "fees_in", "tp_order_id", "tp_price"]
-        )
+        survivor.save(update_fields=["qty", "entry_price", "fees_in", "tp_order_id", "tp_price"])
         # The absorbed rows never sold — their coin now backs the survivor's single
         # sell. Delete them so they don't linger as phantom-open (or pollute PnL as
         # zero-realized closes); ExecutionLog keeps the real buy-fill audit trail.
