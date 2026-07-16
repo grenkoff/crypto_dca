@@ -409,8 +409,11 @@ async def test_heal_stale_buy_replay_submin_fill_idles_level_no_loop() -> None:
         min_order_amt=Decimal("5"),
     )
     om = OrderManager(
-        client=PartialFillClient(), instrument=instrument, config=cfg, bus=NoOpEventBus()
-    )  # type: ignore[arg-type]
+        client=PartialFillClient(),  # type: ignore[arg-type]
+        instrument=instrument,
+        config=cfg,
+        bus=NoOpEventBus(),
+    )
     rt = TraderRuntime()
     rt._om = om
     rt._current_price = Decimal("0.0286")
