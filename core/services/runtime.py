@@ -46,6 +46,24 @@ RECONCILE_INTERVAL_S = 30
 # Only heal a position whose TP order is missing if it's older than this — so a
 # freshly-opened position's just-placed TP is never raced and double-protected.
 _NAKED_MIN_AGE_S = 120
+# A running trader refreshes its heartbeat every reconcile (~30s). If one is fresher
+# than this lease, a second trader is alive — refuse to start so two processes never
+# lay duplicate grids. Comfortably above the interval so a single missed cycle (slow
+# API call) doesn't look dead; a crashed trader's heartbeat goes stale within it.
+_INSTANCE_LEASE_S = RECONCILE_INTERVAL_S * 3
+
+
+def another_instance_alive(
+    last_heartbeat: datetime | None, now: datetime, lease_s: int
+) -> bool:
+    """Whether another trader is still running, judged by a fresh heartbeat.
+
+    ``None`` (never started) or a stale heartbeat (older than the lease ⇒ the writer
+    crashed) means no live peer — safe to start.
+    """
+    if last_heartbeat is None:
+        return False
+    return (now - last_heartbeat) < timedelta(seconds=lease_s)
 
 
 class TraderRuntime:
@@ -61,6 +79,7 @@ class TraderRuntime:
         self._grid_lock = asyncio.Lock()
 
     async def bootstrap(self) -> None:
+        await self._guard_single_instance()
         settings = bybit_settings()
         real_client = BybitClient.from_credentials(
             settings.api_key, settings.api_secret, testnet=settings.testnet
@@ -396,6 +415,26 @@ class TraderRuntime:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self._stop.set)
+
+    async def _guard_single_instance(self) -> None:
+        """Refuse to start if another trader is still alive (fresh heartbeat).
+
+        Two trader processes each maintain their own grid and both react to fills —
+        the orphan-process cause of duplicate buys at one level. A fresh heartbeat in
+        ``BotStatus`` means a peer is running; abort loudly rather than lay a second
+        grid over the first. ``TRADER_SKIP_INSTANCE_GUARD`` bypasses it where the host
+        already guarantees a single instance.
+        """
+        if trader_settings().skip_instance_guard:
+            return
+        last = await sync_to_async(lambda: BotStatus.load().last_heartbeat)()
+        if another_instance_alive(last, datetime.now(tz=UTC), _INSTANCE_LEASE_S):
+            log.error("trader.instance_guard_blocked", last_heartbeat=str(last))
+            raise RuntimeError(
+                "another trader appears to be running (fresh heartbeat) — refusing to "
+                "start a second instance. Stop it first, or set "
+                "TRADER_SKIP_INSTANCE_GUARD=1 if the host guarantees one instance."
+            )
 
     async def _mark_started(self) -> None:
         def _persist() -> None:

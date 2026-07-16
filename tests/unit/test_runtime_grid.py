@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -12,6 +12,7 @@ from core.services.runtime import (
     _grid_state,
     _record_applied_grid_params,
     _reset_all_grid_levels,
+    another_instance_alive,
     buys_to_prune,
     naked_positions,
     plan_level_heal,
@@ -108,6 +109,23 @@ def test_naked_positions_flags_only_missing_tp_orders() -> None:
 def test_naked_positions_none_when_all_live() -> None:
     candidates = [(1, "a"), (2, "b")]
     assert naked_positions(candidates, {"a", "b"}) == []
+
+
+def test_instance_guard_no_heartbeat_allows_start() -> None:
+    now = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+    assert another_instance_alive(None, now, 90) is False
+
+
+def test_instance_guard_fresh_heartbeat_blocks() -> None:
+    now = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+    fresh = now - timedelta(seconds=20)  # peer beat 20s ago, within the 90s lease
+    assert another_instance_alive(fresh, now, 90) is True
+
+
+def test_instance_guard_stale_heartbeat_allows_start() -> None:
+    now = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+    stale = now - timedelta(seconds=120)  # older than the lease ⇒ writer crashed
+    assert another_instance_alive(stale, now, 90) is False
 
 
 def test_resting_levels_full_step_gap() -> None:
