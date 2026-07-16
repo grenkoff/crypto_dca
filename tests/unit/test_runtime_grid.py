@@ -346,3 +346,85 @@ async def test_heal_stale_buy_replay_failure_idles_level_no_loop() -> None:
 test_heal_stale_buy_replay_failure_idles_level_no_loop = pytest.mark.django_db(transaction=True)(
     test_heal_stale_buy_replay_failure_idles_level_no_loop
 )
+
+
+async def test_heal_stale_buy_replay_submin_fill_idles_level_no_loop() -> None:
+    # A stale level whose buy only PARTIALLY filled below the min notional books no
+    # position (handle_buy_fill returns None). It must still be idled — otherwise heal
+    # replays the same sub-min fill every reconcile forever (the reconcile.drift loop).
+    from core.exchange.types import Instrument
+    from core.services.events import NoOpEventBus
+    from core.services.order_manager import OrderManager
+    from core.services.runtime import TraderRuntime
+    from core.trading.models import StrategyConfig
+
+    @sync_to_async
+    def _setup() -> None:
+        cfg = StrategyConfig.load()
+        cfg.symbol = "KASUSDT"
+        cfg.grid_mode = "absolute"
+        cfg.grid_step = Decimal("0.00005")
+        cfg.tp_step = Decimal("0.0001")
+        cfg.order_qty_quote = Decimal("5")
+        cfg.maker_fee = Decimal("0.000625")
+        cfg.min_profit_quote = Decimal("0")
+        cfg.save()
+        GridLevel.objects.create(
+            level_index=573,
+            target_buy_price=Decimal("0.02865"),
+            status=LevelStatus.AWAITING_FILL,
+            current_buy_order_id="OID",
+        )
+
+    await _setup()
+    cfg = await sync_to_async(StrategyConfig.load)()
+
+    # 40 * 0.02865 = $1.15 notional — below the $5 minimum, so no TP/position is booked
+    fill = Execution(
+        exec_id="e-OID-partial",
+        order_id="OID",
+        symbol="KASUSDT",
+        side=Side.BUY,
+        price=Decimal("0.02865"),
+        qty=Decimal("40"),
+        fee=Decimal("0"),
+        fee_coin="KAS",
+        executed_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+
+    class PartialFillClient:
+        async def get_open_orders(self, symbol: str) -> list:  # type: ignore[type-arg]
+            return []  # OID no longer live -> stale
+
+        async def get_executions(self, symbol: str, *, limit: int = 50) -> list:  # type: ignore[type-arg]
+            return [fill]
+
+    instrument = Instrument(
+        symbol="KASUSDT",
+        base_coin="KAS",
+        quote_coin="USDT",
+        tick_size=Decimal("0.00001"),
+        lot_size=Decimal("0.01"),
+        min_order_qty=Decimal("0.01"),
+        min_order_amt=Decimal("5"),
+    )
+    om = OrderManager(
+        client=PartialFillClient(),  # type: ignore[arg-type]
+        instrument=instrument,
+        config=cfg,
+        bus=NoOpEventBus(),
+    )
+    rt = TraderRuntime()
+    rt._om = om
+    rt._current_price = Decimal("0.0286")
+
+    await rt._heal_stale_buy_levels()  # must not raise
+
+    level = await sync_to_async(GridLevel.objects.get)(level_index=573)
+    assert level.status == LevelStatus.IDLE
+    assert level.current_buy_order_id == ""
+
+
+test_heal_stale_buy_replay_submin_fill_idles_level_no_loop = pytest.mark.django_db(
+    transaction=True
+)(test_heal_stale_buy_replay_submin_fill_idles_level_no_loop)
