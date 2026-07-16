@@ -2,7 +2,7 @@
 
 Run on the trader (or web) service shell before the first live deploy:
 
-    uv run python manage.py preflight
+uv run python manage.py preflight
 
 Exits non-zero on any hard failure; soft warnings only print.
 """
@@ -45,7 +45,10 @@ class Check:
 
 
 class Command(BaseCommand):
-    help = "Validate Bybit credentials, balance, instrument, Redis, and StrategyConfig sanity."
+    help = (
+        "Validate Bybit credentials, balance, instrument, Redis, and "
+        "StrategyConfig sanity."
+    )
 
     def handle(self, *args: Any, **options: Any) -> None:
         checks = asyncio.run(_run_all_checks())
@@ -57,13 +60,17 @@ class Command(BaseCommand):
         hard_failures = [c for c in checks if c.status == FAIL]
         if hard_failures:
             self.stdout.write("")
-            self.stdout.write(self.style.ERROR(f"{len(hard_failures)} hard failure(s)"))
+            self.stdout.write(
+                self.style.ERROR(f"{len(hard_failures)} hard failure(s)")
+            )
             raise SystemExit(1)
         warnings = [c for c in checks if c.status == WARN]
         if warnings:
             self.stdout.write("")
             self.stdout.write(
-                self.style.WARNING(f"{len(warnings)} warning(s) — review before trading")
+                self.style.WARNING(
+                    f"{len(warnings)} warning(s) — review before trading"
+                )
             )
         else:
             self.stdout.write("")
@@ -116,7 +123,9 @@ async def _check_bybit_and_balance() -> list[Check]:
         balance_check.fail("skipped — no credentials")
         return [creds_check, inst_check, balance_check]
 
-    client = BybitClient.from_credentials(creds.api_key, creds.api_secret, testnet=creds.testnet)
+    client = BybitClient.from_credentials(
+        creds.api_key, creds.api_secret, testnet=creds.testnet
+    )
     try:
         balances = await client.get_balances()
     except Exception as exc:
@@ -147,11 +156,13 @@ async def _check_bybit_and_balance() -> list[Check]:
     available = quote_balance.free
     if available < cfg.order_qty_quote:
         balance_check.fail(
-            f"only {available} {quote_coin} free, need ≥{cfg.order_qty_quote} for one order"
+            f"only {available} {quote_coin} free, "
+            f"need ≥{cfg.order_qty_quote} for one order"
         )
     elif available < required:
         balance_check.warn(
-            f"{available} {quote_coin} free covers ~{int(available / cfg.order_qty_quote)} "
+            f"{available} {quote_coin} free covers "
+            f"~{int(available / cfg.order_qty_quote)} "
             f"of {cfg.max_open_orders} planned levels"
         )
     else:

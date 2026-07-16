@@ -7,7 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class BybitSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_prefix="BYBIT_")
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", env_prefix="BYBIT_"
+    )
 
     api_key: str = Field(default="")
     api_secret: str = Field(default="")
@@ -16,11 +18,14 @@ class BybitSettings(BaseSettings):
 
 
 class TraderSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_prefix="TRADER_")
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", env_prefix="TRADER_"
+    )
 
     dry_run: bool = Field(default=False)
-    # Bypass the single-instance startup guard (fresh heartbeat ⇒ another trader is
-    # alive ⇒ refuse to start). Set on platforms that already guarantee one instance.
+    # Bypass the single-instance startup guard (fresh heartbeat ⇒ another
+    # trader is alive ⇒ refuse to start). Set on platforms that already
+    # guarantee one instance.
     skip_instance_guard: bool = Field(default=False)
 
 
@@ -31,13 +36,19 @@ class RedisSettings(BaseSettings):
 
 
 class TelegramSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_prefix="TELEGRAM_")
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", env_prefix="TELEGRAM_"
+    )
 
     bot_token: str = Field(default="")
     allowed_chat_ids: str = Field(default="")
 
     def allowed_chat_id_set(self) -> set[int]:
-        return {int(x.strip()) for x in self.allowed_chat_ids.split(",") if x.strip()}
+        return {
+            int(x.strip())
+            for x in self.allowed_chat_ids.split(",")
+            if x.strip()
+        }
 
 
 @lru_cache(maxsize=1)

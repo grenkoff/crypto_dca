@@ -40,7 +40,9 @@ class DryRunBybitClient:
     async def get_open_orders(self, symbol: str) -> list[Order]:
         return await self._inner.get_open_orders(symbol)
 
-    async def get_executions(self, symbol: str, *, limit: int = 50) -> list[Execution]:
+    async def get_executions(
+        self, symbol: str, *, limit: int = 50
+    ) -> list[Execution]:
         return await self._inner.get_executions(symbol, limit=limit)
 
     # --- mutations are no-ops ----------------------------------------------

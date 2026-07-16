@@ -24,10 +24,11 @@ class StreamEvent:
 
 
 class BybitPrivateStream:
-    """Subscribes to private execution + order topics and exposes them as an async iterator.
+    """Subscribes to private execution + order topics and exposes them as an
+    async iterator.
 
-    pybit's WebSocket invokes callbacks on its own daemon thread. We marshal each
-    message back onto the asyncio loop via call_soon_threadsafe.
+    pybit's WebSocket invokes callbacks on its own daemon thread. We marshal
+    each message back onto the asyncio loop via call_soon_threadsafe.
     """
 
     def __init__(
@@ -41,7 +42,9 @@ class BybitPrivateStream:
         self._api_key = api_key
         self._api_secret = api_secret
         self._testnet = testnet
-        self._queue: asyncio.Queue[StreamEvent] = asyncio.Queue(maxsize=queue_size)
+        self._queue: asyncio.Queue[StreamEvent] = asyncio.Queue(
+            maxsize=queue_size
+        )
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws: Any | None = None
 
@@ -74,9 +77,15 @@ class BybitPrivateStream:
     def _on_execution(self, message: dict[str, Any]) -> None:
         for item in message.get("data", []):
             try:
-                event = StreamEvent(kind="execution", payload=_parse_execution(item))
+                event = StreamEvent(
+                    kind="execution", payload=_parse_execution(item)
+                )
             except Exception as exc:
-                log.warning("bybit_ws.parse_execution_failed", error=str(exc), item=item)
+                log.warning(
+                    "bybit_ws.parse_execution_failed",
+                    error=str(exc),
+                    item=item,
+                )
                 continue
             self._enqueue(event)
 
@@ -85,7 +94,9 @@ class BybitPrivateStream:
             try:
                 event = StreamEvent(kind="order", payload=_parse_order(item))
             except Exception as exc:
-                log.warning("bybit_ws.parse_order_failed", error=str(exc), item=item)
+                log.warning(
+                    "bybit_ws.parse_order_failed", error=str(exc), item=item
+                )
                 continue
             self._enqueue(event)
 

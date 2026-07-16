@@ -10,7 +10,9 @@ from typing import Any, Protocol
 
 
 class EventBus(Protocol):
-    async def publish(self, event_type: str, payload: dict[str, Any]) -> None: ...
+    async def publish(
+        self, event_type: str, payload: dict[str, Any]
+    ) -> None: ...
 
 
 class NoOpEventBus:

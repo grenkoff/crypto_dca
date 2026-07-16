@@ -31,12 +31,17 @@ class RedisEventBus:
 
     async def publish(self, event_type: str, payload: dict[str, Any]) -> None:
         message = json.dumps(
-            {"type": event_type, "payload": payload, "ts": time.time()}, default=_encode
+            {"type": event_type, "payload": payload, "ts": time.time()},
+            default=_encode,
         )
         try:
             await self._client.publish(CHANNEL, message)
         except Exception as exc:
-            log.error("redis_bus.publish_failed", event_type=event_type, error=str(exc))
+            log.error(
+                "redis_bus.publish_failed",
+                event_type=event_type,
+                error=str(exc),
+            )
 
     async def subscribe(self) -> AsyncIterator[dict[str, Any]]:
         pubsub = self._client.pubsub()
@@ -51,7 +56,11 @@ class RedisEventBus:
                 try:
                     yield json.loads(data)
                 except json.JSONDecodeError as exc:
-                    log.warning("redis_bus.decode_failed", error=str(exc), data=data[:200])
+                    log.warning(
+                        "redis_bus.decode_failed",
+                        error=str(exc),
+                        data=data[:200],
+                    )
         finally:
             await pubsub.unsubscribe(CHANNEL)
             await pubsub.aclose()  # type: ignore[no-untyped-call]

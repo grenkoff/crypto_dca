@@ -67,7 +67,10 @@ def event_enabled(event_type: str) -> bool:
 
 @sync_to_async
 def toggle_field(field: str) -> bool:
-    """Flip a boolean toggle and return its new value. Rejects unknown fields."""
+    """Flip a boolean toggle and return its new value.
+
+    Rejects unknown fields.
+    """
     if field not in _ALLOWED_FIELDS:
         raise ValueError(f"unknown notification field: {field}")
     obj = NotificationSettings.load()
@@ -79,7 +82,8 @@ def toggle_field(field: str) -> bool:
 
 @sync_to_async
 def set_digest_time_astana(astana: time) -> time:
-    """Store a digest time given in Astana local; return the stored UTC value."""
+    """Store a digest time given in Astana local; return the stored UTC
+    value."""
     obj = NotificationSettings.load()
     obj.digest_time_utc = astana_to_utc(astana)
     obj.save(update_fields=["digest_time_utc", "updated_at"])

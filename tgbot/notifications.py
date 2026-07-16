@@ -1,4 +1,5 @@
-"""Subscribe to Redis events and forward as Telegram messages to admin chats."""
+"""Subscribe to Redis events and forward as Telegram messages to admin
+chats."""
 
 from __future__ import annotations
 
@@ -19,10 +20,16 @@ log = structlog.get_logger()
 
 @sync_to_async
 def _admin_chat_ids() -> list[int]:
-    return list(TelegramUser.objects.filter(is_admin=True).values_list("chat_id", flat=True))
+    return list(
+        TelegramUser.objects.filter(is_admin=True).values_list(
+            "chat_id", flat=True
+        )
+    )
 
 
-async def run_subscriber(bus: RedisEventBus, bot: Bot, stop: asyncio.Event) -> None:
+async def run_subscriber(
+    bus: RedisEventBus, bot: Bot, stop: asyncio.Event
+) -> None:
     log.info("tgbot.subscriber_started")
     try:
         async for event in bus.subscribe():

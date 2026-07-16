@@ -1,8 +1,8 @@
 """OrderManager: orchestrates exchange operations and corresponding DB state.
 
-All exchange-touching methods are async (delegating to BybitClient). Django
-ORM access uses the async API where possible, with multi-statement atomic
-blocks wrapped in `sync_to_async`.
+All exchange-touching methods are async (delegating to BybitClient). Django ORM
+access uses the async API where possible, with multi-statement atomic blocks
+wrapped in `sync_to_async`.
 """
 
 from __future__ import annotations
@@ -44,13 +44,15 @@ def fee_in_quote(execution: BybitExecution, quote_coin: str) -> Decimal:
     return execution.fee * execution.price
 
 
-def compute_buy_qty(quote_amount: Decimal, price: Decimal, instrument: Instrument) -> Decimal:
+def compute_buy_qty(
+    quote_amount: Decimal, price: Decimal, instrument: Instrument
+) -> Decimal:
     """Base-coin qty for spending ~``quote_amount``, rounded to the lot size.
 
     Rounding down can drop the notional a hair below ``min_order_amt`` at the
-    boundary (e.g. $5 target → $4.9998), which the exchange rejects. Bump one lot
-    up in that case so a min-sized order still clears — the same nudge you'd do by
-    hand.
+    boundary (e.g. $5 target → $4.9998), which the exchange rejects. Bump one
+    lot up in that case so a min-sized order still clears — the same nudge
+    you'd do by hand.
     """
     qty = round_down_to_tick(quote_amount / price, instrument.lot_size)
     if qty * price < instrument.min_order_amt:
@@ -87,9 +89,16 @@ class OrderManager:
             raise ValueError(f"unexpected grid_mode: {mode}")
         return mode  # type: ignore[return-value]
 
-    async def place_buy_at_level(self, level_index: int, price: Decimal) -> str | None:
-        qty = compute_buy_qty(self.config.order_qty_quote, price, self.instrument)
-        if qty < self.instrument.min_order_qty or qty * price < self.instrument.min_order_amt:
+    async def place_buy_at_level(
+        self, level_index: int, price: Decimal
+    ) -> str | None:
+        qty = compute_buy_qty(
+            self.config.order_qty_quote, price, self.instrument
+        )
+        if (
+            qty < self.instrument.min_order_qty
+            or qty * price < self.instrument.min_order_amt
+        ):
             log.warning(
                 "order.skipped_below_minimum",
                 level=level_index,
@@ -98,25 +107,41 @@ class OrderManager:
             )
             return None
         order_id = await self.client.place_limit(
-            self.symbol, Side.BUY, qty, price, order_link_id=_link_id("grid-buy", level_index)
+            self.symbol,
+            Side.BUY,
+            qty,
+            price,
+            order_link_id=_link_id("grid-buy", level_index),
         )
         await sync_to_async(_upsert_grid_level)(level_index, price, order_id)
-        log.info("order.buy_placed", level=level_index, price=str(price), order_id=order_id)
+        log.info(
+            "order.buy_placed",
+            level=level_index,
+            price=str(price),
+            order_id=order_id,
+        )
         await self.bus.publish(
             "order.placed",
-            {"side": "buy", "level": level_index, "price": str(price), "order_id": order_id},
+            {
+                "side": "buy",
+                "level": level_index,
+                "price": str(price),
+                "order_id": order_id,
+            },
         )
         return order_id
 
     async def handle_buy_fill(self, execution: BybitExecution) -> int | None:
-        level = await sync_to_async(_find_level_by_order_id)(execution.order_id)
+        level = await sync_to_async(_find_level_by_order_id)(
+            execution.order_id
+        )
         if level is None:
             log.warning("buy_fill.no_level", order_id=execution.order_id)
             return None
         # A fill too small to carry a valid sell (notional below the exchange
-        # minimum) is left as free coin — placing a min-notional TP here would sit
-        # absurdly far from the market. Such dust stays free (rare, sub-$5); the stale
-        # grid level is idled by the prune pass.
+        # minimum) is left as free coin — placing a min-notional TP here would
+        # sit absurdly far from the market. Such dust stays free (rare,
+        # sub-$5); the stale grid level is idled by the prune pass.
         if execution.qty * execution.price < self.instrument.min_order_amt:
             log.warning(
                 "buy_fill.too_small_left_free",
@@ -145,8 +170,8 @@ class OrderManager:
                 order_link_id=_link_id("grid-tp", level.level_index),
             )
         except Exception as exc:
-            # TP could not be placed — the bought coin is now unmanaged. Log loudly
-            # (needs manual attention) rather than silently swallow.
+            # TP could not be placed — the bought coin is now unmanaged. Log
+            # loudly (needs manual attention) rather than silently swallow.
             log.error(
                 "buy_fill.tp_failed_coin_free",
                 level=level.level_index,
@@ -182,7 +207,9 @@ class OrderManager:
     async def handle_sell_fill(
         self, execution: BybitExecution, current_price: Decimal
     ) -> int | None:
-        position = await sync_to_async(_find_open_position_by_tp_order)(execution.order_id)
+        position = await sync_to_async(_find_open_position_by_tp_order)(
+            execution.order_id
+        )
         if position is None:
             log.warning("sell_fill.no_position", order_id=execution.order_id)
             return None
@@ -194,8 +221,9 @@ class OrderManager:
             lot_size=self.instrument.lot_size,
         )
         if not result.closed:
-            # Partial TP fill: keep the position open, accumulate, do nothing else
-            # until the remainder fills. (Prevents phantom loss + orphaned base coin.)
+            # Partial TP fill: keep the position open, accumulate, do nothing
+            # else until the remainder fills. (Prevents phantom loss + orphaned
+            # base coin.)
             log.info(
                 "sell.partial",
                 level=position.level_index,
@@ -220,12 +248,18 @@ class OrderManager:
         )
         if result.realized > 0:
             await self._apply_compensation(
-                profit=result.realized, source_position_id=position.id, current_price=current_price
+                profit=result.realized,
+                source_position_id=position.id,
+                current_price=current_price,
             )
         return int(position.level_index)
 
     async def _apply_compensation(
-        self, *, profit: Decimal, source_position_id: int, current_price: Decimal
+        self,
+        *,
+        profit: Decimal,
+        source_position_id: int,
+        current_price: Decimal,
     ) -> None:
         open_positions = await sync_to_async(_open_positions_view)()
         decision = plan_compensation(
@@ -234,7 +268,8 @@ class OrderManager:
             maker_fee=self.config.maker_fee,
             current_price=current_price,
             tick_size=self.instrument.tick_size,
-            step=self.config.grid_step,  # compensation moves one grid step, not one tp_step
+            # compensation moves one grid step, not one tp_step
+            step=self.config.grid_step,
             min_order_amt=self.instrument.min_order_amt,
         )
         if decision is None:
@@ -243,8 +278,9 @@ class OrderManager:
         if not target.tp_order_id:
             log.warning("compensation.target_has_no_tp", id=target.id)
             return
-        # Guard BEFORE cancelling: a re-priced sell below the exchange minimum would
-        # be rejected, leaving the position with no protective order. Skip instead.
+        # Guard BEFORE cancelling: a re-priced sell below the exchange minimum
+        # would be rejected, leaving the position with no protective order.
+        # Skip instead.
         new_notional = decision.new_tp_price * target.qty
         if new_notional < self.instrument.min_order_amt:
             log.warning(
@@ -257,7 +293,9 @@ class OrderManager:
         try:
             await self.client.cancel_order(self.symbol, target.tp_order_id)
         except Exception as exc:
-            log.warning("compensation.cancel_failed", id=target.id, error=str(exc))
+            log.warning(
+                "compensation.cancel_failed", id=target.id, error=str(exc)
+            )
             return
         try:
             new_tp_order_id = await self.client.place_limit(
@@ -268,7 +306,8 @@ class OrderManager:
                 order_link_id=_link_id("grid-tp-comp", target.level_index),
             )
         except Exception as exc:
-            # Cancelled but could not re-place: restore protection so it is never naked.
+            # Cancelled but could not re-place: restore protection so it is
+            # never naked.
             await self._restore_protection(target, exc)
             return
         await sync_to_async(_record_compensation)(
@@ -295,19 +334,24 @@ class OrderManager:
             },
         )
 
-    async def reprotect(self, position: Position, current_price: Decimal) -> str:
-        """Re-place a protective take-profit for a position whose sell order vanished.
+    async def reprotect(
+        self, position: Position, current_price: Decimal
+    ) -> str:
+        """Re-place a protective take-profit for a position whose sell order
+        vanished.
 
-        Priced at the higher of the original TP, one tick above the market (so it
-        rests as a maker and never crosses), and the exchange minimum notional — so a
-        position recovered from a lost/cancelled TP is never left naked. Returns the
-        new order id.
+        Priced at the higher of the original TP, one tick above the market (so
+        it rests as a maker and never crosses), and the exchange minimum
+        notional — so a position recovered from a lost/cancelled TP is never
+        left naked. Returns the new order id.
         """
         market_floor = round_up_to_tick(
-            current_price + self.instrument.tick_size, self.instrument.tick_size
+            current_price + self.instrument.tick_size,
+            self.instrument.tick_size,
         )
         min_price = round_up_to_tick(
-            self.instrument.min_order_amt / position.qty, self.instrument.tick_size
+            self.instrument.min_order_amt / position.qty,
+            self.instrument.tick_size,
         )
         price = max(position.tp_price or Decimal(0), market_floor, min_price)
         order_id = await self.client.place_limit(
@@ -317,22 +361,29 @@ class OrderManager:
             price,
             order_link_id=_link_id("grid-tp-heal", position.level_index),
         )
-        await sync_to_async(_set_tp)(target=position, tp_price=price, tp_order_id=order_id)
+        await sync_to_async(_set_tp)(
+            target=position, tp_price=price, tp_order_id=order_id
+        )
         log.warning("position.reprotected", id=position.id, price=str(price))
         return order_id
 
     async def settle_phantom(self, position: Position) -> Decimal:
-        """Close a phantom-open position whose coin is already gone — its TP filled
-        under a superseded order id we can no longer trace (so we can't reprotect: the
-        base coin isn't there). Book it at its recorded TP price (the maker price it
-        would have filled at) so the DB matches the wallet. Returns realized PnL.
+        """Close a phantom-open position whose coin is already gone — its TP
+        filled under a superseded order id we can no longer trace (so we can't
+        reprotect: the base coin isn't there).
+
+        Book it at its recorded TP price (the maker price it would have filled
+        at) so the DB matches the wallet. Returns realized PnL.
         """
         price = position.tp_price or position.entry_price
         realized = await sync_to_async(_close_at_price)(
             position=position, price=price, maker_fee=self.config.maker_fee
         )
         log.warning(
-            "position.settled_phantom", id=position.id, price=str(price), realized=str(realized)
+            "position.settled_phantom",
+            id=position.id,
+            price=str(price),
+            realized=str(realized),
         )
         await self.bus.publish(
             "position.closed",
@@ -345,14 +396,17 @@ class OrderManager:
         )
         return realized
 
-    async def _restore_protection(self, target: Position, place_error: Exception) -> None:
+    async def _restore_protection(
+        self, target: Position, place_error: Exception
+    ) -> None:
         """Re-place a protective sell after a failed compensation placement.
 
         Priced at the higher of the old TP and the minimum notional price so it
         always clears the exchange minimum — the position is never left naked.
         """
         min_price = round_up_to_tick(
-            self.instrument.min_order_amt / target.qty, self.instrument.tick_size
+            self.instrument.min_order_amt / target.qty,
+            self.instrument.tick_size,
         )
         price = max(target.tp_price or Decimal(0), min_price)
         try:
@@ -371,7 +425,9 @@ class OrderManager:
                 restore_error=str(restore_error),
             )
             return
-        await sync_to_async(_set_tp)(target=target, tp_price=price, tp_order_id=order_id)
+        await sync_to_async(_set_tp)(
+            target=target, tp_price=price, tp_order_id=order_id
+        )
         log.error(
             "compensation.restored_after_place_failure",
             id=target.id,
@@ -389,12 +445,20 @@ def _set_tp(*, target: Position, tp_price: Decimal, tp_order_id: str) -> None:
     target.save(update_fields=["tp_price", "tp_order_id"])
 
 
-def _close_at_price(*, position: Position, price: Decimal, maker_fee: Decimal) -> Decimal:
-    """Mark a position sold in full at ``price`` (maker) and free its grid level."""
+def _close_at_price(
+    *, position: Position, price: Decimal, maker_fee: Decimal
+) -> Decimal:
+    """Mark a position sold in full at ``price`` (maker) and free its grid
+    level."""
     with transaction.atomic():
         sell_value = price * position.qty
         fees_out = sell_value * maker_fee
-        realized = sell_value - fees_out - position.entry_price * position.qty - position.fees_in
+        realized = (
+            sell_value
+            - fees_out
+            - position.entry_price * position.qty
+            - position.fees_in
+        )
         position.filled_qty = position.qty
         position.sell_value = sell_value
         position.fees_out = fees_out
@@ -417,7 +481,9 @@ def _close_at_price(*, position: Position, price: Decimal, maker_fee: Decimal) -
     return realized
 
 
-def _upsert_grid_level(level_index: int, price: Decimal, order_id: str) -> None:
+def _upsert_grid_level(
+    level_index: int, price: Decimal, order_id: str
+) -> None:
     GridLevel.objects.update_or_create(
         level_index=level_index,
         defaults={
@@ -433,7 +499,9 @@ def _find_level_by_order_id(order_id: str) -> GridLevel | None:
 
 
 def _find_open_position_by_tp_order(order_id: str) -> Position | None:
-    return Position.objects.filter(tp_order_id=order_id, status=PositionStatus.OPEN).first()
+    return Position.objects.filter(
+        tp_order_id=order_id, status=PositionStatus.OPEN
+    ).first()
 
 
 def _log_execution(execution: BybitExecution) -> None:
@@ -495,8 +563,8 @@ def _apply_sell_fill(
     """Accumulate one (possibly partial) TP fill onto the position.
 
     The position closes only once the unsold remainder drops below one lot;
-    realized PnL is then computed from the *actual* accumulated proceeds and the
-    full entry cost. Idempotent on ``exec_id`` (WS may redeliver).
+    realized PnL is then computed from the *actual* accumulated proceeds and
+    the full entry cost. Idempotent on ``exec_id`` (WS may redeliver).
     """
     with transaction.atomic():
         if ExecutionLog.objects.filter(exec_id=execution.exec_id).exists():
@@ -545,7 +613,9 @@ def _open_positions_view() -> list[OpenPosition]:
             entry_price=p.entry_price,
             qty=p.qty,
             fees_in=p.fees_in,
-            current_tp_price=p.tp_price if p.tp_price is not None else Decimal(0),
+            current_tp_price=p.tp_price
+            if p.tp_price is not None
+            else Decimal(0),
             compensation_credit=p.compensation_credit,
         )
         for p in Position.objects.filter(status=PositionStatus.OPEN)

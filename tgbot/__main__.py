@@ -44,7 +44,9 @@ async def run() -> None:
 
     log.info("tgbot.starting", has_redis=bus is not None)
 
-    polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+    polling_task = asyncio.create_task(
+        dp.start_polling(bot, handle_signals=False)
+    )
     digest_task = asyncio.create_task(run_digest_scheduler(bot, stop))
     subscriber_task: asyncio.Task[None] | None = None
     if bus is not None:

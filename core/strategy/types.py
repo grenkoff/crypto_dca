@@ -17,7 +17,8 @@ class GridLevelSpec:
 class OpenPosition:
     """View of an open position as the strategy engine needs it.
 
-    Decoupled from the Django model so the engine is unit-testable without a DB.
+    Decoupled from the Django model so the engine is unit-testable without a
+    DB.
     """
 
     id: int
@@ -25,7 +26,8 @@ class OpenPosition:
     qty: Decimal
     fees_in: Decimal
     current_tp_price: Decimal
-    # Cumulative realized profit already redirected into lowering this position's TP.
+    # Cumulative realized profit already redirected into lowering this
+    # position's TP.
     compensation_credit: Decimal = Decimal(0)
 
 
@@ -33,5 +35,6 @@ class OpenPosition:
 class CompensationDecision:
     target_position_id: int
     new_tp_price: Decimal
-    # New cumulative credit to persist on the target once this decision is applied.
+    # New cumulative credit to persist on the target once this decision is
+    # applied.
     new_credit: Decimal

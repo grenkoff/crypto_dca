@@ -8,10 +8,15 @@ from core.trading.models import TelegramUser
 
 
 class Command(BaseCommand):
-    help = "Add (or upgrade to admin) a Telegram chat_id allowed to control the bot."
+    help = (
+        "Add (or upgrade to admin) a Telegram chat_id allowed to control "
+        "the bot."
+    )
 
     def add_arguments(self, parser: CommandParser) -> None:
-        parser.add_argument("chat_id", type=int, help="Telegram chat_id of the admin user")
+        parser.add_argument(
+            "chat_id", type=int, help="Telegram chat_id of the admin user"
+        )
         parser.add_argument("--label", default="", help="Free-text label")
 
     def handle(self, *args: Any, **options: Any) -> None:

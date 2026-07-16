@@ -47,7 +47,11 @@ async def test_reads_pass_through(inner: AsyncMock) -> None:
 async def test_place_limit_does_not_call_inner(inner: AsyncMock) -> None:
     dry = DryRunBybitClient(inner)
     order_id = await dry.place_limit(
-        "BTCUSDT", Side.BUY, Decimal("0.001"), Decimal("60000"), order_link_id="grid-7"
+        "BTCUSDT",
+        Side.BUY,
+        Decimal("0.001"),
+        Decimal("60000"),
+        order_link_id="grid-7",
     )
     assert order_id.startswith("dry-1-")
     inner.place_limit.assert_not_awaited()
@@ -55,8 +59,12 @@ async def test_place_limit_does_not_call_inner(inner: AsyncMock) -> None:
 
 async def test_two_placements_get_different_ids(inner: AsyncMock) -> None:
     dry = DryRunBybitClient(inner)
-    a = await dry.place_limit("BTCUSDT", Side.BUY, Decimal("0.001"), Decimal("60000"))
-    b = await dry.place_limit("BTCUSDT", Side.BUY, Decimal("0.001"), Decimal("59000"))
+    a = await dry.place_limit(
+        "BTCUSDT", Side.BUY, Decimal("0.001"), Decimal("60000")
+    )
+    b = await dry.place_limit(
+        "BTCUSDT", Side.BUY, Decimal("0.001"), Decimal("59000")
+    )
     assert a != b
 
 

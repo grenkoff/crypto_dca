@@ -53,4 +53,7 @@ def test_select_free_lots_cheapest_first_and_trims() -> None:
 
 
 def test_select_free_lots_zero() -> None:
-    assert select_free_lots([(Decimal("0.03"), Decimal("100"))], Decimal("0")) == []
+    assert (
+        select_free_lots([(Decimal("0.03"), Decimal("100"))], Decimal("0"))
+        == []
+    )

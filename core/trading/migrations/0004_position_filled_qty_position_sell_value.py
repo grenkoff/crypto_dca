@@ -13,11 +13,15 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="position",
             name="filled_qty",
-            field=models.DecimalField(decimal_places=12, default=Decimal("0"), max_digits=28),
+            field=models.DecimalField(
+                decimal_places=12, default=Decimal("0"), max_digits=28
+            ),
         ),
         migrations.AddField(
             model_name="position",
             name="sell_value",
-            field=models.DecimalField(decimal_places=12, default=Decimal("0"), max_digits=28),
+            field=models.DecimalField(
+                decimal_places=12, default=Decimal("0"), max_digits=28
+            ),
         ),
     ]

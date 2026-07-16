@@ -17,11 +17,17 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.SmallIntegerField(
-                        default=1, editable=False, primary_key=True, serialize=False
+                        default=1,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
                     ),
                 ),
                 ("paused", models.BooleanField(default=False)),
-                ("last_heartbeat", models.DateTimeField(blank=True, null=True)),
+                (
+                    "last_heartbeat",
+                    models.DateTimeField(blank=True, null=True),
+                ),
                 ("last_error", models.TextField(blank=True)),
                 ("started_at", models.DateTimeField(blank=True, null=True)),
             ],
@@ -35,12 +41,21 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("level_index", models.IntegerField(unique=True)),
-                ("target_buy_price", models.DecimalField(decimal_places=12, max_digits=28)),
-                ("current_buy_order_id", models.CharField(blank=True, max_length=64)),
+                (
+                    "target_buy_price",
+                    models.DecimalField(decimal_places=12, max_digits=28),
+                ),
+                (
+                    "current_buy_order_id",
+                    models.CharField(blank=True, max_length=64),
+                ),
                 (
                     "status",
                     models.CharField(
@@ -65,37 +80,59 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.SmallIntegerField(
-                        default=1, editable=False, primary_key=True, serialize=False
+                        default=1,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
                     ),
                 ),
                 ("symbol", models.CharField(default="BTCUSDT", max_length=32)),
                 (
                     "grid_mode",
                     models.CharField(
-                        choices=[("absolute", "Absolute (USDT step)"), ("percent", "Percent step")],
+                        choices=[
+                            ("absolute", "Absolute (USDT step)"),
+                            ("percent", "Percent step"),
+                        ],
                         default="percent",
                         max_length=16,
                     ),
                 ),
                 (
                     "grid_step",
-                    models.DecimalField(decimal_places=12, default=Decimal("0.005"), max_digits=28),
+                    models.DecimalField(
+                        decimal_places=12,
+                        default=Decimal("0.005"),
+                        max_digits=28,
+                    ),
                 ),
                 (
                     "order_qty_quote",
-                    models.DecimalField(decimal_places=12, default=Decimal("10"), max_digits=28),
+                    models.DecimalField(
+                        decimal_places=12, default=Decimal("10"), max_digits=28
+                    ),
                 ),
                 (
                     "top_anchor",
-                    models.DecimalField(blank=True, decimal_places=12, max_digits=28, null=True),
+                    models.DecimalField(
+                        blank=True, decimal_places=12, max_digits=28, null=True
+                    ),
                 ),
                 (
                     "min_profit_quote",
-                    models.DecimalField(decimal_places=12, default=Decimal("0.01"), max_digits=28),
+                    models.DecimalField(
+                        decimal_places=12,
+                        default=Decimal("0.01"),
+                        max_digits=28,
+                    ),
                 ),
                 (
                     "maker_fee",
-                    models.DecimalField(decimal_places=8, default=Decimal("0.001"), max_digits=10),
+                    models.DecimalField(
+                        decimal_places=8,
+                        default=Decimal("0.001"),
+                        max_digits=10,
+                    ),
                 ),
                 ("max_open_orders", models.PositiveIntegerField(default=20)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
@@ -110,7 +147,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("chat_id", models.BigIntegerField(unique=True)),
@@ -125,7 +165,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("exec_id", models.CharField(max_length=64, unique=True)),
@@ -133,9 +176,15 @@ class Migration(migrations.Migration):
                 ("symbol", models.CharField(max_length=32)),
                 (
                     "side",
-                    models.CharField(choices=[("Buy", "Buy"), ("Sell", "Sell")], max_length=8),
+                    models.CharField(
+                        choices=[("Buy", "Buy"), ("Sell", "Sell")],
+                        max_length=8,
+                    ),
                 ),
-                ("price", models.DecimalField(decimal_places=12, max_digits=28)),
+                (
+                    "price",
+                    models.DecimalField(decimal_places=12, max_digits=28),
+                ),
                 ("qty", models.DecimalField(decimal_places=12, max_digits=28)),
                 ("fee", models.DecimalField(decimal_places=12, max_digits=28)),
                 ("fee_coin", models.CharField(blank=True, max_length=16)),
@@ -145,7 +194,10 @@ class Migration(migrations.Migration):
             options={
                 "ordering": ["-executed_at"],
                 "indexes": [
-                    models.Index(fields=["-executed_at"], name="trading_exe_execute_cb8945_idx")
+                    models.Index(
+                        fields=["-executed_at"],
+                        name="trading_exe_execute_cb8945_idx",
+                    )
                 ],
             },
         ),
@@ -155,24 +207,36 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("level_index", models.IntegerField()),
-                ("entry_price", models.DecimalField(decimal_places=12, max_digits=28)),
+                (
+                    "entry_price",
+                    models.DecimalField(decimal_places=12, max_digits=28),
+                ),
                 ("qty", models.DecimalField(decimal_places=12, max_digits=28)),
                 (
                     "fees_in",
-                    models.DecimalField(decimal_places=12, default=Decimal("0"), max_digits=28),
+                    models.DecimalField(
+                        decimal_places=12, default=Decimal("0"), max_digits=28
+                    ),
                 ),
                 (
                     "fees_out",
-                    models.DecimalField(decimal_places=12, default=Decimal("0"), max_digits=28),
+                    models.DecimalField(
+                        decimal_places=12, default=Decimal("0"), max_digits=28
+                    ),
                 ),
                 ("tp_order_id", models.CharField(blank=True, max_length=64)),
                 (
                     "tp_price",
-                    models.DecimalField(blank=True, decimal_places=12, max_digits=28, null=True),
+                    models.DecimalField(
+                        blank=True, decimal_places=12, max_digits=28, null=True
+                    ),
                 ),
                 (
                     "status",
@@ -184,7 +248,9 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "realized_pnl",
-                    models.DecimalField(decimal_places=12, default=Decimal("0"), max_digits=28),
+                    models.DecimalField(
+                        decimal_places=12, default=Decimal("0"), max_digits=28
+                    ),
                 ),
                 ("opened_at", models.DateTimeField()),
                 ("closed_at", models.DateTimeField(blank=True, null=True)),
@@ -193,10 +259,12 @@ class Migration(migrations.Migration):
                 "ordering": ["-opened_at"],
                 "indexes": [
                     models.Index(
-                        fields=["status", "level_index"], name="trading_pos_status_530703_idx"
+                        fields=["status", "level_index"],
+                        name="trading_pos_status_530703_idx",
                     ),
                     models.Index(
-                        fields=["status", "opened_at"], name="trading_pos_status_9e0ef0_idx"
+                        fields=["status", "opened_at"],
+                        name="trading_pos_status_9e0ef0_idx",
                     ),
                 ],
             },
@@ -207,11 +275,20 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
-                ("profit_applied", models.DecimalField(decimal_places=12, max_digits=28)),
-                ("new_tp_price", models.DecimalField(decimal_places=12, max_digits=28)),
+                (
+                    "profit_applied",
+                    models.DecimalField(decimal_places=12, max_digits=28),
+                ),
+                (
+                    "new_tp_price",
+                    models.DecimalField(decimal_places=12, max_digits=28),
+                ),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 (
                     "compensated_position",

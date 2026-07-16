@@ -17,7 +17,9 @@ from core.strategy.rounding import round_down_to_tick, round_up_to_tick
     ],
 )
 def test_round_down(price: str, tick: str, expected: str) -> None:
-    assert round_down_to_tick(Decimal(price), Decimal(tick)) == Decimal(expected)
+    assert round_down_to_tick(Decimal(price), Decimal(tick)) == Decimal(
+        expected
+    )
 
 
 @pytest.mark.parametrize(

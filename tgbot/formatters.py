@@ -90,7 +90,9 @@ def build_status(snap: StatusSnapshot, now: datetime | None = None) -> str:
 def build_balance(snap: BalanceSnapshot) -> str:
     if not snap.balances:
         return "_no balances_"
-    lines = [f"`{coin}`: {amount}" for coin, amount in sorted(snap.balances.items())]
+    lines = [
+        f"`{coin}`: {amount}" for coin, amount in sorted(snap.balances.items())
+    ]
     return "*Balances:*\n" + "\n".join(lines)
 
 
@@ -109,7 +111,8 @@ def build_orders(snap: OrdersSnapshot) -> str:
     if not snap.open_positions:
         return "_no open positions_"
     rows = [
-        f"L{row.level_index:>3}  entry `{row.entry_price}` qty `{row.qty}` → TP `{row.tp_price}`"
+        f"L{row.level_index:>3}  entry `{row.entry_price}` "
+        f"qty `{row.qty}` → TP `{row.tp_price}`"
         for row in snap.open_positions
     ]
     return "*Open positions:*\n" + "\n".join(rows)
@@ -137,9 +140,11 @@ def build_digest(snap: DigestSnapshot) -> str:
     return (
         f"📊 *Daily digest* — {snap.when_astana:%d %b %H:%M} Astana\n"
         f"*Closed (24h):* {snap.closed_24h} → `{_signed(snap.pnl_24h)}` USDT\n"
-        f"*PnL week:* `{_signed(snap.pnl_week)}` · *total:* `{_signed(snap.pnl_total)}`\n"
+        f"*PnL week:* `{_signed(snap.pnl_week)}` · "
+        f"*total:* `{_signed(snap.pnl_total)}`\n"
         f"*Compensations (24h):* {snap.compensations_24h}\n"
-        f"*Open positions:* {snap.open_positions} · deployed `{_q(snap.deployed, '0.0001')}` USDT\n"
+        f"*Open positions:* {snap.open_positions} · "
+        f"deployed `{_q(snap.deployed, '0.0001')}` USDT\n"
         f"*Free USDT:* `{_q(snap.free_usdt, '0.0001')}` · *KAS:* {price}"
     )
 
@@ -153,18 +158,25 @@ def format_event(event: dict[str, Any]) -> str:
         return f"❌ `{_price5(payload.get('price'))}`"
     if etype == "position.opened":
         return (
-            f"🟢 `{_price5(payload.get('entry_price'))}` → TP `{_price5(payload.get('tp_price'))}`"
+            f"🟢 `{_price5(payload.get('entry_price'))}` → "
+            f"TP `{_price5(payload.get('tp_price'))}`"
         )
     if etype == "position.closed":
         try:
             realized = Decimal(str(payload.get("realized", "0")))
         except (InvalidOperation, TypeError, ValueError):
             realized = Decimal(0)
-        emoji = "💰" if realized >= 0 else "🔴"  # losses stand out, don't blend in
-        return f"{emoji} `{_price5(payload.get('price'))}` → `{_signed(realized, '0.0001')}` USDT"
+        emoji = (
+            "💰" if realized >= 0 else "🔴"
+        )  # losses stand out, don't blend in
+        return (
+            f"{emoji} `{_price5(payload.get('price'))}` → "
+            f"`{_signed(realized, '0.0001')}` USDT"
+        )
     if etype == "compensation.applied":
-        # A TP being pulled toward market — not a realised gain, so no amount shown
-        # (the profit that funds it is already reported by its own close).
+        # A TP being pulled toward market — not a realised gain, so no amount
+        # shown (the profit that funds it is already reported by its own
+        # close).
         return f"💊 TP↓ `{_price5(payload.get('new_tp'))}`"
     if etype == "error":
         return f"❌ Error: {payload.get('message', '?')}"

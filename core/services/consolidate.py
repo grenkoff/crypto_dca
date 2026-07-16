@@ -3,13 +3,14 @@
 A price level should ever hold a single lot (one buy per level until its TP
 clears). Historical races — the now-disabled readopt sweep grabbing coin mid
 compensation, orphan trader processes double-placing a grid buy — left several
-prices carrying two or more open positions, each with its own resting sell. This
-merges every such group into a single position: one cost-weighted entry, one
-protective take-profit covering the combined quantity.
+prices carrying two or more open positions, each with its own resting sell.
+This merges every such group into a single position: one cost-weighted entry,
+one protective take-profit covering the combined quantity.
 
-The planner is pure and testable; ``commit_consolidation`` performs the exchange
-side effects (cancel the group's sells, place one merged sell) and rewrites the
-DB. Run it with the trader stopped so its heal loop does not race the cancels.
+The planner is pure and testable; ``commit_consolidation`` performs the
+exchange side effects (cancel the group's sells, place one merged sell) and
+rewrites the DB. Run it with the trader stopped so its heal loop does not race
+the cancels.
 """
 
 from __future__ import annotations
@@ -31,17 +32,20 @@ from core.trading.models import Position, PositionStatus, StrategyConfig
 log = structlog.get_logger()
 
 
-# The manual bag (adopt_positions) occupies [1000, 2000): many lots at one entry
-# carrying an intentional laddered staircase of take-profits — NOT accidental
-# duplicates, so it must never be merged. Grid buys (<1000) and re-adopted lots
-# (>=2000) are the ones that stacked and get consolidated.
+# The manual bag (adopt_positions) occupies [1000, 2000): many lots at one
+# entry carrying an intentional laddered staircase of take-profits — NOT
+# accidental duplicates, so it must never be merged. Grid buys (<1000) and
+# re-adopted lots (>=2000) are the ones that stacked and get consolidated.
 _MANUAL_BAG_MIN = 1000  # adopt_positions.ADOPTED_LEVEL_BASE
-_MANUAL_BAG_MAX = 2000  # exclusive; lots at or above this are re-adopted, not bag
+_MANUAL_BAG_MAX = (
+    2000  # exclusive; lots at or above this are re-adopted, not bag
+)
 
 
 @dataclass(frozen=True)
 class PosRow:
-    """Minimal open-position view the planner needs (keeps it pure/testable)."""
+    """Minimal open-position view the planner needs (keeps it
+    pure/testable)."""
 
     id: int
     level_index: int
@@ -80,9 +84,9 @@ def plan_consolidation(
 
     Positions with a partial TP fill (``filled_qty > 0``) are excluded — their
     remaining coin is entangled with an in-flight sell and must not be merged.
-    The survivor is the oldest lot; the rest are absorbed into it. The merged sell
-    rests at the higher of the recomputed take-profit and one tick above market, so
-    it never crosses as a taker.
+    The survivor is the oldest lot; the rest are absorbed into it. The merged
+    sell rests at the higher of the recomputed take-profit and one tick above
+    market, so it never crosses as a taker.
     """
     if step <= 0:
         raise ValueError("step must be positive")
@@ -106,7 +110,9 @@ def plan_consolidation(
         combined_qty = sum((r.qty for r in rows), Decimal(0))
         combined_cost = sum((r.entry * r.qty for r in rows), Decimal(0))
         combined_fees_in = sum((r.fees_in for r in rows), Decimal(0))
-        weighted_entry = round_down_to_tick(combined_cost / combined_qty, tick_size)
+        weighted_entry = round_down_to_tick(
+            combined_cost / combined_qty, tick_size
+        )
         tp = compute_tp_price(
             entry_price=weighted_entry,
             qty=combined_qty,
@@ -126,7 +132,9 @@ def plan_consolidation(
                 weighted_entry=weighted_entry,
                 combined_fees_in=combined_fees_in,
                 new_tp_price=max(tp, market_floor),
-                cancel_order_ids=[r.tp_order_id for r in rows if r.tp_order_id],
+                cancel_order_ids=[
+                    r.tp_order_id for r in rows if r.tp_order_id
+                ],
             )
         )
     return plan
@@ -159,10 +167,12 @@ async def commit_consolidation(
     config: StrategyConfig,
     plan: list[MergeGroup],
 ) -> list[MergeGroup]:
-    """Cancel each group's resting sells, place one merged sell, rewrite the DB.
+    """Cancel each group's resting sells, place one merged sell, rewrite the
+    DB.
 
-    Run with the trader stopped: it cancels protective sells before replacing them,
-    so a live heal loop would otherwise race to reprotect the survivor.
+    Run with the trader stopped: it cancels protective sells before
+    replacing them, so a live heal loop would otherwise race to reprotect
+    the survivor.
     """
     stamp = int(datetime.now(tz=UTC).timestamp() * 1000)
     done: list[MergeGroup] = []
@@ -170,8 +180,14 @@ async def commit_consolidation(
         for order_id in g.cancel_order_ids:
             try:
                 await client.cancel_order(symbol, order_id)
-            except Exception as exc:  # already gone ⇒ fine, the coin frees up regardless
-                log.warning("consolidate.cancel_failed", order_id=order_id, error=str(exc)[:100])
+            except (
+                Exception
+            ) as exc:  # already gone ⇒ fine, the coin frees up regardless
+                log.warning(
+                    "consolidate.cancel_failed",
+                    order_id=order_id,
+                    error=str(exc)[:100],
+                )
         new_tp_order_id = await client.place_limit(
             symbol,
             Side.SELL,
@@ -179,7 +195,9 @@ async def commit_consolidation(
             g.new_tp_price,
             order_link_id=f"consolidate-{g.survivor_id}-{stamp}",
         )
-        await sync_to_async(_apply_merge)(group=g, new_tp_order_id=new_tp_order_id)
+        await sync_to_async(_apply_merge)(
+            group=g, new_tp_order_id=new_tp_order_id
+        )
         log.info(
             "consolidate.merged",
             price=str(g.price_key),
@@ -194,14 +212,25 @@ async def commit_consolidation(
 
 def _apply_merge(*, group: MergeGroup, new_tp_order_id: str) -> None:
     with transaction.atomic():
-        survivor = Position.objects.select_for_update().get(id=group.survivor_id)
+        survivor = Position.objects.select_for_update().get(
+            id=group.survivor_id
+        )
         survivor.qty = group.combined_qty
         survivor.entry_price = group.weighted_entry
         survivor.fees_in = group.combined_fees_in
         survivor.tp_order_id = new_tp_order_id
         survivor.tp_price = group.new_tp_price
-        survivor.save(update_fields=["qty", "entry_price", "fees_in", "tp_order_id", "tp_price"])
-        # The absorbed rows never sold — their coin now backs the survivor's single
-        # sell. Delete them so they don't linger as phantom-open (or pollute PnL as
-        # zero-realized closes); ExecutionLog keeps the real buy-fill audit trail.
+        survivor.save(
+            update_fields=[
+                "qty",
+                "entry_price",
+                "fees_in",
+                "tp_order_id",
+                "tp_price",
+            ]
+        )
+        # The absorbed rows never sold — their coin now backs the survivor's
+        # single sell. Delete them so they don't linger as phantom-open (or
+        # pollute PnL as zero-realized closes); ExecutionLog keeps the real
+        # buy-fill audit trail.
         Position.objects.filter(id__in=group.absorbed_ids).delete()

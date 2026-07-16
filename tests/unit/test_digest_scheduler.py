@@ -27,19 +27,27 @@ async def _set(**kwargs: object) -> None:
 
 async def test_claim_due_fires_once_per_day() -> None:
     # trigger well in the past today, never sent -> fires, then is deduped
-    await _set(digest_enabled=True, digest_time_utc=time(0, 0), digest_last_sent=None)
+    await _set(
+        digest_enabled=True, digest_time_utc=time(0, 0), digest_last_sent=None
+    )
     assert await _claim_due() is True
     assert await _claim_due() is False  # already stamped for today
 
 
 async def test_claim_due_skips_when_disabled() -> None:
-    await _set(digest_enabled=False, digest_time_utc=time(0, 0), digest_last_sent=None)
+    await _set(
+        digest_enabled=False, digest_time_utc=time(0, 0), digest_last_sent=None
+    )
     assert await _claim_due() is False
 
 
 async def test_claim_due_skips_before_trigger() -> None:
     # trigger one minute before end of day -> almost never reached yet today
-    await _set(digest_enabled=True, digest_time_utc=time(23, 59), digest_last_sent=None)
+    await _set(
+        digest_enabled=True,
+        digest_time_utc=time(23, 59),
+        digest_last_sent=None,
+    )
     now = datetime.now(tz=UTC)
     expected = now.replace(hour=23, minute=59, second=0, microsecond=0) <= now
     assert await _claim_due() is expected

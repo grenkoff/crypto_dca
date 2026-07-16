@@ -31,7 +31,7 @@ dev = [
 
 [tool.ruff]
 target-version = "py312"
-line-length = 100
+line-length = 79  # PEP 8
 
 [tool.ruff.lint]
 select = [
@@ -42,7 +42,8 @@ select = [
     "SIM",          # simplify
     "RUF",          # ruff-specific
 ]
-ignore = ["E501"]  # line length handled by formatter
+# E501 (line length) is enforced at 79 per PEP 8; the formatter reflows code,
+# and any remaining over-long lines (strings/comments) are flagged to fix by hand.
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]

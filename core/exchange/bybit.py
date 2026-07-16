@@ -13,7 +13,14 @@ from core.exchange.errors import (
     OrderRejectedError,
     RateLimitedError,
 )
-from core.exchange.types import Balance, Execution, Instrument, Order, OrderStatus, Side
+from core.exchange.types import (
+    Balance,
+    Execution,
+    Instrument,
+    Order,
+    OrderStatus,
+    Side,
+)
 
 CATEGORY = "spot"
 
@@ -48,16 +55,24 @@ def _ts(value: str | int) -> datetime:
 
 
 class BybitClient:
-    """Thin async wrapper over the pybit unified HTTP client for spot trading."""
+    """Thin async wrapper over the pybit unified HTTP client for spot
+    trading."""
 
     def __init__(self, http: _HTTP) -> None:
         self._http = http
 
     @classmethod
     def from_credentials(
-        cls, api_key: str, api_secret: str, *, testnet: bool, recv_window: int = 5000
+        cls,
+        api_key: str,
+        api_secret: str,
+        *,
+        testnet: bool,
+        recv_window: int = 5000,
     ) -> BybitClient:
-        from pybit.unified_trading import HTTP  # local import to keep tests lightweight
+        from pybit.unified_trading import (
+            HTTP,
+        )  # local import to keep tests lightweight
 
         http = HTTP(
             testnet=testnet,
@@ -89,7 +104,9 @@ class BybitClient:
         )
 
     async def get_last_price(self, symbol: str) -> Decimal:
-        resp = await asyncio.to_thread(self._http.get_tickers, category=CATEGORY, symbol=symbol)
+        resp = await asyncio.to_thread(
+            self._http.get_tickers, category=CATEGORY, symbol=symbol
+        )
         result = _raise_for_ret(resp)
         items = result.get("list") or []
         if not items:
@@ -97,13 +114,16 @@ class BybitClient:
         return Decimal(str(items[0]["lastPrice"]))
 
     async def get_balances(self) -> dict[str, Balance]:
-        resp = await asyncio.to_thread(self._http.get_wallet_balance, accountType="UNIFIED")
+        resp = await asyncio.to_thread(
+            self._http.get_wallet_balance, accountType="UNIFIED"
+        )
         result = _raise_for_ret(resp)
         accounts = result.get("list") or []
         balances: dict[str, Balance] = {}
         for account in accounts:
             for coin in account.get("coin", []):
-                # UTA leaves availableToWithdraw blank; derive free from wallet - locked.
+                # UTA leaves availableToWithdraw blank; derive free from wallet
+                # - locked.
                 wallet = Decimal(str(coin.get("walletBalance") or 0))
                 locked = Decimal(str(coin.get("locked") or 0))
                 balances[coin["coin"]] = Balance(
@@ -138,7 +158,10 @@ class BybitClient:
 
     async def cancel_order(self, symbol: str, order_id: str) -> None:
         resp = await asyncio.to_thread(
-            self._http.cancel_order, category=CATEGORY, symbol=symbol, orderId=order_id
+            self._http.cancel_order,
+            category=CATEGORY,
+            symbol=symbol,
+            orderId=order_id,
         )
         _raise_for_ret(resp)
 
@@ -152,20 +175,33 @@ class BybitClient:
         orders: list[Order] = []
         cursor: str | None = None
         while True:
-            kwargs: dict[str, Any] = {"category": CATEGORY, "symbol": symbol, "limit": 50}
+            kwargs: dict[str, Any] = {
+                "category": CATEGORY,
+                "symbol": symbol,
+                "limit": 50,
+            }
             if cursor:
                 kwargs["cursor"] = cursor
-            resp = await asyncio.to_thread(self._http.get_open_orders, **kwargs)
+            resp = await asyncio.to_thread(
+                self._http.get_open_orders, **kwargs
+            )
             result = _raise_for_ret(resp)
-            orders.extend(_parse_order(item) for item in (result.get("list") or []))
+            orders.extend(
+                _parse_order(item) for item in (result.get("list") or [])
+            )
             cursor = result.get("nextPageCursor") or None
             if not cursor:
                 break
         return orders
 
-    async def get_executions(self, symbol: str, *, limit: int = 50) -> list[Execution]:
+    async def get_executions(
+        self, symbol: str, *, limit: int = 50
+    ) -> list[Execution]:
         resp = await asyncio.to_thread(
-            self._http.get_executions, category=CATEGORY, symbol=symbol, limit=limit
+            self._http.get_executions,
+            category=CATEGORY,
+            symbol=symbol,
+            limit=limit,
         )
         result = _raise_for_ret(resp)
         return [_parse_execution(item) for item in (result.get("list") or [])]
@@ -173,8 +209,9 @@ class BybitClient:
     async def get_order_executions(
         self, symbol: str, order_id: str, *, limit: int = 50
     ) -> list[Execution]:
-        """Executions for one specific order (7-day retention), regardless of age —
-        used to settle a naked position whose fill fell outside the recent window."""
+        """Executions for one specific order (7-day retention), regardless of
+        age — used to settle a naked position whose fill fell outside the
+        recent window."""
         resp = await asyncio.to_thread(
             self._http.get_executions,
             category=CATEGORY,

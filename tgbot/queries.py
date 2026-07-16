@@ -6,11 +6,16 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from asgiref.sync import sync_to_async
-from django.db.models import F, Sum
+from django.db.models import F, QuerySet, Sum
 
 from core.config.settings import bybit_settings
 from core.exchange.bybit import BybitClient
-from core.trading.models import BotStatus, CompensationLink, Position, PositionStatus
+from core.trading.models import (
+    BotStatus,
+    CompensationLink,
+    Position,
+    PositionStatus,
+)
 from tgbot.formatters import (
     BalanceSnapshot,
     DigestSnapshot,
@@ -64,7 +69,9 @@ def orders_snapshot() -> OrdersSnapshot:
             qty=p.qty,
             tp_price=p.tp_price,
         )
-        for p in Position.objects.filter(status=PositionStatus.OPEN).order_by("level_index")
+        for p in Position.objects.filter(status=PositionStatus.OPEN).order_by(
+            "level_index"
+        )
     ]
     return OrdersSnapshot(open_positions=rows)
 
@@ -77,7 +84,7 @@ def _digest_db() -> dict:  # type: ignore[type-arg]
     closed = Position.objects.filter(status=PositionStatus.CLOSED)
     open_qs = Position.objects.filter(status=PositionStatus.OPEN)
 
-    def _sum(qs, field: str = "realized_pnl") -> Decimal:  # type: ignore[no-untyped-def]
+    def _sum(qs: QuerySet[Position], field: str = "realized_pnl") -> Decimal:
         return qs.aggregate(s=Sum(field))["s"] or Decimal(0)
 
     return {
@@ -85,9 +92,12 @@ def _digest_db() -> dict:  # type: ignore[type-arg]
         "pnl_24h": _sum(closed.filter(closed_at__gte=d24)),
         "pnl_week": _sum(closed.filter(closed_at__gte=week)),
         "pnl_total": _sum(closed),
-        "compensations_24h": CompensationLink.objects.filter(created_at__gte=d24).count(),
+        "compensations_24h": CompensationLink.objects.filter(
+            created_at__gte=d24
+        ).count(),
         "open_positions": open_qs.count(),
-        "deployed": open_qs.aggregate(s=Sum(F("entry_price") * F("qty")))["s"] or Decimal(0),
+        "deployed": open_qs.aggregate(s=Sum(F("entry_price") * F("qty")))["s"]
+        or Decimal(0),
     }
 
 
@@ -136,7 +146,9 @@ async def balance_snapshot() -> BalanceSnapshot:
         settings.api_key, settings.api_secret, testnet=settings.testnet
     )
     balances = await client.get_balances()
-    return BalanceSnapshot(balances={coin: b.free for coin, b in balances.items() if b.total > 0})
+    return BalanceSnapshot(
+        balances={coin: b.free for coin, b in balances.items() if b.total > 0}
+    )
 
 
 @sync_to_async
