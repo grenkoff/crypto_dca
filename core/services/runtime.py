@@ -28,7 +28,6 @@ from core.exchange.types import Execution, Side
 from core.exchange.ws import BybitPrivateStream, StreamEvent
 from core.services.events import EventBus, NoOpEventBus
 from core.services.order_manager import OrderManager
-from core.services.readopt import commit_readopt, plan_free_readopt
 from core.services.reconciliation import reconcile_once
 from core.strategy.grid import generate_levels
 from core.trading.models import (
@@ -47,6 +46,22 @@ RECONCILE_INTERVAL_S = 30
 # Only heal a position whose TP order is missing if it's older than this — so a
 # freshly-opened position's just-placed TP is never raced and double-protected.
 _NAKED_MIN_AGE_S = 120
+# A running trader refreshes its heartbeat every reconcile (~30s). If one is fresher
+# than this lease, a second trader is alive — refuse to start so two processes never
+# lay duplicate grids. Comfortably above the interval so a single missed cycle (slow
+# API call) doesn't look dead; a crashed trader's heartbeat goes stale within it.
+_INSTANCE_LEASE_S = RECONCILE_INTERVAL_S * 3
+
+
+def another_instance_alive(last_heartbeat: datetime | None, now: datetime, lease_s: int) -> bool:
+    """Whether another trader is still running, judged by a fresh heartbeat.
+
+    ``None`` (never started) or a stale heartbeat (older than the lease ⇒ the writer
+    crashed) means no live peer — safe to start.
+    """
+    if last_heartbeat is None:
+        return False
+    return (now - last_heartbeat) < timedelta(seconds=lease_s)
 
 
 class TraderRuntime:
@@ -62,6 +77,7 @@ class TraderRuntime:
         self._grid_lock = asyncio.Lock()
 
     async def bootstrap(self) -> None:
+        await self._guard_single_instance()
         settings = bybit_settings()
         real_client = BybitClient.from_credentials(
             settings.api_key, settings.api_secret, testnet=settings.testnet
@@ -239,7 +255,6 @@ class TraderRuntime:
                 await self._recover_missed_fills()  # replay fills dropped by WS hiccups
                 await self._heal_naked_positions()  # settle/reprotect positions with a lost TP
                 await self._heal_stale_buy_levels()  # unstick levels whose buy vanished
-                await self._sweep_free_inventory()  # re-adopt free base coin (partial fills)
                 await self._ensure_grid()  # self-heal the band even without fills
             except Exception as exc:
                 log.exception("reconcile.error", error=str(exc))
@@ -247,48 +262,6 @@ class TraderRuntime:
                 await asyncio.wait_for(self._stop.wait(), timeout=RECONCILE_INTERVAL_S)
             except TimeoutError:
                 continue
-
-    async def _sweep_free_inventory(self) -> None:
-        """Re-adopt base coin left free by partial TP fills into managed positions.
-
-        A partially-filled sell leaves the unsold remainder untracked in the wallet;
-        left alone it accrues as dead inventory. This reconstructs its real entry and
-        rests a fresh take-profit above market — the automatic form of the
-        ``readopt_free_balance`` command. Serialised with grid maintenance so the two
-        never place orders against a stale balance snapshot.
-        """
-        assert self._om is not None
-        async with self._grid_lock:
-            plan = await plan_free_readopt(
-                client=self._om.client,
-                config=self._om.config,
-                instrument=self._om.instrument,
-                price=self._current_price,
-            )
-            if not plan:
-                return
-            placed = await commit_readopt(
-                client=self._om.client,
-                symbol=self._om.symbol,
-                config=self._om.config,
-                plan=plan,
-            )
-        for p in placed:
-            log.info(
-                "readopt.adopted",
-                level=p.level_index,
-                qty=str(p.qty),
-                entry=str(p.entry),
-                tp=str(p.tp_price),
-            )
-            await self._bus.publish(
-                "position.opened",
-                {
-                    "level": p.level_index,
-                    "entry_price": str(p.entry),
-                    "tp_price": str(p.tp_price),
-                },
-            )
 
     async def _rebuild_grid_on_param_change(self) -> None:
         """Tear the buy grid down and rebuild it when grid geometry changed.
@@ -405,8 +378,7 @@ class TraderRuntime:
             except Exception as exc:
                 # The buy filled but we can't book it — its coin is gone (the TP also
                 # filled while we were down) or a TP can't be placed for it right now.
-                # Idle the level so the heal doesn't crash the cycle or loop forever;
-                # any coin that IS free gets reclaimed by the readopt sweep.
+                # Idle the level so the heal doesn't crash the cycle or loop forever.
                 log.warning("grid.heal_replay_failed", level=idx, error=str(exc)[:120])
                 await sync_to_async(_idle_level)(idx)
 
@@ -442,6 +414,26 @@ class TraderRuntime:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self._stop.set)
 
+    async def _guard_single_instance(self) -> None:
+        """Refuse to start if another trader is still alive (fresh heartbeat).
+
+        Two trader processes each maintain their own grid and both react to fills —
+        the orphan-process cause of duplicate buys at one level. A fresh heartbeat in
+        ``BotStatus`` means a peer is running; abort loudly rather than lay a second
+        grid over the first. ``TRADER_SKIP_INSTANCE_GUARD`` bypasses it where the host
+        already guarantees a single instance.
+        """
+        if trader_settings().skip_instance_guard:
+            return
+        last = await sync_to_async(lambda: BotStatus.load().last_heartbeat)()
+        if another_instance_alive(last, datetime.now(tz=UTC), _INSTANCE_LEASE_S):
+            log.error("trader.instance_guard_blocked", last_heartbeat=str(last))
+            raise RuntimeError(
+                "another trader appears to be running (fresh heartbeat) — refusing to "
+                "start a second instance. Stop it first, or set "
+                "TRADER_SKIP_INSTANCE_GUARD=1 if the host guarantees one instance."
+            )
+
     async def _mark_started(self) -> None:
         def _persist() -> None:
             status = BotStatus.load()
@@ -460,10 +452,6 @@ def _existing_active_levels() -> set[int]:
     ) | set(
         Position.objects.filter(status=PositionStatus.OPEN).values_list("level_index", flat=True)
     )
-
-
-# Adopted (manual-bag) positions live at level_index >= this; grid levels stay below it.
-_ADOPTED_LEVEL_BASE = 1000
 
 
 def resting_buy_levels(
@@ -546,13 +534,14 @@ def _grid_state(step: Decimal) -> tuple[dict[Decimal, tuple[int, str]], set[Deci
         )
     }
     held: set[Decimal] = set()
-    # Only *grid* positions cover a buy level — a filled grid buy sells one step up,
-    # so we don't re-buy that level until it clears. Sell-band seeds, re-adopted lots
-    # and the manual bag are separate inventory committed to their own (higher) TPs,
-    # so they must NOT block the buy grid.
-    for entry in Position.objects.filter(
-        status=PositionStatus.OPEN, level_index__lt=_ADOPTED_LEVEL_BASE
-    ).values_list("entry_price", flat=True):
+    # Any open position covers its price level — we never place a second buy where we
+    # already hold inventory until that inventory's take-profit clears (one buy per
+    # level). This spans grid buys, re-adopted lots and the manual bag alike: whatever
+    # sits at a round price blocks a fresh buy there, so a level can never stack two
+    # lots. A held lot's TP eventually fills and frees the level for the grid again.
+    for entry in Position.objects.filter(status=PositionStatus.OPEN).values_list(
+        "entry_price", flat=True
+    ):
         k = int((entry / step).to_integral_value(rounding=ROUND_HALF_UP))
         held.add(Decimal(k) * step)
     return resting, held

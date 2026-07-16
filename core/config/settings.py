@@ -19,6 +19,9 @@ class TraderSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_prefix="TRADER_")
 
     dry_run: bool = Field(default=False)
+    # Bypass the single-instance startup guard (fresh heartbeat ⇒ another trader is
+    # alive ⇒ refuse to start). Set on platforms that already guarantee one instance.
+    skip_instance_guard: bool = Field(default=False)
 
 
 class RedisSettings(BaseSettings):
