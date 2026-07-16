@@ -9,6 +9,7 @@ from asgiref.sync import sync_to_async
 from core.exchange.types import Execution, Side
 from core.services.runtime import (
     _grid_params_changed,
+    _grid_state,
     _record_applied_grid_params,
     _reset_all_grid_levels,
     buys_to_prune,
@@ -16,7 +17,7 @@ from core.services.runtime import (
     plan_level_heal,
     resting_buy_levels,
 )
-from core.trading.models import BotStatus, GridLevel, LevelStatus
+from core.trading.models import BotStatus, GridLevel, LevelStatus, Position, PositionStatus
 
 
 def _exec(order_id: str) -> Execution:
@@ -205,6 +206,49 @@ def test_reset_all_grid_levels_idles_awaiting() -> None:
     assert g.current_buy_order_id == ""
     # a FILLED level (holds a position) is untouched
     assert GridLevel.objects.get(level_index=292).status == LevelStatus.FILLED
+
+
+def _open_position(level_index: int, entry: str) -> None:
+    Position.objects.create(
+        level_index=level_index,
+        entry_price=Decimal(entry),
+        qty=Decimal("175"),
+        fees_in=Decimal("0"),
+        tp_order_id=f"tp-{level_index}",
+        tp_price=Decimal(entry) + Decimal("0.0001"),
+        status=PositionStatus.OPEN,
+        opened_at=datetime(2026, 7, 8, tzinfo=UTC),
+    )
+
+
+@pytestmark_db
+def test_grid_state_held_covers_every_open_position() -> None:
+    step = Decimal("0.00005")
+    _open_position(569, "0.02845")  # grid buy
+    _open_position(3020, "0.02945")  # re-adopted lot (>=2000) must block its level too
+    _open_position(1000, "0.052")  # manual bag (>=1000) must block its level too
+    _resting, held = _grid_state(step)
+    # every held price blocks a fresh buy there — one buy per level, no stacking
+    assert held == {Decimal("0.02845"), Decimal("0.02945"), Decimal("0.052")}
+
+
+@pytestmark_db
+def test_grid_state_held_ignores_closed_positions() -> None:
+    step = Decimal("0.00005")
+    _open_position(569, "0.02845")
+    Position.objects.create(
+        level_index=570,
+        entry_price=Decimal("0.0285"),
+        qty=Decimal("175"),
+        fees_in=Decimal("0"),
+        tp_order_id="tp-closed",
+        tp_price=Decimal("0.0286"),
+        status=PositionStatus.CLOSED,
+        opened_at=datetime(2026, 7, 8, tzinfo=UTC),
+    )
+    _resting, held = _grid_state(step)
+    # a closed position frees its level for the grid again
+    assert held == {Decimal("0.02845")}
 
 
 async def test_heal_stale_buy_replay_failure_idles_level_no_loop() -> None:

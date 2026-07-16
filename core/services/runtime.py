@@ -28,7 +28,6 @@ from core.exchange.types import Execution, Side
 from core.exchange.ws import BybitPrivateStream, StreamEvent
 from core.services.events import EventBus, NoOpEventBus
 from core.services.order_manager import OrderManager
-from core.services.readopt import commit_readopt, plan_free_readopt
 from core.services.reconciliation import reconcile_once
 from core.strategy.grid import generate_levels
 from core.trading.models import (
@@ -239,7 +238,6 @@ class TraderRuntime:
                 await self._recover_missed_fills()  # replay fills dropped by WS hiccups
                 await self._heal_naked_positions()  # settle/reprotect positions with a lost TP
                 await self._heal_stale_buy_levels()  # unstick levels whose buy vanished
-                await self._sweep_free_inventory()  # re-adopt free base coin (partial fills)
                 await self._ensure_grid()  # self-heal the band even without fills
             except Exception as exc:
                 log.exception("reconcile.error", error=str(exc))
@@ -247,48 +245,6 @@ class TraderRuntime:
                 await asyncio.wait_for(self._stop.wait(), timeout=RECONCILE_INTERVAL_S)
             except TimeoutError:
                 continue
-
-    async def _sweep_free_inventory(self) -> None:
-        """Re-adopt base coin left free by partial TP fills into managed positions.
-
-        A partially-filled sell leaves the unsold remainder untracked in the wallet;
-        left alone it accrues as dead inventory. This reconstructs its real entry and
-        rests a fresh take-profit above market — the automatic form of the
-        ``readopt_free_balance`` command. Serialised with grid maintenance so the two
-        never place orders against a stale balance snapshot.
-        """
-        assert self._om is not None
-        async with self._grid_lock:
-            plan = await plan_free_readopt(
-                client=self._om.client,
-                config=self._om.config,
-                instrument=self._om.instrument,
-                price=self._current_price,
-            )
-            if not plan:
-                return
-            placed = await commit_readopt(
-                client=self._om.client,
-                symbol=self._om.symbol,
-                config=self._om.config,
-                plan=plan,
-            )
-        for p in placed:
-            log.info(
-                "readopt.adopted",
-                level=p.level_index,
-                qty=str(p.qty),
-                entry=str(p.entry),
-                tp=str(p.tp_price),
-            )
-            await self._bus.publish(
-                "position.opened",
-                {
-                    "level": p.level_index,
-                    "entry_price": str(p.entry),
-                    "tp_price": str(p.tp_price),
-                },
-            )
 
     async def _rebuild_grid_on_param_change(self) -> None:
         """Tear the buy grid down and rebuild it when grid geometry changed.
@@ -405,8 +361,7 @@ class TraderRuntime:
             except Exception as exc:
                 # The buy filled but we can't book it — its coin is gone (the TP also
                 # filled while we were down) or a TP can't be placed for it right now.
-                # Idle the level so the heal doesn't crash the cycle or loop forever;
-                # any coin that IS free gets reclaimed by the readopt sweep.
+                # Idle the level so the heal doesn't crash the cycle or loop forever.
                 log.warning("grid.heal_replay_failed", level=idx, error=str(exc)[:120])
                 await sync_to_async(_idle_level)(idx)
 
@@ -460,10 +415,6 @@ def _existing_active_levels() -> set[int]:
     ) | set(
         Position.objects.filter(status=PositionStatus.OPEN).values_list("level_index", flat=True)
     )
-
-
-# Adopted (manual-bag) positions live at level_index >= this; grid levels stay below it.
-_ADOPTED_LEVEL_BASE = 1000
 
 
 def resting_buy_levels(
@@ -546,13 +497,14 @@ def _grid_state(step: Decimal) -> tuple[dict[Decimal, tuple[int, str]], set[Deci
         )
     }
     held: set[Decimal] = set()
-    # Only *grid* positions cover a buy level — a filled grid buy sells one step up,
-    # so we don't re-buy that level until it clears. Sell-band seeds, re-adopted lots
-    # and the manual bag are separate inventory committed to their own (higher) TPs,
-    # so they must NOT block the buy grid.
-    for entry in Position.objects.filter(
-        status=PositionStatus.OPEN, level_index__lt=_ADOPTED_LEVEL_BASE
-    ).values_list("entry_price", flat=True):
+    # Any open position covers its price level — we never place a second buy where we
+    # already hold inventory until that inventory's take-profit clears (one buy per
+    # level). This spans grid buys, re-adopted lots and the manual bag alike: whatever
+    # sits at a round price blocks a fresh buy there, so a level can never stack two
+    # lots. A held lot's TP eventually fills and frees the level for the grid again.
+    for entry in Position.objects.filter(status=PositionStatus.OPEN).values_list(
+        "entry_price", flat=True
+    ):
         k = int((entry / step).to_integral_value(rounding=ROUND_HALF_UP))
         held.add(Decimal(k) * step)
     return resting, held
