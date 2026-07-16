@@ -115,8 +115,8 @@ class OrderManager:
             return None
         # A fill too small to carry a valid sell (notional below the exchange
         # minimum) is left as free coin — placing a min-notional TP here would sit
-        # absurdly far from the market. `readopt_free_balance` merges such dust into
-        # a proper position; the stale grid level is idled by the prune pass.
+        # absurdly far from the market. Such dust stays free (rare, sub-$5); the stale
+        # grid level is idled by the prune pass.
         if execution.qty * execution.price < self.instrument.min_order_amt:
             log.warning(
                 "buy_fill.too_small_left_free",
@@ -146,7 +146,7 @@ class OrderManager:
             )
         except Exception as exc:
             # TP could not be placed — the bought coin is now unmanaged. Log loudly
-            # (recover with `readopt_free_balance`) rather than silently swallow.
+            # (needs manual attention) rather than silently swallow.
             log.error(
                 "buy_fill.tp_failed_coin_free",
                 level=level.level_index,

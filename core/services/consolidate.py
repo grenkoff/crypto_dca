@@ -35,8 +35,8 @@ log = structlog.get_logger()
 # carrying an intentional laddered staircase of take-profits — NOT accidental
 # duplicates, so it must never be merged. Grid buys (<1000) and re-adopted lots
 # (>=2000) are the ones that stacked and get consolidated.
-_MANUAL_BAG_MIN = 1000
-_MANUAL_BAG_MAX = 2000  # exclusive; matches readopt.READOPT_LEVEL_BASE
+_MANUAL_BAG_MIN = 1000  # adopt_positions.ADOPTED_LEVEL_BASE
+_MANUAL_BAG_MAX = 2000  # exclusive; lots at or above this are re-adopted, not bag
 
 
 @dataclass(frozen=True)
