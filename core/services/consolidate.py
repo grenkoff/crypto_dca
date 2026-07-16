@@ -31,11 +31,20 @@ from core.trading.models import Position, PositionStatus, StrategyConfig
 log = structlog.get_logger()
 
 
+# The manual bag (adopt_positions) occupies [1000, 2000): many lots at one entry
+# carrying an intentional laddered staircase of take-profits — NOT accidental
+# duplicates, so it must never be merged. Grid buys (<1000) and re-adopted lots
+# (>=2000) are the ones that stacked and get consolidated.
+_MANUAL_BAG_MIN = 1000
+_MANUAL_BAG_MAX = 2000  # exclusive; matches readopt.READOPT_LEVEL_BASE
+
+
 @dataclass(frozen=True)
 class PosRow:
     """Minimal open-position view the planner needs (keeps it pure/testable)."""
 
     id: int
+    level_index: int
     entry: Decimal
     qty: Decimal
     filled_qty: Decimal
@@ -83,6 +92,8 @@ def plan_consolidation(
     for p in positions:
         if p.filled_qty > 0:
             continue
+        if _MANUAL_BAG_MIN <= p.level_index < _MANUAL_BAG_MAX:
+            continue  # never fold the laddered manual bag into one lot
         k = int((p.entry / step).to_integral_value(rounding=ROUND_HALF_UP))
         groups.setdefault(Decimal(k) * step, []).append(p)
 
@@ -127,6 +138,7 @@ async def load_open_positions() -> list[PosRow]:
         return [
             PosRow(
                 id=int(p.id),
+                level_index=int(p.level_index),
                 entry=p.entry_price,
                 qty=p.qty,
                 filled_qty=p.filled_qty,
