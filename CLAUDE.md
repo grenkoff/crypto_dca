@@ -37,3 +37,25 @@ NOT tests or migrations.
   body. Do not exceed 5 lines — compress instead.
 - Dunder methods, `__init__`, and Protocol stubs don't require docstrings
   (pragmatic scope); private (`_`-prefixed) names don't either.
+
+## DRY & dead code
+
+- Apply **DRY** while writing: don't repeat the same knowledge — extract a
+  shared helper/constant. But avoid *false* DRY: code that only looks similar
+  yet changes for different reasons must stay separate.
+- **Delete dead code as you go** — unused functions/classes/imports/variables.
+- Enforcement, three layers:
+  1. **Per-edit hook** (`.claude/settings.json`) runs `ruff format` +
+     `ruff check --fix` — PEP 8 and unused imports/variables, instantly.
+  2. **End of task**: run `bash scripts/qa.sh` (or `/qa`) — adds `mypy`,
+     `vulture` (dead code), `pylint duplicate-code` (DRY), `pytest`. Get to
+     `QA: ALL GREEN`.
+  3. **CI** blocks the merge on all of the above.
+- **`vulture`** flags dead code. Django/aiogram/pydantic produce false
+  positives (`Command`/`Meta`/model fields, `@router` handlers, `model_config`,
+  tested public API); whitelist those in `whitelist_vulture.py` (regenerate
+  with `.venv/bin/vulture <paths> --make-whitelist`), never hollow out real
+  code to satisfy it. Real dead code → remove it.
+- **`pylint --enable=duplicate-code`** flags copy-paste (≥ 8 similar lines);
+  we use it instead of jscpd to avoid a Node toolchain. It only sees textual
+  duplication — real DRY judgement is still yours.
