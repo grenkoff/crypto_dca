@@ -7,7 +7,7 @@ Run the project QA suite and get it fully green before reporting the task done.
 Run `bash scripts/qa.sh`. It checks, in order:
 
 - `ruff format --check` + `ruff check` — PEP 8, mandatory docstrings, unused
-  imports/variables
+  imports/variables, function complexity/size limits (`C901` + `PLR09xx`)
 - `mypy` — types
 - `vulture` — dead code (unused functions/classes/methods); framework
   false positives are whitelisted in `whitelist_vulture.py`
