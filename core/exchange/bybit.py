@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Protocol, cast
 
+from core.config.settings import bybit_settings
 from core.exchange.errors import (
     BybitError,
     InsufficientBalanceError,
@@ -82,6 +83,17 @@ class BybitClient:
             recv_window=recv_window,
         )
         return cls(http)
+
+    @classmethod
+    def from_settings(cls) -> BybitClient:
+        """Build a client from the configured Bybit settings."""
+        s = bybit_settings()
+        return cls.from_credentials(
+            s.api_key,
+            s.api_secret,
+            testnet=s.testnet,
+            recv_window=s.recv_window,
+        )
 
     async def get_instrument(self, symbol: str) -> Instrument:
         """Fetch instrument constraints for ``symbol``."""

@@ -48,9 +48,7 @@ class Command(BaseCommand):
                 self.style.ERROR("BYBIT_API_KEY / SECRET not set.")
             )
             raise SystemExit(1)
-        client = BybitClient.from_credentials(
-            creds.api_key, creds.api_secret, testnet=creds.testnet
-        )
+        client = BybitClient.from_settings()
 
         config = await sync_to_async(StrategyConfig.load)()
         symbol = str(config.symbol)

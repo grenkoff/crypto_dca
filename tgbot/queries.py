@@ -9,7 +9,6 @@ from typing import Any
 from asgiref.sync import sync_to_async
 from django.db.models import F, QuerySet, Sum
 
-from core.config.settings import bybit_settings
 from core.exchange.bybit import BybitClient
 from core.trading.models import (
     BotStatus,
@@ -108,10 +107,7 @@ def _digest_db() -> dict[str, Any]:
 async def digest_snapshot() -> DigestSnapshot:
     """Build the daily digest snapshot (DB plus live price)."""
     db = await _digest_db()
-    settings = bybit_settings()
-    client = BybitClient.from_credentials(
-        settings.api_key, settings.api_secret, testnet=settings.testnet
-    )
+    client = BybitClient.from_settings()
     free_usdt = Decimal(0)
     price: Decimal | None = None
     try:
@@ -147,10 +143,7 @@ def _symbol() -> str:
 
 async def balance_snapshot() -> BalanceSnapshot:
     """Build the /balance snapshot from wallet balances."""
-    settings = bybit_settings()
-    client = BybitClient.from_credentials(
-        settings.api_key, settings.api_secret, testnet=settings.testnet
-    )
+    client = BybitClient.from_settings()
     balances = await client.get_balances()
     return BalanceSnapshot(
         balances={coin: b.free for coin, b in balances.items() if b.total > 0}
