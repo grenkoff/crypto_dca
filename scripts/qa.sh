@@ -19,7 +19,8 @@ run() {
 }
 
 run "ruff format --check (PEP 8)" .venv/bin/ruff format --check .
-run "ruff check (PEP 8 + docstrings + unused)" .venv/bin/ruff check .
+run "ruff check (PEP 8 + docstrings + unused + complexity)" \
+  .venv/bin/ruff check .
 run "mypy (types)" .venv/bin/mypy .
 run "vulture (dead code)" .venv/bin/vulture
 run "pylint duplicate-code (DRY)" \
