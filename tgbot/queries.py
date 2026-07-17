@@ -27,6 +27,11 @@ from tgbot.formatters import (
 from tgbot.notify_settings import ASTANA_OFFSET
 
 
+def _sum(qs: QuerySet[Position], field: str = "realized_pnl") -> Decimal:
+    """Sum ``field`` over the queryset, treating an empty result as 0."""
+    return qs.aggregate(s=Sum(field))["s"] or Decimal(0)
+
+
 @sync_to_async
 def status_snapshot() -> StatusSnapshot:
     """Build the /status snapshot."""
@@ -49,9 +54,6 @@ def pnl_snapshot() -> PnlSnapshot:
     month_start = today_start - timedelta(days=30)
     year_start = today_start - timedelta(days=365)
     base = Position.objects.filter(status=PositionStatus.CLOSED)
-
-    def _sum(qs: QuerySet[Position]) -> Decimal:
-        return qs.aggregate(s=Sum("realized_pnl"))["s"] or Decimal(0)
 
     return PnlSnapshot(
         today=_sum(base.filter(closed_at__gte=today_start)),
@@ -86,9 +88,6 @@ def _digest_db() -> dict[str, Any]:
     week = now - timedelta(days=7)
     closed = Position.objects.filter(status=PositionStatus.CLOSED)
     open_qs = Position.objects.filter(status=PositionStatus.OPEN)
-
-    def _sum(qs: QuerySet[Position], field: str = "realized_pnl") -> Decimal:
-        return qs.aggregate(s=Sum(field))["s"] or Decimal(0)
 
     return {
         "closed_24h": closed.filter(closed_at__gte=d24).count(),
