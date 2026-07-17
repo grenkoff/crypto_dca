@@ -1,3 +1,5 @@
+"""Pure value types for the strategy engine (no Django dependency)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,6 +11,8 @@ GridMode = Literal["absolute", "percent"]
 
 @dataclass(frozen=True)
 class GridLevelSpec:
+    """A grid level: its index and step-aligned buy price."""
+
     level_index: int
     price: Decimal
 
@@ -26,15 +30,13 @@ class OpenPosition:
     qty: Decimal
     fees_in: Decimal
     current_tp_price: Decimal
-    # Cumulative realized profit already redirected into lowering this
-    # position's TP.
     compensation_credit: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True)
 class CompensationDecision:
+    """A planned take-profit move funded by another lot's profit."""
+
     target_position_id: int
     new_tp_price: Decimal
-    # New cumulative credit to persist on the target once this decision is
-    # applied.
     new_credit: Decimal

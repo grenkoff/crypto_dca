@@ -1,3 +1,5 @@
+"""Typed exchange models: instruments, balances, orders, executions."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,18 +10,21 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class Side(StrEnum):
+    """Order side."""
+
     BUY = "Buy"
     SELL = "Sell"
 
 
 class OrderStatus(StrEnum):
+    """Bybit order status values."""
+
     NEW = "New"
     PARTIALLY_FILLED = "PartiallyFilled"
     PARTIALLY_FILLED_CANCELED = "PartiallyFilledCanceled"
     FILLED = "Filled"
     CANCELLED = "Cancelled"
     REJECTED = "Rejected"
-    # Conditional (stop / tp-sl) order lifecycle.
     UNTRIGGERED = "Untriggered"
     TRIGGERED = "Triggered"
     DEACTIVATED = "Deactivated"
@@ -30,6 +35,8 @@ class _Frozen(BaseModel):
 
 
 class Instrument(_Frozen):
+    """Trading instrument constraints (tick, lot, minimums)."""
+
     symbol: str
     base_coin: str
     quote_coin: str
@@ -40,16 +47,21 @@ class Instrument(_Frozen):
 
 
 class Balance(_Frozen):
+    """A coin balance split into free and locked amounts."""
+
     coin: str
     free: Decimal
     locked: Decimal
 
     @property
     def total(self) -> Decimal:
+        """Free plus locked balance."""
         return self.free + self.locked
 
 
 class Order(_Frozen):
+    """An exchange order snapshot."""
+
     order_id: str
     symbol: str
     side: Side
@@ -62,6 +74,8 @@ class Order(_Frozen):
 
 
 class Execution(_Frozen):
+    """A single trade execution (fill)."""
+
     exec_id: str
     order_id: str
     symbol: str

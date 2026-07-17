@@ -41,13 +41,16 @@ select = [
     "UP",           # pyupgrade
     "SIM",          # simplify
     "RUF",          # ruff-specific
+    # pydocstyle: mandatory docstrings on modules, packages, public
+    # classes/functions/methods (D419 forbids empty ones)
+    "D100", "D101", "D102", "D103", "D104", "D419",
 ]
 # E501 (line length) is enforced at 79 per PEP 8; the formatter reflows code,
 # and any remaining over-long lines (strings/comments) are flagged to fix by hand.
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
-"**/migrations/*" = ["E501", "RUF012", "I001"]
+"tests/**" = ["S101", "D"]
+"**/migrations/*" = ["E501", "RUF012", "I001", "D"]
 "**/models.py" = ["RUF012"]  # Django Meta class attrs trigger false positives
 "**/serializers.py" = ["RUF012"]
 "**/forms.py" = ["RUF012"]

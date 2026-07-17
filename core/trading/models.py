@@ -1,3 +1,5 @@
+"""Django ORM models for strategy config, grid, positions, and audit."""
+
 from __future__ import annotations
 
 from datetime import time
@@ -23,27 +25,37 @@ class _Singleton(models.Model):
 
 
 class GridMode(models.TextChoices):
+    """Grid spacing mode (absolute step or percent)."""
+
     ABSOLUTE = "absolute", "Absolute (USDT step)"
     PERCENT = "percent", "Percent step"
 
 
 class LevelStatus(models.TextChoices):
+    """Lifecycle status of a grid level."""
+
     IDLE = "idle", "Idle"
     AWAITING_FILL = "awaiting_fill", "Awaiting fill"
     FILLED = "filled", "Filled"
 
 
 class PositionStatus(models.TextChoices):
+    """Lifecycle status of a position."""
+
     OPEN = "open", "Open"
     CLOSED = "closed", "Closed"
 
 
 class OrderSide(models.TextChoices):
+    """Order side (buy or sell)."""
+
     BUY = "Buy", "Buy"
     SELL = "Sell", "Sell"
 
 
 class StrategyConfig(_Singleton):
+    """Singleton strategy configuration (symbol, grid, fees)."""
+
     symbol = models.CharField(max_length=32, default="BTCUSDT")
     grid_mode = models.CharField(
         max_length=16, choices=GridMode.choices, default=GridMode.PERCENT
@@ -92,14 +104,12 @@ class StrategyConfig(_Singleton):
 
 
 class BotStatus(_Singleton):
+    """Singleton runtime status (pause, heartbeat, applied params)."""
+
     paused = models.BooleanField(default=False)
     last_heartbeat = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
-    # Grid geometry the resting buy orders were last built with. When the live
-    # StrategyConfig diverges from these, the buy grid is torn down and rebuilt
-    # so every order matches the new step/size (no lingering mixed-size
-    # orders).
     applied_grid_step = models.DecimalField(
         max_digits=PRICE_DIGITS,
         decimal_places=PRICE_DECIMALS,
@@ -118,13 +128,10 @@ class BotStatus(_Singleton):
 
 
 class NotificationSettings(_Singleton):
-    """Which Telegram notifications are enabled, plus the daily-digest
-    schedule.
+    """Enabled Telegram notifications plus the daily-digest schedule.
 
-    Digest time is stored in UTC; the Telegram UI shows and accepts it in
-    Astana local time (UTC+5, no DST). ``digest_last_sent`` dedupes the
-    scheduler across restarts so a bounce near the trigger minute cannot
-    double-send.
+    Digest time is stored in UTC (shown in Astana local time);
+    ``digest_last_sent`` dedupes the scheduler across restarts.
     """
 
     notify_errors = models.BooleanField(default=True)
@@ -135,9 +142,7 @@ class NotificationSettings(_Singleton):
     notify_order_cancelled = models.BooleanField(default=True)
 
     digest_enabled = models.BooleanField(default=True)
-    digest_time_utc = models.TimeField(
-        default=time(19, 0)
-    )  # 00:00 Astana (UTC+5)
+    digest_time_utc = models.TimeField(default=time(19, 0))
     digest_last_sent = models.DateField(null=True, blank=True)
 
     updated_at = models.DateTimeField(auto_now=True)
@@ -150,6 +155,8 @@ class NotificationSettings(_Singleton):
 
 
 class GridLevel(models.Model):
+    """A grid price level and its current buy-order state."""
+
     level_index = models.IntegerField(unique=True)
     target_buy_price = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
@@ -168,6 +175,8 @@ class GridLevel(models.Model):
 
 
 class Position(models.Model):
+    """An opened lot: entry, quantity, take-profit, and realized PnL."""
+
     level_index = models.IntegerField()
     entry_price = models.DecimalField(
         max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
@@ -185,8 +194,6 @@ class Position(models.Model):
         decimal_places=PRICE_DECIMALS,
         default=Decimal(0),
     )
-    # Cumulative sold quantity and gross sell proceeds — support partial TP
-    # fills.
     filled_qty = models.DecimalField(
         max_digits=PRICE_DIGITS,
         decimal_places=PRICE_DECIMALS,
@@ -231,6 +238,7 @@ class Position(models.Model):
 
     @property
     def is_open(self) -> bool:
+        """Whether the position is still open."""
         return self.status == PositionStatus.OPEN
 
     def __str__(self) -> str:
@@ -291,6 +299,8 @@ class CompensationLink(models.Model):
 
 
 class TelegramUser(models.Model):
+    """A Telegram user allowed to interact with the bot."""
+
     chat_id = models.BigIntegerField(unique=True)
     label = models.CharField(max_length=64, blank=True)
     is_admin = models.BooleanField(default=False)

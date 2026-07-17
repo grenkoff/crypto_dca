@@ -12,11 +12,8 @@ from asgiref.sync import sync_to_async
 
 from core.trading.models import NotificationSettings
 
-# Astana is UTC+5 year-round (no daylight saving).
 ASTANA_OFFSET = timedelta(hours=5)
 
-# Event type -> NotificationSettings boolean field gating it. Types absent from
-# this map are always delivered (treated as un-suppressible).
 EVENT_TOGGLE: dict[str, str] = {
     "error": "notify_errors",
     "position.closed": "notify_closed",
@@ -26,7 +23,6 @@ EVENT_TOGGLE: dict[str, str] = {
     "order.cancelled": "notify_order_cancelled",
 }
 
-# Ordered (field, label) pairs for the /notify inline menu.
 TOGGLE_LABELS: list[tuple[str, str]] = [
     ("notify_errors", "Errors / alerts"),
     ("notify_closed", "Closes (profit)"),
@@ -54,14 +50,16 @@ def astana_to_utc(t: time) -> time:
 
 @sync_to_async
 def load_settings() -> NotificationSettings:
+    """Load the singleton notification settings row."""
     return NotificationSettings.load()
 
 
 @sync_to_async
 def event_enabled(event_type: str) -> bool:
+    """Whether notifications for the given event type are enabled."""
     field = EVENT_TOGGLE.get(event_type)
     if field is None:
-        return True  # unknown/critical types are never suppressed
+        return True
     return bool(getattr(NotificationSettings.load(), field))
 
 

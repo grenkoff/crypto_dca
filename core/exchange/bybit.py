@@ -70,9 +70,10 @@ class BybitClient:
         testnet: bool,
         recv_window: int = 5000,
     ) -> BybitClient:
+        """Build a client from API credentials."""
         from pybit.unified_trading import (
             HTTP,
-        )  # local import to keep tests lightweight
+        )
 
         http = HTTP(
             testnet=testnet,
@@ -83,6 +84,7 @@ class BybitClient:
         return cls(http)
 
     async def get_instrument(self, symbol: str) -> Instrument:
+        """Fetch instrument constraints for ``symbol``."""
         resp = await asyncio.to_thread(
             self._http.get_instruments_info, category=CATEGORY, symbol=symbol
         )
@@ -104,6 +106,7 @@ class BybitClient:
         )
 
     async def get_last_price(self, symbol: str) -> Decimal:
+        """Fetch the last traded price for ``symbol``."""
         resp = await asyncio.to_thread(
             self._http.get_tickers, category=CATEGORY, symbol=symbol
         )
@@ -114,6 +117,7 @@ class BybitClient:
         return Decimal(str(items[0]["lastPrice"]))
 
     async def get_balances(self) -> dict[str, Balance]:
+        """Fetch unified-account balances keyed by coin."""
         resp = await asyncio.to_thread(
             self._http.get_wallet_balance, accountType="UNIFIED"
         )
@@ -122,8 +126,6 @@ class BybitClient:
         balances: dict[str, Balance] = {}
         for account in accounts:
             for coin in account.get("coin", []):
-                # UTA leaves availableToWithdraw blank; derive free from wallet
-                # - locked.
                 wallet = Decimal(str(coin.get("walletBalance") or 0))
                 locked = Decimal(str(coin.get("locked") or 0))
                 balances[coin["coin"]] = Balance(
@@ -141,6 +143,7 @@ class BybitClient:
         order_link_id: str | None = None,
         post_only: bool = True,
     ) -> str:
+        """Place a limit order and return its order id."""
         kwargs: dict[str, Any] = {
             "category": CATEGORY,
             "symbol": symbol,
@@ -157,6 +160,7 @@ class BybitClient:
         return str(result["orderId"])
 
     async def cancel_order(self, symbol: str, order_id: str) -> None:
+        """Cancel a single order by id."""
         resp = await asyncio.to_thread(
             self._http.cancel_order,
             category=CATEGORY,
@@ -166,12 +170,14 @@ class BybitClient:
         _raise_for_ret(resp)
 
     async def cancel_all(self, symbol: str) -> None:
+        """Cancel all open orders for ``symbol``."""
         resp = await asyncio.to_thread(
             self._http.cancel_all_orders, category=CATEGORY, symbol=symbol
         )
         _raise_for_ret(resp)
 
     async def get_open_orders(self, symbol: str) -> list[Order]:
+        """Fetch all open orders for ``symbol`` (paginated)."""
         orders: list[Order] = []
         cursor: str | None = None
         while True:
@@ -197,6 +203,7 @@ class BybitClient:
     async def get_executions(
         self, symbol: str, *, limit: int = 50
     ) -> list[Execution]:
+        """Fetch recent executions for ``symbol``."""
         resp = await asyncio.to_thread(
             self._http.get_executions,
             category=CATEGORY,

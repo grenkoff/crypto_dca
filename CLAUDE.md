@@ -16,3 +16,22 @@
 - Prefer fixing the underlying issue over silencing it: don't let a trailing
   `# type: ignore` push a line past 79 — annotate/`cast` so the pragma isn't
   needed.
+
+## Comments & docstrings
+
+Applies to working code (`core/`, `tgbot/`, `web/`, `trader/`, `manage.py`) —
+NOT tests or migrations.
+
+- **No `#` comments at all** — none. Not even `# type: ignore` / `# noqa` /
+  `# pragma` / shebang: fix the underlying issue (annotate, `cast`, move the
+  import) instead of silencing it. (ruff can't enforce "zero comments"; it's a
+  hard rule regardless.)
+- **Every module, package (`__init__.py`), public class, and public
+  function/method MUST have a docstring.** Enforced by ruff pydocstyle
+  `D100`–`D104` + `D419` (see `pyproject.toml`); CI fails without them.
+- Each file starts with a **module docstring** describing the file's purpose.
+- Docstrings are **1–5 lines** and every line is **≤ 79 characters** (PEP 8).
+  Keep them terse: a one-line summary, optionally a short blank-line-separated
+  body. Do not exceed 5 lines — compress instead.
+- Dunder methods, `__init__`, and Protocol stubs don't require docstrings
+  (pragmatic scope); private (`_`-prefixed) names don't either.

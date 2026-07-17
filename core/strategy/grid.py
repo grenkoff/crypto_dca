@@ -1,3 +1,5 @@
+"""Generate descending grid buy levels (absolute or percent step)."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -14,17 +16,11 @@ def generate_levels(
     count: int,
     tick_size: Decimal,
 ) -> list[GridLevelSpec]:
-    """Generate up to `count` buy levels descending from `top_anchor`.
+    """Generate up to ``count`` buy levels descending from ``top_anchor``.
 
-    For ``mode="percent"`` step is a fraction (0.005 = 0.5%); each level
-    multiplies by ``(1 - step)``. For ``mode="absolute"`` step is a plain
-    price delta and the anchor is snapped down to a multiple of ``step`` so
-    every level lands on a round, step-aligned price (e.g. step 0.0001 →
-    0.03110, 0.03100, 0.03090…).
-
-    Prices are floored to ``tick_size``; generation stops when a level
-    would be non-positive (i.e., the deposit is theoretically deep enough
-    to reach zero).
+    ``percent`` step is a fraction ((1 - step) per level); ``absolute`` is a
+    price delta off a step-snapped anchor. Prices floor to ``tick_size``;
+    generation stops once a level would be non-positive.
     """
     if count <= 0:
         return []

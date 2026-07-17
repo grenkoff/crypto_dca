@@ -1,17 +1,14 @@
-"""Validates everything that needs to be right before the trader starts.
+"""Validate everything that must be right before the trader starts.
 
-Run on the trader (or web) service shell before the first live deploy:
-
-uv run python manage.py preflight
-
-Exits non-zero on any hard failure; soft warnings only print.
+Run on the trader/web shell before the first live deploy. Exits non-zero
+on any hard failure; soft warnings only print.
 """
 
 from __future__ import annotations
 
 import asyncio
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import redis.asyncio as redis_async
 from django.core.management.base import BaseCommand
@@ -26,31 +23,39 @@ FAIL = "✗"
 
 
 class Check:
+    """A single named preflight check with a status and detail."""
+
     def __init__(self, name: str) -> None:
         self.name = name
         self.status = OK
         self.detail = ""
 
     def ok(self, detail: str = "") -> None:
+        """Mark the check as passed."""
         self.status = OK
         self.detail = detail
 
     def warn(self, detail: str) -> None:
+        """Mark the check as a warning."""
         self.status = WARN
         self.detail = detail
 
     def fail(self, detail: str) -> None:
+        """Mark the check as failed."""
         self.status = FAIL
         self.detail = detail
 
 
 class Command(BaseCommand):
+    """Validate credentials, balances, instrument, Redis, and config."""
+
     help = (
         "Validate Bybit credentials, balance, instrument, Redis, and "
         "StrategyConfig sanity."
     )
 
     def handle(self, *args: Any, **options: Any) -> None:
+        """Run all checks and print the results."""
         checks = asyncio.run(_run_all_checks())
         for c in checks:
             line = f"{c.status} {c.name}"
@@ -179,7 +184,7 @@ async def _check_redis() -> Check:
         return c
     try:
         client = redis_async.Redis.from_url(url, decode_responses=True)
-        pong = await client.ping()  # type: ignore[misc]
+        pong = await cast(Any, client).ping()
         await client.aclose()
     except Exception as exc:
         c.fail(f"ping failed: {exc}")

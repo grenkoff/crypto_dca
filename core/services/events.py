@@ -10,13 +10,18 @@ from typing import Any, Protocol
 
 
 class EventBus(Protocol):
-    async def publish(
-        self, event_type: str, payload: dict[str, Any]
-    ) -> None: ...
+    """Protocol for publishing trader state-change events."""
+
+    async def publish(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Publish an event with a type and JSON-able payload."""
+        ...
 
 
 class NoOpEventBus:
+    """Event bus that drops all events (used when Redis is absent)."""
+
     async def publish(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Discard the event."""
         return None
 
 
@@ -27,4 +32,5 @@ class RecordingEventBus:
         self.events: list[tuple[str, dict[str, Any]]] = []
 
     async def publish(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Record the event in the in-memory list."""
         self.events.append((event_type, payload))

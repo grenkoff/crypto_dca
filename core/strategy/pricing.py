@@ -1,19 +1,8 @@
-"""Take-profit pricing.
+"""Take-profit pricing: an absolute ``tp_step`` above entry.
 
-The take-profit is an **absolute** offset above entry (``tp_step``, a plain
-price delta in quote units), independent of the grid spacing. Net PnL for a
-long position closed by a limit sell is:
-
-    pnl = sell_price * qty * (1 - sell_fee) - entry_price * qty - fees_in
-
-The chosen TP is the higher of ``entry + tp_step`` and the price that still
-nets ``min_profit_quote`` (a break-even floor when ``min_profit_quote ==
-0``), rounded up to ``tick_size``. It is also lifted so the sell's notional
-(``price * qty``) clears ``min_order_amt`` — otherwise a small (e.g.
-partially-filled) position would produce a sub-minimum sell the exchange
-rejects, leaving the coin naked. That way the absolute target is used
-whenever it clears the floors, and the position is never sold below
-break-even.
+The TP is the higher of ``entry + tp_step`` and the break-even/min-profit
+price, rounded up to ``tick_size`` and lifted so the sell clears
+``min_order_amt``. The position is never sold below break-even.
 """
 
 from __future__ import annotations
@@ -34,6 +23,7 @@ def compute_tp_price(
     tick_size: Decimal,
     min_order_amt: Decimal = Decimal(0),
 ) -> Decimal:
+    """Take-profit price for a lot: absolute target above the floors."""
     if qty <= 0:
         raise ValueError("qty must be positive")
     if maker_fee >= 1:
@@ -44,7 +34,6 @@ def compute_tp_price(
         qty * (Decimal(1) - maker_fee)
     )
     chosen = max(target, minimum)
-    # Lift so the resulting sell clears the exchange's minimum notional.
     if chosen * qty < min_order_amt:
         chosen = min_order_amt / qty
     return round_up_to_tick(chosen, tick_size)

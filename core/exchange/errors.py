@@ -1,7 +1,11 @@
+"""Typed exceptions for Bybit client errors."""
+
 from __future__ import annotations
 
 
 class BybitError(Exception):
+    """Base error carrying the Bybit return code and message."""
+
     def __init__(self, code: int, message: str) -> None:
         super().__init__(f"[{code}] {message}")
         self.code = code
@@ -9,12 +13,12 @@ class BybitError(Exception):
 
 
 class OrderRejectedError(BybitError):
-    pass
+    """Order was rejected by the exchange."""
 
 
 class InsufficientBalanceError(BybitError):
-    pass
+    """Not enough balance to place the order."""
 
 
 class RateLimitedError(BybitError):
-    pass
+    """Request was rate-limited by the exchange."""

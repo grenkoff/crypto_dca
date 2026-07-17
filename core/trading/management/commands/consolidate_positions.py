@@ -1,16 +1,8 @@
-"""Merge duplicate open positions sitting at the same price into one lot.
+"""Merge duplicate open positions at the same price into one lot.
 
-Historical races left some prices carrying two or more open positions, each
-with its own resting sell — the very stacking the one-buy-per-level rule now
-prevents. This collapses each such group into a single position (cost-weighted
-entry, one take-profit over the combined quantity), cancelling the group's
-sells and placing one merged sell in their place.
-
-Dry-run by default; pass ``--commit`` to cancel/replace orders and rewrite
-rows. Run with the trader STOPPED so its heal loop does not race the cancels.
-
-uv run python manage.py consolidate_positions            # preview uv run
-python manage.py consolidate_positions --commit    # execute
+Collapses each same-price group into one position (cost-weighted entry,
+one TP). Dry-run by default; ``--commit`` to act. Run with the trader
+stopped so its heal loop does not race the cancels.
 """
 
 from __future__ import annotations
@@ -32,17 +24,21 @@ from core.trading.models import StrategyConfig
 
 
 class Command(BaseCommand):
+    """Merge duplicate same-price open positions into one lot."""
+
     help = (
         "Collapse duplicate open positions at the same price into a "
         "single lot + sell."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
+        """Register CLI arguments."""
         parser.add_argument(
             "--commit", action="store_true", help="Cancel/replace and rewrite."
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
+        """Run the consolidation (dry-run unless --commit)."""
         asyncio.run(self._run(commit=options["commit"]))
 
     async def _run(self, *, commit: bool) -> None:

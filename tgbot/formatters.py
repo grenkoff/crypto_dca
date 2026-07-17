@@ -13,6 +13,8 @@ from typing import Any
 
 @dataclass(frozen=True)
 class StatusSnapshot:
+    """Snapshot for the /status message."""
+
     paused: bool
     open_positions: int
     started_at: datetime | None
@@ -21,11 +23,15 @@ class StatusSnapshot:
 
 @dataclass(frozen=True)
 class BalanceSnapshot:
-    balances: dict[str, Decimal]  # coin -> free
+    """Snapshot for the /balance message."""
+
+    balances: dict[str, Decimal]
 
 
 @dataclass(frozen=True)
 class PnlSnapshot:
+    """Realized PnL over several windows for /pnl."""
+
     today: Decimal
     week: Decimal
     month: Decimal
@@ -35,6 +41,8 @@ class PnlSnapshot:
 
 @dataclass(frozen=True)
 class DigestSnapshot:
+    """Snapshot for the daily digest message."""
+
     when_astana: datetime
     closed_24h: int
     pnl_24h: Decimal
@@ -49,6 +57,8 @@ class DigestSnapshot:
 
 @dataclass(frozen=True)
 class OrderRow:
+    """One open-position row for the /orders message."""
+
     level_index: int
     entry_price: Decimal
     qty: Decimal
@@ -57,6 +67,8 @@ class OrderRow:
 
 @dataclass(frozen=True)
 class OrdersSnapshot:
+    """Snapshot for the /orders message."""
+
     open_positions: list[OrderRow]
 
 
@@ -76,6 +88,7 @@ def _humanize_age(since: datetime | None, now: datetime | None = None) -> str:
 
 
 def build_status(snap: StatusSnapshot, now: datetime | None = None) -> str:
+    """Render the /status message."""
     state = "⏸ paused" if snap.paused else "▶ running"
     uptime = _humanize_age(snap.started_at, now)
     heartbeat = _humanize_age(snap.last_heartbeat, now)
@@ -88,6 +101,7 @@ def build_status(snap: StatusSnapshot, now: datetime | None = None) -> str:
 
 
 def build_balance(snap: BalanceSnapshot) -> str:
+    """Render the /balance message."""
     if not snap.balances:
         return "_no balances_"
     lines = [
@@ -97,6 +111,7 @@ def build_balance(snap: BalanceSnapshot) -> str:
 
 
 def build_pnl(snap: PnlSnapshot) -> str:
+    """Render the /pnl message."""
     return (
         "*Realized PnL (USDT)*\n"
         f"Today `{_signed(snap.today, '0.0001')}` 💰 "
@@ -108,6 +123,7 @@ def build_pnl(snap: PnlSnapshot) -> str:
 
 
 def build_orders(snap: OrdersSnapshot) -> str:
+    """Render the /orders message."""
     if not snap.open_positions:
         return "_no open positions_"
     rows = [
@@ -136,6 +152,7 @@ def _signed(amount: Decimal, places: str = "0.0001") -> str:
 
 
 def build_digest(snap: DigestSnapshot) -> str:
+    """Render the daily digest message."""
     price = f"`{snap.price}`" if snap.price is not None else "_n/a_"
     return (
         f"📊 *Daily digest* — {snap.when_astana:%d %b %H:%M} Astana\n"
@@ -150,6 +167,7 @@ def build_digest(snap: DigestSnapshot) -> str:
 
 
 def format_event(event: dict[str, Any]) -> str:
+    """Render a single live event for the notifications channel."""
     etype = event.get("type", "?")
     payload = event.get("payload", {})
     if etype == "order.placed":
@@ -166,17 +184,12 @@ def format_event(event: dict[str, Any]) -> str:
             realized = Decimal(str(payload.get("realized", "0")))
         except (InvalidOperation, TypeError, ValueError):
             realized = Decimal(0)
-        emoji = (
-            "💰" if realized >= 0 else "🔴"
-        )  # losses stand out, don't blend in
+        emoji = "💰" if realized >= 0 else "🔴"
         return (
             f"{emoji} `{_price5(payload.get('price'))}` → "
             f"`{_signed(realized, '0.0001')}` USDT"
         )
     if etype == "compensation.applied":
-        # A TP being pulled toward market — not a realised gain, so no amount
-        # shown (the profit that funds it is already reported by its own
-        # close).
         return f"💊 TP↓ `{_price5(payload.get('new_tp'))}`"
     if etype == "error":
         return f"❌ Error: {payload.get('message', '?')}"

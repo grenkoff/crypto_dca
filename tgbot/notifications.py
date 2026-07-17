@@ -30,6 +30,7 @@ def _admin_chat_ids() -> list[int]:
 async def run_subscriber(
     bus: RedisEventBus, bot: Bot, stop: asyncio.Event
 ) -> None:
+    """Relay bus events to admin chats until the stop event is set."""
     log.info("tgbot.subscriber_started")
     try:
         async for event in bus.subscribe():

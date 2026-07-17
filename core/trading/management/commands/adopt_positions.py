@@ -1,23 +1,8 @@
 """Adopt manually-held spot inventory into the bot as OPEN positions.
 
-Two sources are folded into the strategy so pairwise compensation can work them
-toward break-even out of future realized profit:
-
-1. **Existing sell orders** already resting on the exchange become positions
-   linked to those orders (no new orders are placed).
-2. **Naked base balance** (coins held with no sell order) is chunked and gets
-   fresh take-profit sell orders priced at the guaranteed-profit minimum.
-
-Because the true cost basis of a manual bag is unknown, an ``--entry`` estimate
-is supplied. The per-pair realized result of every compensated close equals
-``(entry_estimate - true_cost) * qty``, so **over-estimating entry guarantees a
-non-negative real outcome**. Pick ``--entry`` at or above the real average.
-
-Dry-run by default (prints the plan, touches nothing). Pass ``--commit`` to
-place the naked take-profit orders and write the Position rows.
-
-    uv run python manage.py adopt_positions --entry 0.052            # preview
-    uv run python manage.py adopt_positions --entry 0.052 --commit   # execute
+Existing sell orders become linked positions; naked balance gets fresh
+take-profit sells. Supply ``--entry`` at or above the real average
+(over-estimating guarantees a non-negative outcome); ``--commit`` to run.
 """
 
 from __future__ import annotations
@@ -39,22 +24,21 @@ from core.exchange.types import Instrument, Order, OrderStatus, Side
 from core.strategy.rounding import round_down_to_tick, round_up_to_tick
 from core.trading.models import Position, PositionStatus, StrategyConfig
 
-# Adopted positions live outside the bot's own grid index range
-# (0..max_open_orders) so they never collide with generated grid levels.
 ADOPTED_LEVEL_BASE = 1000
 
-# Leave a sliver of base coin unsold to absorb rounding / fee dust.
 DUST_KEEP = Decimal("0.99")
 
 
 @dataclass
 class PlannedPosition:
-    kind: str  # "existing" | "naked"
+    """A planned adoption: a position to write and its TP order."""
+
+    kind: str
     qty: Decimal
     entry: Decimal
     fees_in: Decimal
     tp_price: Decimal
-    tp_order_id: str  # empty for naked until placed
+    tp_order_id: str
     level_index: int
 
 
@@ -67,12 +51,15 @@ def _breakeven_tp(
 
 
 class Command(BaseCommand):
+    """Adopt manually-held spot inventory as bot positions."""
+
     help = (
         "Adopt manually-held spot inventory (open sells + naked balance) "
         "as bot positions."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
+        """Register CLI arguments."""
         parser.add_argument(
             "--entry",
             type=Decimal,
@@ -108,6 +95,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
+        """Run the adoption (dry-run unless --commit)."""
         asyncio.run(self._run(options))
 
     async def _run(self, opts: dict[str, Any]) -> None:
@@ -145,8 +133,6 @@ class Command(BaseCommand):
         orders = await real.get_open_orders(symbol)
         balances = await real.get_balances()
 
-        # Only resting limit sells hold inventory; skip conditional/untriggered
-        # orders.
         resting = {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED}
         sells = [
             o for o in orders if o.side == Side.SELL and o.status in resting
@@ -171,7 +157,6 @@ class Command(BaseCommand):
         plan: list[PlannedPosition] = []
         level = ADOPTED_LEVEL_BASE
 
-        # 1. Existing sell orders -> positions bound to those orders.
         for o in sells:
             fees_in = entry * o.qty * maker_fee
             plan.append(
@@ -187,7 +172,6 @@ class Command(BaseCommand):
             )
             level += 1
 
-        # 2. Naked base balance -> chunked positions with fresh TP sells.
         naked_chunks: list[Decimal] = []
         if not opts["skip_naked"]:
             naked_chunks = _chunk_naked(
@@ -300,8 +284,6 @@ class Command(BaseCommand):
         symbol: str,
         instrument: Instrument,
     ) -> None:
-        # Place naked TP sells first; capture their order ids before writing
-        # rows.
         for p in plan:
             if p.kind == "naked":
                 p.tp_order_id = await client.place_limit(
@@ -335,7 +317,6 @@ def _chunk_naked(
         chunk < instrument.min_order_qty
         or chunk * entry < instrument.min_order_amt
     ):
-        # Bump chunk until it clears both minimums.
         chunk = max(
             instrument.min_order_qty,
             round_up_to_tick(
@@ -347,7 +328,6 @@ def _chunk_naked(
     while remaining >= chunk:
         chunks.append(chunk)
         remaining -= chunk
-    # Fold a valid remainder into a final chunk.
     if (
         remaining >= instrument.min_order_qty
         and remaining * entry >= instrument.min_order_amt

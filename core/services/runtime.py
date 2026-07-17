@@ -1,13 +1,5 @@
-"""Trader runtime: ties BybitClient, WS stream, and OrderManager into a live
-loop.
-
-Lifecycle:
-
-1. ``bootstrap``: load config from DB, fetch the instrument, snapshot the
-   current price, and ensure the grid is populated with buy orders.
-2. ``run``: open the private WebSocket, dispatch execution events to the
-   OrderManager, and periodically reconcile state + heartbeat.
-3. ``shutdown``: stop the WS, wait for in-flight tasks.
+"""Trader runtime: ties the client, WS stream and OrderManager into a
+live loop (bootstrap, then run's event/reconcile loops, then shutdown).
 """
 
 from __future__ import annotations
@@ -44,14 +36,7 @@ from core.trading.models import (
 log = structlog.get_logger()
 
 RECONCILE_INTERVAL_S = 30
-# Only heal a position whose TP order is missing if it's older than this — so a
-# freshly-opened position's just-placed TP is never raced and double-protected.
 _NAKED_MIN_AGE_S = 120
-# A running trader refreshes its heartbeat every reconcile (~30s). If one is
-# fresher than this lease, a second trader is alive — refuse to start so two
-# processes never lay duplicate grids. Comfortably above the interval so a
-# single missed cycle (slow API call) doesn't look dead; a crashed trader's
-# heartbeat goes stale within it.
 _INSTANCE_LEASE_S = RECONCILE_INTERVAL_S * 3
 
 
@@ -69,6 +54,8 @@ def another_instance_alive(
 
 
 class TraderRuntime:
+    """Ties the client, WS stream and OrderManager into a live loop."""
+
     def __init__(self, *, bus: EventBus | None = None) -> None:
         self._bus: EventBus = bus or NoOpEventBus()
         self._stop = asyncio.Event()
@@ -76,12 +63,10 @@ class TraderRuntime:
         self._client: BybitClient | None = None
         self._stream: BybitPrivateStream | None = None
         self._current_price = Decimal(0)
-        # Serialise grid maintenance: the event handler and the reconcile loop
-        # both call _ensure_grid; without this they can race and double-place a
-        # level.
         self._grid_lock = asyncio.Lock()
 
     async def bootstrap(self) -> None:
+        """Load config, build the OrderManager, lay the initial grid."""
         await self._guard_single_instance()
         settings = bybit_settings()
         real_client = BybitClient.from_credentials(
@@ -114,22 +99,14 @@ class TraderRuntime:
         await self._ensure_grid()
 
     async def _ensure_grid(self) -> None:
-        # One grid maintenance pass at a time — callers (event handler,
-        # reconcile loop, bootstrap) must not interleave or they double-place
-        # levels.
         async with self._grid_lock:
             await self._ensure_grid_impl()
 
     async def _ensure_grid_impl(self) -> None:
-        """Maintain a contiguous band of buy orders at round,
-        step-aligned prices just below the current price.
+        """Maintain a contiguous band of buy orders below the current price.
 
-        The band is the ``max_open_orders`` highest multiples of
-        ``grid_step`` that sit strictly below the market. A level's identity
-        is its price (index ``k = price / step``), so nothing drifts as the
-        market moves: gaps get filled, buys outside the band are pruned, and
-        the band tracks the price. Held positions (a filled buy awaiting its
-        TP) count as covering their level.
+        The band is the ``max_open_orders`` highest ``grid_step`` steps
+        below market; gaps fill, out-of-band buys prune, held levels skip.
         """
         assert self._om is not None
         if await sync_to_async(_is_paused)():
@@ -144,10 +121,6 @@ class TraderRuntime:
         if step <= 0 or price <= 0 or per_order <= 0:
             return
 
-        # Size the grid to available capital: as many buys as our total USDT
-        # can fund (free + already locked in resting buys), capped by
-        # max_open_orders as a safety limit. As buys fill into held inventory
-        # USDT drops and the grid shrinks; as positions sell it grows back.
         balances = await self._om.client.get_balances()
         quote = balances.get(self._om.instrument.quote_coin)
         total_quote = (
@@ -158,12 +131,6 @@ class TraderRuntime:
         resting, held = await sync_to_async(_grid_state)(step)
         targets = resting_buy_levels(price, step, n, held)
         target_prices = {p for _, p in targets}
-        # Prune ONLY buys stranded below the grid (price rose away from them)
-        # so their capital can redeploy near the market. A resting buy at or
-        # above the band bottom is either in-band or one a falling market is
-        # dropping toward — it must be left to FILL, never cancelled and
-        # re-chased lower (that would forfeit the very dip it was placed to
-        # catch).
         prune = set(buys_to_prune(resting.keys(), target_prices))
         for p, (k, order_id) in list(resting.items()):
             if p not in prune:
@@ -173,8 +140,6 @@ class TraderRuntime:
                 await self._om.client.cancel_order(self._om.symbol, order_id)
                 cancelled = True
             except Exception as exc:
-                # "order does not exist" ⇒ it already filled/cancelled; idle
-                # the stale level anyway so it doesn't linger as phantom drift.
                 if (
                     "170213" not in str(exc)
                     and "does not exist" not in str(exc).lower()
@@ -185,14 +150,8 @@ class TraderRuntime:
                     continue
             await sync_to_async(_idle_level)(k)
             log.info("grid.pruned", price=str(p))
-            if (
-                cancelled
-            ):  # announce only a real cancel (a vanished order likely filled)
+            if cancelled:
                 await self._bus.publish("order.cancelled", {"price": str(p)})
-        # Fill any missing band levels (skip ones already resting or held). A
-        # single placement failure (e.g. insufficient USDT when capital is
-        # fully deployed) must not abort the pass or spam tracebacks — skip and
-        # go on.
         for k, p in targets:
             if p in resting or p in held:
                 continue
@@ -226,6 +185,7 @@ class TraderRuntime:
             await self._om.place_buy_at_level(spec.level_index, spec.price)
 
     async def run(self) -> None:
+        """Open the WS and run the event and reconcile loops."""
         if self._om is None or self._client is None:
             raise RuntimeError("bootstrap() must be awaited first")
         settings = bybit_settings()
@@ -242,6 +202,7 @@ class TraderRuntime:
         )
 
     async def shutdown(self) -> None:
+        """Stop the loops and close the WS."""
         self._stop.set()
         if self._stream is not None:
             await self._stream.stop()
@@ -254,7 +215,7 @@ class TraderRuntime:
                 break
             try:
                 await self._handle_event(event)
-            except Exception as exc:  # keep the loop alive
+            except Exception as exc:
                 log.exception(
                     "trader.event_error", error=str(exc), kind=event.kind
                 )
@@ -267,7 +228,6 @@ class TraderRuntime:
 
         if not isinstance(event.payload, BybitExecution):
             return
-        # Refresh last price for compensation + grid maintenance.
         self._current_price = await self._client.get_last_price(
             self._om.symbol
         )
@@ -275,8 +235,6 @@ class TraderRuntime:
             await self._om.handle_buy_fill(event.payload)
         else:
             await self._om.handle_sell_fill(event.payload, self._current_price)
-        # Re-derive the contiguous band from the fresh price (fills the vacated
-        # / newly-deeper level, prunes stale ones).
         await self._ensure_grid()
 
     async def _reconcile_loop(self) -> None:
@@ -287,18 +245,10 @@ class TraderRuntime:
                     self._om.symbol
                 )
                 await reconcile_once(self._client, self._om.symbol)
-                await (
-                    self._recover_missed_fills()
-                )  # replay fills dropped by WS hiccups
-                await (
-                    self._heal_naked_positions()
-                )  # settle/reprotect positions with a lost TP
-                await (
-                    self._heal_stale_buy_levels()
-                )  # unstick levels whose buy vanished
-                await (
-                    self._ensure_grid()
-                )  # self-heal the band even without fills
+                await self._recover_missed_fills()
+                await self._heal_naked_positions()
+                await self._heal_stale_buy_levels()
+                await self._ensure_grid()
             except Exception as exc:
                 log.exception("reconcile.error", error=str(exc))
             try:
@@ -309,14 +259,10 @@ class TraderRuntime:
                 continue
 
     async def _rebuild_grid_on_param_change(self) -> None:
-        """Tear the buy grid down and rebuild it when grid geometry changed.
+        """Rebuild the buy grid when ``grid_step``/``order_qty_quote`` changed.
 
-        Live orders are never resized in place, so after ``grid_step`` or
-        ``order_qty_quote`` changes the band would otherwise carry a mix of
-        old- and new-sized buys. When the config diverges from the last-applied
-        geometry we cancel **every resting buy** (SELL take-profits are left
-        untouched) and idle their levels; the following ``_ensure_grid`` then
-        lays a fresh, uniform grid.
+        Live orders are never resized, so on a geometry change we cancel every
+        resting buy (TP sells untouched) and idle their levels to rebuild.
         """
         assert self._om is not None
         cfg = self._om.config
@@ -331,12 +277,12 @@ class TraderRuntime:
         )
         for order in await self._om.client.get_open_orders(self._om.symbol):
             if order.side != Side.BUY:
-                continue  # take-profits (SELL) keep working as before
+                continue
             try:
                 await self._om.client.cancel_order(
                     self._om.symbol, order.order_id
                 )
-            except Exception as exc:  # pragma: no cover - depends on live API
+            except Exception as exc:
                 log.warning(
                     "grid.rebuild_cancel_failed",
                     order_id=order.order_id,
@@ -348,17 +294,10 @@ class TraderRuntime:
         )
 
     async def _heal_naked_positions(self) -> None:
-        """Settle or reprotect open positions whose take-profit order left the
-        exchange.
+        """Settle or reprotect open positions whose take-profit order vanished.
 
-        A position's protective sell can vanish — an interrupted
-        compensation cancel, or a fill dropped beyond the recent-execution
-        window (leaving it phantom-open). For each open position older than
-        the guard window (so a freshly-placed TP is never raced) whose TP
-        order is no longer live, we look up that order's own executions: if
-        it SOLD, replay the fill to close it properly (idempotent on
-        exec_id); if it did not, re-place a protective TP so the coin is
-        never naked.
+        For each aged open position with no live TP: replay a sell that
+        filled unseen, else re-place a protective TP so it is never naked.
         """
         assert self._om is not None
         candidates = await sync_to_async(_naked_candidates)(_NAKED_MIN_AGE_S)
@@ -371,15 +310,13 @@ class TraderRuntime:
                 execs = await self._om.client.get_order_executions(
                     self._om.symbol, tp_order_id
                 )
-            except Exception as exc:  # pragma: no cover - depends on live API
+            except Exception as exc:
                 log.warning(
                     "heal.naked_lookup_failed", id=pos_id, error=str(exc)[:100]
                 )
                 continue
             sells = [e for e in execs if e.side == Side.SELL]
-            if (
-                sells
-            ):  # the TP filled unseen — replay to close with the real PnL
+            if sells:
                 for execution in sells:
                     if await sync_to_async(_exec_logged)(execution.exec_id):
                         continue
@@ -390,8 +327,6 @@ class TraderRuntime:
                         execution, self._current_price
                     )
                 continue
-            # No fill: the TP was cancelled/lost but the coin is still held —
-            # reprotect.
             pos = await sync_to_async(_get_open_position)(pos_id)
             if pos is None:
                 continue
@@ -400,13 +335,9 @@ class TraderRuntime:
             )
             try:
                 await self._om.reprotect(pos, self._current_price)
-            except Exception as exc:  # pragma: no cover - depends on live API
+            except Exception as exc:
                 msg = str(exc)
                 if "170131" in msg or "insufficient" in msg.lower():
-                    # Can't place the sell — the coin is gone: the TP filled
-                    # under a superseded order id we couldn't trace. Settle the
-                    # phantom-open position (book it at its TP) instead of
-                    # retrying forever.
                     log.warning("heal.naked_settle_phantom", id=pos_id)
                     await self._om.settle_phantom(pos)
                 else:
@@ -417,14 +348,8 @@ class TraderRuntime:
     async def _heal_stale_buy_levels(self) -> None:
         """Unstick grid levels whose buy order left the exchange unseen.
 
-        A level marked ``awaiting_fill`` still points at its buy order, so
-        the grid treats the level as covered and never re-places it. If that
-        order was cancelled during a restart or filled while the WS was
-        down, the level is a permanent hole (``reconcile.drift`` keeps
-        flagging ``missing_buys``). Here we cross-check every awaiting level
-        against the live open orders: a vanished order that actually FILLED
-        is replayed as a buy (booking the position); one with no fill is
-        idled so the grid re-places it next pass.
+        Cross-check awaiting levels vs live orders: replay a vanished order
+        that filled, idle one that did not so the grid re-places it.
         """
         assert self._om is not None
         awaiting = await sync_to_async(_awaiting_buy_levels)()
@@ -433,7 +358,7 @@ class TraderRuntime:
         orders = await self._om.client.get_open_orders(self._om.symbol)
         open_ids = {o.order_id for o in orders}
         if all(oid in open_ids for _, oid in awaiting):
-            return  # every level still resting — nothing vanished
+            return
         stale_ids = {oid for _, oid in awaiting if oid not in open_ids}
         fills_by_order: dict[str, Execution] = {}
         for execution in await self._om.client.get_executions(
@@ -447,7 +372,6 @@ class TraderRuntime:
             await sync_to_async(_idle_level)(idx)
         for idx, fill in replay:
             if await sync_to_async(_exec_logged)(fill.exec_id):
-                # already booked into a position — just clear the stale marker
                 await sync_to_async(_idle_level)(idx)
                 continue
             log.warning(
@@ -456,20 +380,12 @@ class TraderRuntime:
             try:
                 booked = await self._om.handle_buy_fill(fill)
             except Exception as exc:
-                # The buy filled but we can't book it — its coin is gone (the
-                # TP also filled while we were down) or a TP can't be placed
-                # for it right now. Idle the level so the heal doesn't crash
-                # the cycle or loop forever.
                 log.warning(
                     "grid.heal_replay_failed", level=idx, error=str(exc)[:120]
                 )
                 await sync_to_async(_idle_level)(idx)
                 continue
             if booked is None:
-                # The fill produced no position — a partial buy below the min
-                # notional, left as free dust. Idle the level so heal stops
-                # replaying the same sub-min fill every reconcile (an unbounded
-                # reconcile.drift loop).
                 log.warning(
                     "grid.heal_replay_unbooked_idle",
                     level=idx,
@@ -478,12 +394,10 @@ class TraderRuntime:
                 await sync_to_async(_idle_level)(idx)
 
     async def _recover_missed_fills(self) -> None:
-        """Replay TP fills the WS stream dropped (e.g. on a connection reset).
+        """Replay TP fills the WS stream dropped (e.g. on a reconnect).
 
-        A sell execution matching an open position's TP order that we never
-        logged is fed back through the normal fill path — idempotent on
-        ``exec_id``, so it closes the phantom-open position with the correct
-        PnL (and compensation).
+        An unlogged sell matching an open position's TP is fed back through the
+        normal fill path (idempotent on ``exec_id``) to close it correctly.
         """
         assert self._om is not None
         tp_ids = await sync_to_async(_open_tp_order_ids)()
@@ -513,14 +427,11 @@ class TraderRuntime:
             loop.add_signal_handler(sig, self._stop.set)
 
     async def _guard_single_instance(self) -> None:
-        """Refuse to start if another trader is still alive (fresh heartbeat).
+        """Refuse to start if another trader is alive (fresh heartbeat).
 
-        Two trader processes each maintain their own grid and both react to
-        fills — the orphan-process cause of duplicate buys at one level. A
-        fresh heartbeat in ``BotStatus`` means a peer is running; abort loudly
-        rather than lay a second grid over the first.
-        ``TRADER_SKIP_INSTANCE_GUARD`` bypasses it where the host already
-        guarantees a single instance.
+        A fresh ``BotStatus`` heartbeat means a peer is running; abort
+        rather than lay a second grid. ``TRADER_SKIP_INSTANCE_GUARD``
+        bypasses the check.
         """
         if trader_settings().skip_instance_guard:
             return
@@ -563,26 +474,17 @@ def _existing_active_levels() -> set[int]:
 def resting_buy_levels(
     price: Decimal, step: Decimal, count: int, held: set[Decimal]
 ) -> list[tuple[int, Decimal]]:
-    """The ``count`` highest step-aligned prices below ``price`` that we don't
-    already hold.
+    """The ``count`` highest step-aligned prices below ``price`` not held.
 
-    Walks round levels down from just below the market, skipping levels already
-    covered by an open position, until ``count`` resting-buy levels are
-    collected. This keeps a constant number of live buy orders — when one
-    fills, the next deeper unheld level takes its place. Levels at/below zero
-    stop the walk.
-
-    The topmost buy keeps a **full ``step`` of clearance** below the market: it
-    sits at least one step under the price, so a level only earns a buy once
-    the market has risen a full step above it (price 0.02978 → top 0.02970; the
-    0.02975 level gets a buy only at price 0.02980).
+    Walks round levels down from a full step below market, skipping held
+    levels, until ``count`` are collected or price reaches zero.
     """
     if step <= 0 or price <= 0 or count <= 0:
         return []
     k_floor = int(price / step)
-    if Decimal(k_floor) * step > price:  # guard against any rounding overshoot
+    if Decimal(k_floor) * step > price:
         k_floor -= 1
-    k_top = k_floor - 1  # one full step of clearance below the market
+    k_top = k_floor - 1
     levels: list[tuple[int, Decimal]] = []
     k = k_top
     while len(levels) < count:
@@ -625,14 +527,10 @@ def _get_open_position(pos_id: int) -> Position | None:
 def buys_to_prune(
     resting_prices: Iterable[Decimal], target_prices: set[Decimal]
 ) -> list[Decimal]:
-    """Resting buy prices to cancel: only those stranded strictly below the
-    grid.
+    """Resting buy prices to cancel: only those below the band bottom.
 
-    The band bottom is the deepest target level. Buys below it sit uselessly
-    deep (the market rose away from them) — cancel to redeploy near price. Buys
-    at or above the band bottom are in-band, or above it where a falling market
-    will fill them, so they are kept. With no targets (no capital) nothing is
-    pruned.
+    Buys stranded below the deepest target redeploy near price; buys in-band
+    or above (a falling market will fill them) are kept.
     """
     if not target_prices:
         return []
@@ -652,12 +550,6 @@ def _grid_state(
         ).exclude(current_buy_order_id="")
     }
     held: set[Decimal] = set()
-    # Any open position covers its price level — we never place a second buy
-    # where we already hold inventory until that inventory's take-profit clears
-    # (one buy per level). This spans grid buys, re-adopted lots and the manual
-    # bag alike: whatever sits at a round price blocks a fresh buy there, so a
-    # level can never stack two lots. A held lot's TP eventually fills and
-    # frees the level for the grid again.
     for entry in Position.objects.filter(
         status=PositionStatus.OPEN
     ).values_list("entry_price", flat=True):
@@ -673,12 +565,10 @@ def _idle_level(level_index: int) -> None:
 
 
 def _grid_params_changed(grid_step: Decimal, order_qty: Decimal) -> bool:
-    """Whether grid geometry differs from what the buy grid was last built
-    with.
+    """Whether grid geometry differs from what it was last built with.
 
-    On the very first run the applied values are unset — we adopt the current
-    geometry without forcing a rebuild (the existing grid already matches the
-    live config).
+    On the first run the applied values are unset, so we adopt the current
+    geometry without forcing a rebuild.
     """
     bot = BotStatus.load()
     if bot.applied_grid_step is None or bot.applied_order_qty is None:
@@ -725,14 +615,10 @@ def plan_level_heal(
     open_order_ids: set[str],
     fills_by_order: dict[str, Execution],
 ) -> tuple[list[int], list[tuple[int, Execution]]]:
-    """Classify awaiting-fill levels whose buy order is no longer on the
-    exchange.
+    """Classify awaiting-fill levels whose buy order left the exchange.
 
-    A level still on the exchange is healthy and skipped. A vanished order that
-    has a matching fill is scheduled for **replay** (it filled unseen → book
-    the position); one with no fill was cancelled/lost and is scheduled to be
-    **idled** so the grid re-places it. Returns ``(idle_indices, [(level_index,
-    fill)])``.
+    A vanished order with a matching fill is scheduled for replay; one with
+    no fill is idled. Returns ``(idle, [(index, fill)])``.
     """
     idle: list[int] = []
     replay: list[tuple[int, Execution]] = []

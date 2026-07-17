@@ -6,7 +6,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from redis.asyncio import Redis
@@ -23,13 +23,17 @@ def _encode(o: Any) -> str:
 
 
 class RedisEventBus:
+    """Redis pub/sub event bus (publisher and subscriber)."""
+
     def __init__(self, url: str) -> None:
         self._client: Redis = Redis.from_url(url, decode_responses=True)
 
     async def close(self) -> None:
+        """Close the Redis connection."""
         await self._client.aclose()
 
     async def publish(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Publish an event to the channel (errors are logged)."""
         message = json.dumps(
             {"type": event_type, "payload": payload, "ts": time.time()},
             default=_encode,
@@ -44,6 +48,7 @@ class RedisEventBus:
             )
 
     async def subscribe(self) -> AsyncIterator[dict[str, Any]]:
+        """Yield decoded events from the channel until cancelled."""
         pubsub = self._client.pubsub()
         await pubsub.subscribe(CHANNEL)
         try:
@@ -63,4 +68,4 @@ class RedisEventBus:
                     )
         finally:
             await pubsub.unsubscribe(CHANNEL)
-            await pubsub.aclose()  # type: ignore[no-untyped-call]
+            await cast(Any, pubsub).aclose()
