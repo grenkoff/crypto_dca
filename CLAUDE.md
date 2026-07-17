@@ -59,3 +59,35 @@ NOT tests or migrations.
 - **`pylint --enable=duplicate-code`** flags copy-paste (≥ 8 similar lines);
   we use it instead of jscpd to avoid a Node toolchain. It only sees textual
   duplication — real DRY judgement is still yours.
+
+## Design principles
+
+Machine-enforced (a gate, like DRY) — **complexity/size limits** via ruff:
+`C901` (≤ 12), `PLR0913` (≤ 8 args), `PLR0911` (≤ 7 returns), `PLR0912`,
+`PLR0915`. Thresholds are ratcheted to the current worst: they block *new*
+bloat, they don't force refactoring existing code. A function that trips them
+is usually doing too much — split it.
+
+Judgement (no gate — write this way, can't be linted):
+
+- **KISS** — the simplest thing that works; prefer boring over clever.
+- **YAGNI** — build only what's needed now; no speculative abstraction.
+- **Separation of concerns** — keep the layers apart (`strategy` = pure logic,
+  `exchange` = I/O, `services` = orchestration, `tgbot`/`trader` = entrypoints).
+- **Fail fast** — raise on invalid state immediately (`ValueError`, guards),
+  don't limp on with bad data.
+- **Least astonishment** — code behaves the way a reader expects; no surprises.
+- **Boy Scout Rule** — leave code cleaner than you found it (delete dead code,
+  tidy nearby mess as you pass).
+- **SOLID** — OOP-oriented, so apply it *where there are classes*; this
+  codebase is mostly functional, so don't add abstraction just to satisfy a
+  letter (KISS/YAGNI win):
+  - **S** single responsibility — one reason to change per class/function.
+  - **O** open/closed — extend by adding code, not editing working logic; but
+    don't pre-build extension points you don't need.
+  - **L** Liskov — an implementation must work anywhere its protocol/base is
+    expected (`EventBus` impls, `DryRunBybitClient`).
+  - **I** interface segregation — narrow protocols; don't force callers to
+    depend on methods they don't use.
+  - **D** dependency inversion — depend on abstractions and inject them
+    (constructor DI in `OrderManager`/`TraderRuntime`).
