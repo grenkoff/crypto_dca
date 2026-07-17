@@ -40,5 +40,13 @@ jobs:
       - name: Mypy strict
         run: uv run mypy .
 
+      - name: Vulture (dead code)
+        run: uv run vulture
+
+      - name: Pylint duplicate-code (DRY)
+        run: >-
+          uv run pylint core tgbot trader web manage.py
+          --disable=all --enable=duplicate-code
+
       - name: Pytest (unit)
         run: uv run pytest -ra --ignore=tests/integration

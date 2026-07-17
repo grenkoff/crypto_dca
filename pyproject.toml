@@ -27,11 +27,14 @@ dev = [
     "django-stubs>=5.1",
     "pre-commit>=4.0",
     "fakeredis>=2.26",
+    "vulture>=2.16",
+    "pylint>=4.0.6",
 ]
 
 [tool.ruff]
 target-version = "py312"
 line-length = 79  # PEP 8
+extend-exclude = ["whitelist_vulture.py"]  # generated vulture whitelist
 
 [tool.ruff.lint]
 select = [
@@ -61,7 +64,26 @@ select = [
 python_version = "3.12"
 strict = true
 plugins = ["mypy_django_plugin.main"]
-exclude = ["migrations/"]
+exclude = ["migrations/", "whitelist_vulture.py"]
+
+[tool.vulture]
+paths = [
+    "core",
+    "tgbot",
+    "trader",
+    "web",
+    "manage.py",
+    "whitelist_vulture.py",
+]
+exclude = ["*/migrations/*"]
+ignore_decorators = ["@router.*"]
+min_confidence = 60
+
+[tool.pylint.main]
+ignore-paths = ["^.*/migrations/.*$"]
+
+[tool.pylint.similarities]
+min-similarity-lines = 8
 
 [[tool.mypy.overrides]]
 module = ["pybit.*", "fakeredis.*"]
