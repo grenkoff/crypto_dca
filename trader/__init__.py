@@ -1,1 +1,0 @@
-"""Trader daemon entrypoint package."""

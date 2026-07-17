@@ -51,6 +51,7 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "D"]
 "**/migrations/*" = ["E501", "RUF012", "I001", "D"]
+"**/__init__.py" = ["D104"]  # keep package __init__ files empty
 "**/models.py" = ["RUF012"]  # Django Meta class attrs trigger false positives
 "**/serializers.py" = ["RUF012"]
 "**/forms.py" = ["RUF012"]

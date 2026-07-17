@@ -26,10 +26,12 @@ NOT tests or migrations.
   `# pragma` / shebang: fix the underlying issue (annotate, `cast`, move the
   import) instead of silencing it. (ruff can't enforce "zero comments"; it's a
   hard rule regardless.)
-- **Every module, package (`__init__.py`), public class, and public
-  function/method MUST have a docstring.** Enforced by ruff pydocstyle
-  `D100`–`D104` + `D419` (see `pyproject.toml`); CI fails without them.
-- Each file starts with a **module docstring** describing the file's purpose.
+- **Every module, public class, and public function/method MUST have a
+  docstring.** Enforced by ruff pydocstyle `D100`–`D103` + `D419` (see
+  `pyproject.toml`); CI fails without them.
+- **`__init__.py` files stay empty** (no docstring) — they are exempt (`D104`
+  ignored). Don't add a package docstring.
+- Each real module starts with a **module docstring** describing its purpose.
 - Docstrings are **1–5 lines** and every line is **≤ 79 characters** (PEP 8).
   Keep them terse: a one-line summary, optionally a short blank-line-separated
   body. Do not exceed 5 lines — compress instead.
