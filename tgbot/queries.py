@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from asgiref.sync import sync_to_async
-from django.db.models import F, Sum
+from django.db.models import F, QuerySet, Sum
 
 from core.config.settings import bybit_settings
 from core.exchange.bybit import BybitClient
-from core.trading.models import BotStatus, CompensationLink, Position, PositionStatus
+from core.trading.models import (
+    BotStatus,
+    CompensationLink,
+    Position,
+    PositionStatus,
+)
 from tgbot.formatters import (
     BalanceSnapshot,
     DigestSnapshot,
@@ -24,6 +30,7 @@ from tgbot.notify_settings import ASTANA_OFFSET
 
 @sync_to_async
 def status_snapshot() -> StatusSnapshot:
+    """Build the /status snapshot."""
     bot = BotStatus.load()
     open_count = Position.objects.filter(status=PositionStatus.OPEN).count()
     return StatusSnapshot(
@@ -36,6 +43,7 @@ def status_snapshot() -> StatusSnapshot:
 
 @sync_to_async
 def pnl_snapshot() -> PnlSnapshot:
+    """Build the /pnl snapshot from closed positions."""
     now = datetime.now(tz=UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=7)
@@ -43,7 +51,7 @@ def pnl_snapshot() -> PnlSnapshot:
     year_start = today_start - timedelta(days=365)
     base = Position.objects.filter(status=PositionStatus.CLOSED)
 
-    def _sum(qs) -> Decimal:  # type: ignore[no-untyped-def]
+    def _sum(qs: QuerySet[Position]) -> Decimal:
         return qs.aggregate(s=Sum("realized_pnl"))["s"] or Decimal(0)
 
     return PnlSnapshot(
@@ -57,6 +65,7 @@ def pnl_snapshot() -> PnlSnapshot:
 
 @sync_to_async
 def orders_snapshot() -> OrdersSnapshot:
+    """Build the /orders snapshot from open positions."""
     rows = [
         OrderRow(
             level_index=p.level_index,
@@ -64,20 +73,22 @@ def orders_snapshot() -> OrdersSnapshot:
             qty=p.qty,
             tp_price=p.tp_price,
         )
-        for p in Position.objects.filter(status=PositionStatus.OPEN).order_by("level_index")
+        for p in Position.objects.filter(status=PositionStatus.OPEN).order_by(
+            "level_index"
+        )
     ]
     return OrdersSnapshot(open_positions=rows)
 
 
 @sync_to_async
-def _digest_db() -> dict:  # type: ignore[type-arg]
+def _digest_db() -> dict[str, Any]:
     now = datetime.now(tz=UTC)
     d24 = now - timedelta(hours=24)
     week = now - timedelta(days=7)
     closed = Position.objects.filter(status=PositionStatus.CLOSED)
     open_qs = Position.objects.filter(status=PositionStatus.OPEN)
 
-    def _sum(qs, field: str = "realized_pnl") -> Decimal:  # type: ignore[no-untyped-def]
+    def _sum(qs: QuerySet[Position], field: str = "realized_pnl") -> Decimal:
         return qs.aggregate(s=Sum(field))["s"] or Decimal(0)
 
     return {
@@ -85,13 +96,17 @@ def _digest_db() -> dict:  # type: ignore[type-arg]
         "pnl_24h": _sum(closed.filter(closed_at__gte=d24)),
         "pnl_week": _sum(closed.filter(closed_at__gte=week)),
         "pnl_total": _sum(closed),
-        "compensations_24h": CompensationLink.objects.filter(created_at__gte=d24).count(),
+        "compensations_24h": CompensationLink.objects.filter(
+            created_at__gte=d24
+        ).count(),
         "open_positions": open_qs.count(),
-        "deployed": open_qs.aggregate(s=Sum(F("entry_price") * F("qty")))["s"] or Decimal(0),
+        "deployed": open_qs.aggregate(s=Sum(F("entry_price") * F("qty")))["s"]
+        or Decimal(0),
     }
 
 
 async def digest_snapshot() -> DigestSnapshot:
+    """Build the daily digest snapshot (DB plus live price)."""
     db = await _digest_db()
     settings = bybit_settings()
     client = BybitClient.from_credentials(
@@ -106,7 +121,7 @@ async def digest_snapshot() -> DigestSnapshot:
             free_usdt = usdt.free
         cfg = await _symbol()
         price = await client.get_last_price(cfg)
-    except Exception:  # pragma: no cover - live API best-effort
+    except Exception:
         pass
     when_astana = (datetime.now(tz=UTC) + ASTANA_OFFSET).replace(tzinfo=None)
     return DigestSnapshot(
@@ -131,16 +146,20 @@ def _symbol() -> str:
 
 
 async def balance_snapshot() -> BalanceSnapshot:
+    """Build the /balance snapshot from wallet balances."""
     settings = bybit_settings()
     client = BybitClient.from_credentials(
         settings.api_key, settings.api_secret, testnet=settings.testnet
     )
     balances = await client.get_balances()
-    return BalanceSnapshot(balances={coin: b.free for coin, b in balances.items() if b.total > 0})
+    return BalanceSnapshot(
+        balances={coin: b.free for coin, b in balances.items() if b.total > 0}
+    )
 
 
 @sync_to_async
 def list_open_buy_order_ids() -> list[str]:
+    """Order ids of all awaiting-fill grid buy orders."""
     from core.trading.models import GridLevel, LevelStatus
 
     return list(

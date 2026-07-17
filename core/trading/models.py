@@ -1,3 +1,5 @@
+"""Django ORM models for strategy config, grid, positions, and audit."""
+
 from __future__ import annotations
 
 from datetime import time
@@ -23,31 +25,45 @@ class _Singleton(models.Model):
 
 
 class GridMode(models.TextChoices):
+    """Grid spacing mode (absolute step or percent)."""
+
     ABSOLUTE = "absolute", "Absolute (USDT step)"
     PERCENT = "percent", "Percent step"
 
 
 class LevelStatus(models.TextChoices):
+    """Lifecycle status of a grid level."""
+
     IDLE = "idle", "Idle"
     AWAITING_FILL = "awaiting_fill", "Awaiting fill"
     FILLED = "filled", "Filled"
 
 
 class PositionStatus(models.TextChoices):
+    """Lifecycle status of a position."""
+
     OPEN = "open", "Open"
     CLOSED = "closed", "Closed"
 
 
 class OrderSide(models.TextChoices):
+    """Order side (buy or sell)."""
+
     BUY = "Buy", "Buy"
     SELL = "Sell", "Sell"
 
 
 class StrategyConfig(_Singleton):
+    """Singleton strategy configuration (symbol, grid, fees)."""
+
     symbol = models.CharField(max_length=32, default="BTCUSDT")
-    grid_mode = models.CharField(max_length=16, choices=GridMode.choices, default=GridMode.PERCENT)
+    grid_mode = models.CharField(
+        max_length=16, choices=GridMode.choices, default=GridMode.PERCENT
+    )
     grid_step = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal("0.005")
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        default=Decimal("0.005"),
     )
     tp_step = models.DecimalField(
         max_digits=PRICE_DIGITS,
@@ -56,36 +72,55 @@ class StrategyConfig(_Singleton):
         help_text="Absolute price offset above entry for the take-profit.",
     )
     order_qty_quote = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal("10")
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        default=Decimal("10"),
     )
     top_anchor = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, null=True, blank=True
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        null=True,
+        blank=True,
     )
     min_profit_quote = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal("0.01")
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        default=Decimal("0.01"),
     )
-    maker_fee = models.DecimalField(max_digits=10, decimal_places=8, default=Decimal("0.001"))
-    taker_fee = models.DecimalField(max_digits=10, decimal_places=8, default=Decimal("0.00075"))
+    maker_fee = models.DecimalField(
+        max_digits=10, decimal_places=8, default=Decimal("0.001")
+    )
+    taker_fee = models.DecimalField(
+        max_digits=10, decimal_places=8, default=Decimal("0.00075")
+    )
     max_open_orders = models.PositiveIntegerField(default=20)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self) -> str:
-        return f"StrategyConfig({self.symbol}, {self.grid_mode}, step={self.grid_step})"
+        return (
+            f"StrategyConfig({self.symbol}, {self.grid_mode}, "
+            f"step={self.grid_step})"
+        )
 
 
 class BotStatus(_Singleton):
+    """Singleton runtime status (pause, heartbeat, applied params)."""
+
     paused = models.BooleanField(default=False)
     last_heartbeat = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
-    # Grid geometry the resting buy orders were last built with. When the live
-    # StrategyConfig diverges from these, the buy grid is torn down and rebuilt so
-    # every order matches the new step/size (no lingering mixed-size orders).
     applied_grid_step = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, null=True, blank=True
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        null=True,
+        blank=True,
     )
     applied_order_qty = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, null=True, blank=True
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        null=True,
+        blank=True,
     )
 
     def __str__(self) -> str:
@@ -93,11 +128,10 @@ class BotStatus(_Singleton):
 
 
 class NotificationSettings(_Singleton):
-    """Which Telegram notifications are enabled, plus the daily-digest schedule.
+    """Enabled Telegram notifications plus the daily-digest schedule.
 
-    Digest time is stored in UTC; the Telegram UI shows and accepts it in Astana
-    local time (UTC+5, no DST). ``digest_last_sent`` dedupes the scheduler across
-    restarts so a bounce near the trigger minute cannot double-send.
+    Digest time is stored in UTC (shown in Astana local time);
+    ``digest_last_sent`` dedupes the scheduler across restarts.
     """
 
     notify_errors = models.BooleanField(default=True)
@@ -108,20 +142,29 @@ class NotificationSettings(_Singleton):
     notify_order_cancelled = models.BooleanField(default=True)
 
     digest_enabled = models.BooleanField(default=True)
-    digest_time_utc = models.TimeField(default=time(19, 0))  # 00:00 Astana (UTC+5)
+    digest_time_utc = models.TimeField(default=time(19, 0))
     digest_last_sent = models.DateField(null=True, blank=True)
 
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self) -> str:
-        return f"NotificationSettings(digest={self.digest_enabled}@{self.digest_time_utc}Z)"
+        return (
+            f"NotificationSettings(digest={self.digest_enabled}"
+            f"@{self.digest_time_utc}Z)"
+        )
 
 
 class GridLevel(models.Model):
+    """A grid price level and its current buy-order state."""
+
     level_index = models.IntegerField(unique=True)
-    target_buy_price = models.DecimalField(max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS)
+    target_buy_price = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
+    )
     current_buy_order_id = models.CharField(max_length=64, blank=True)
-    status = models.CharField(max_length=16, choices=LevelStatus.choices, default=LevelStatus.IDLE)
+    status = models.CharField(
+        max_length=16, choices=LevelStatus.choices, default=LevelStatus.IDLE
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -132,34 +175,56 @@ class GridLevel(models.Model):
 
 
 class Position(models.Model):
+    """An opened lot: entry, quantity, take-profit, and realized PnL."""
+
     level_index = models.IntegerField()
-    entry_price = models.DecimalField(max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS)
-    qty = models.DecimalField(max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS)
+    entry_price = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
+    )
+    qty = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
+    )
     fees_in = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        default=Decimal(0),
     )
     fees_out = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        default=Decimal(0),
     )
-    # Cumulative sold quantity and gross sell proceeds — support partial TP fills.
     filled_qty = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        default=Decimal(0),
     )
     sell_value = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        default=Decimal(0),
     )
     tp_order_id = models.CharField(max_length=64, blank=True)
     tp_price = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, null=True, blank=True
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        null=True,
+        blank=True,
     )
     status = models.CharField(
-        max_length=16, choices=PositionStatus.choices, default=PositionStatus.OPEN
+        max_length=16,
+        choices=PositionStatus.choices,
+        default=PositionStatus.OPEN,
     )
     realized_pnl = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        default=Decimal(0),
     )
     compensation_credit = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, default=Decimal(0)
+        max_digits=PRICE_DIGITS,
+        decimal_places=PRICE_DECIMALS,
+        default=Decimal(0),
     )
     opened_at = models.DateTimeField()
     closed_at = models.DateTimeField(null=True, blank=True)
@@ -173,22 +238,33 @@ class Position(models.Model):
 
     @property
     def is_open(self) -> bool:
+        """Whether the position is still open."""
         return self.status == PositionStatus.OPEN
 
     def __str__(self) -> str:
-        return f"Position(L{self.level_index}, {self.qty}@{self.entry_price}, {self.status})"
+        return (
+            f"Position(L{self.level_index}, {self.qty}@{self.entry_price}, "
+            f"{self.status})"
+        )
 
 
 class ExecutionLog(models.Model):
-    """Raw audit trail of fills received from Bybit (WS or REST reconciliation)."""
+    """Raw audit trail of fills received from Bybit (WS or REST
+    reconciliation)."""
 
     exec_id = models.CharField(max_length=64, unique=True)
     order_id = models.CharField(max_length=64, db_index=True)
     symbol = models.CharField(max_length=32)
     side = models.CharField(max_length=8, choices=OrderSide.choices)
-    price = models.DecimalField(max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS)
-    qty = models.DecimalField(max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS)
-    fee = models.DecimalField(max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS)
+    price = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
+    )
+    qty = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
+    )
+    fee = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
+    )
     fee_coin = models.CharField(max_length=16, blank=True)
     executed_at = models.DateTimeField()
     received_at = models.DateTimeField(auto_now_add=True)
@@ -199,16 +275,23 @@ class ExecutionLog(models.Model):
 
 
 class CompensationLink(models.Model):
-    """Records that a profitable position's PnL was applied to compensate another's TP price."""
+    """Records that a profitable position's PnL was applied to compensate
+    another's TP price."""
 
     profitable_position = models.ForeignKey(
         Position, on_delete=models.CASCADE, related_name="compensations_given"
     )
     compensated_position = models.ForeignKey(
-        Position, on_delete=models.CASCADE, related_name="compensations_received"
+        Position,
+        on_delete=models.CASCADE,
+        related_name="compensations_received",
     )
-    profit_applied = models.DecimalField(max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS)
-    new_tp_price = models.DecimalField(max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS)
+    profit_applied = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
+    )
+    new_tp_price = models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -216,10 +299,15 @@ class CompensationLink(models.Model):
 
 
 class TelegramUser(models.Model):
+    """A Telegram user allowed to interact with the bot."""
+
     chat_id = models.BigIntegerField(unique=True)
     label = models.CharField(max_length=64, blank=True)
     is_admin = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self) -> str:
-        return f"{self.label or self.chat_id} ({'admin' if self.is_admin else 'user'})"
+        return (
+            f"{self.label or self.chat_id} "
+            f"({'admin' if self.is_admin else 'user'})"
+        )

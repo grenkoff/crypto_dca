@@ -1,9 +1,13 @@
+"""Django settings — ORM and app config only; no HTTP layer is served."""
+
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
 import dj_database_url
+
+from core.config.logging import configure_logging
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -64,7 +68,5 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-
-from core.config.logging import configure_logging  # noqa: E402
 
 configure_logging()

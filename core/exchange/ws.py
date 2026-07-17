@@ -19,15 +19,17 @@ EventKind = Literal["execution", "order"]
 
 @dataclass(frozen=True)
 class StreamEvent:
+    """A parsed private-stream event: an execution or an order."""
+
     kind: EventKind
     payload: Execution | Order
 
 
 class BybitPrivateStream:
-    """Subscribes to private execution + order topics and exposes them as an async iterator.
+    """Private execution/order stream exposed as an async iterator.
 
-    pybit's WebSocket invokes callbacks on its own daemon thread. We marshal each
-    message back onto the asyncio loop via call_soon_threadsafe.
+    pybit invokes callbacks on its own daemon thread; each message is
+    marshalled back onto the asyncio loop via ``call_soon_threadsafe``.
     """
 
     def __init__(
@@ -41,11 +43,14 @@ class BybitPrivateStream:
         self._api_key = api_key
         self._api_secret = api_secret
         self._testnet = testnet
-        self._queue: asyncio.Queue[StreamEvent] = asyncio.Queue(maxsize=queue_size)
+        self._queue: asyncio.Queue[StreamEvent] = asyncio.Queue(
+            maxsize=queue_size
+        )
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws: Any | None = None
 
     async def start(self) -> None:
+        """Open the private WebSocket and subscribe to the topics."""
         from pybit.unified_trading import WebSocket
 
         self._loop = asyncio.get_running_loop()
@@ -60,23 +65,31 @@ class BybitPrivateStream:
         log.info("bybit_ws.started", testnet=self._testnet)
 
     async def stop(self) -> None:
+        """Close the WebSocket, ignoring shutdown errors."""
         if self._ws is not None:
             try:
                 self._ws.exit()
-            except Exception as exc:  # pragma: no cover — best-effort shutdown
+            except Exception as exc:
                 log.warning("bybit_ws.shutdown_error", error=str(exc))
             self._ws = None
 
     async def events(self) -> AsyncIterator[StreamEvent]:
+        """Yield stream events as they arrive."""
         while True:
             yield await self._queue.get()
 
     def _on_execution(self, message: dict[str, Any]) -> None:
         for item in message.get("data", []):
             try:
-                event = StreamEvent(kind="execution", payload=_parse_execution(item))
+                event = StreamEvent(
+                    kind="execution", payload=_parse_execution(item)
+                )
             except Exception as exc:
-                log.warning("bybit_ws.parse_execution_failed", error=str(exc), item=item)
+                log.warning(
+                    "bybit_ws.parse_execution_failed",
+                    error=str(exc),
+                    item=item,
+                )
                 continue
             self._enqueue(event)
 
@@ -85,7 +98,9 @@ class BybitPrivateStream:
             try:
                 event = StreamEvent(kind="order", payload=_parse_order(item))
             except Exception as exc:
-                log.warning("bybit_ws.parse_order_failed", error=str(exc), item=item)
+                log.warning(
+                    "bybit_ws.parse_order_failed", error=str(exc), item=item
+                )
                 continue
             self._enqueue(event)
 

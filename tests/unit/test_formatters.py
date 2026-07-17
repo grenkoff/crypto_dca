@@ -33,7 +33,9 @@ def test_build_status_running() -> None:
 
 
 def test_build_status_paused_no_heartbeat() -> None:
-    snap = StatusSnapshot(paused=True, open_positions=0, started_at=None, last_heartbeat=None)
+    snap = StatusSnapshot(
+        paused=True, open_positions=0, started_at=None, last_heartbeat=None
+    )
     text = build_status(snap)
     assert "paused" in text
     assert "n/a" in text
@@ -44,7 +46,9 @@ def test_build_balance_empty() -> None:
 
 
 def test_build_balance_sorted() -> None:
-    snap = BalanceSnapshot(balances={"USDT": Decimal("100"), "BTC": Decimal("0.001")})
+    snap = BalanceSnapshot(
+        balances={"USDT": Decimal("100"), "BTC": Decimal("0.001")}
+    )
     text = build_balance(snap)
     # BTC sorts before USDT
     assert text.index("BTC") < text.index("USDT")
@@ -85,7 +89,10 @@ def test_build_pnl_rounds_to_four_decimals() -> None:
 
 
 def test_build_orders_empty() -> None:
-    assert build_orders(OrdersSnapshot(open_positions=[])) == "_no open positions_"
+    assert (
+        build_orders(OrdersSnapshot(open_positions=[]))
+        == "_no open positions_"
+    )
 
 
 def test_build_orders_rows() -> None:
@@ -114,14 +121,20 @@ def test_format_event_order_placed() -> None:
     text = format_event(
         {
             "type": "order.placed",
-            "payload": {"level": 291, "price": "0.0291", "order_id": "2254818261395047680"},
+            "payload": {
+                "level": 291,
+                "price": "0.0291",
+                "order_id": "2254818261395047680",
+            },
         }
     )
     assert text == "🔵 `0.02910`"
 
 
 def test_format_event_order_cancelled() -> None:
-    text = format_event({"type": "order.cancelled", "payload": {"price": "0.02775"}})
+    text = format_event(
+        {"type": "order.cancelled", "payload": {"price": "0.02775"}}
+    )
     assert text == "❌ `0.02775`"
 
 
@@ -129,7 +142,11 @@ def test_format_event_position_opened() -> None:
     text = format_event(
         {
             "type": "position.opened",
-            "payload": {"level": 289, "entry_price": "0.0289", "tp_price": "0.029"},
+            "payload": {
+                "level": 289,
+                "entry_price": "0.0289",
+                "tp_price": "0.029",
+            },
         }
     )
     assert text.startswith("🟢")  # green circle
@@ -144,7 +161,11 @@ def test_format_event_position_closed_profit() -> None:
     text = format_event(
         {
             "type": "position.closed",
-            "payload": {"level": 293, "price": "0.029", "realized": "0.010804278125"},
+            "payload": {
+                "level": 293,
+                "price": "0.029",
+                "realized": "0.010804278125",
+            },
         }
     )
     assert text == "💰 `0.02900` → `+0.0108` USDT"
@@ -154,7 +175,11 @@ def test_format_event_position_closed_loss() -> None:
     text = format_event(
         {
             "type": "position.closed",
-            "payload": {"level": 291, "price": "0.0289", "realized": "-0.00625031625"},
+            "payload": {
+                "level": 291,
+                "price": "0.0289",
+                "realized": "-0.00625031625",
+            },
         }
     )
     assert text == "🔴 `0.02890` → `-0.0063` USDT"

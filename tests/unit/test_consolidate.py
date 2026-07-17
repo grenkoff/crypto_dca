@@ -41,7 +41,8 @@ _COMMON = dict(
 
 def test_merges_two_positions_at_same_price() -> None:
     plan = plan_consolidation(
-        positions=[_row(342, "0.02945", day=2), _row(341, "0.02945", day=1)], **_COMMON
+        positions=[_row(342, "0.02945", day=2), _row(341, "0.02945", day=1)],
+        **_COMMON,
     )
     assert len(plan) == 1
     g = plan[0]
@@ -50,7 +51,9 @@ def test_merges_two_positions_at_same_price() -> None:
     assert g.absorbed_ids == [342]
     assert g.combined_qty == Decimal("339.56")
     assert g.weighted_entry == Decimal("0.02945")
-    assert g.new_tp_price == Decimal("0.02955")  # entry + tp_step, above market
+    assert g.new_tp_price == Decimal(
+        "0.02955"
+    )  # entry + tp_step, above market
     assert set(g.cancel_order_ids) == {"tp-341", "tp-342"}
 
 
@@ -59,18 +62,24 @@ def test_single_position_is_not_a_group() -> None:
 
 
 def test_excludes_partially_filled_positions() -> None:
-    # a position with a partial TP fill is entangled with an in-flight sell -> skip it,
-    # leaving only one clean lot at the price, so no group forms
+    # a position with a partial TP fill is entangled with an in-flight sell ->
+    # skip it, leaving only one clean lot at the price, so no group forms
     plan = plan_consolidation(
-        positions=[_row(1, "0.02945"), _row(2, "0.02945", filled="80")], **_COMMON
+        positions=[_row(1, "0.02945"), _row(2, "0.02945", filled="80")],
+        **_COMMON,
     )
     assert plan == []
 
 
 def test_weighted_entry_across_prices_rounding_to_same_level() -> None:
-    # 0.02944 and 0.02946 both round to the 0.02945 step -> one group, weighted entry
+    # 0.02944 and 0.02946 both round to the 0.02945 step -> one group, weighted
+    # entry
     plan = plan_consolidation(
-        positions=[_row(1, "0.02944", qty="100"), _row(2, "0.02946", qty="100")], **_COMMON
+        positions=[
+            _row(1, "0.02944", qty="100"),
+            _row(2, "0.02946", qty="100"),
+        ],
+        **_COMMON,
     )
     assert len(plan) == 1
     g = plan[0]
@@ -80,9 +89,12 @@ def test_weighted_entry_across_prices_rounding_to_same_level() -> None:
 
 
 def test_manual_bag_is_never_consolidated() -> None:
-    # the manual bag (level 1000..1999) intentionally stacks many lots at one entry
-    # with laddered TPs — it must be left untouched even though it shares a price
-    bag = [_row(i, "0.052", level=1000 + i, tp=f"ladder-{i}") for i in range(5)]
+    # the manual bag (level 1000..1999) intentionally stacks many lots at one
+    # entry with laddered TPs — it must be left untouched even though it shares
+    # a price
+    bag = [
+        _row(i, "0.052", level=1000 + i, tp=f"ladder-{i}") for i in range(5)
+    ]
     assert plan_consolidation(positions=bag, **_COMMON) == []
 
 
@@ -100,10 +112,11 @@ def test_readopt_dupes_merge_but_bag_excluded_in_mixed_input() -> None:
 
 
 def test_tp_floored_at_market_when_recomputed_tp_below_price() -> None:
-    # deep underwater lot: entry far below market -> merged sell must not cross, floored
-    # one tick above the market price
+    # deep underwater lot: entry far below market -> merged sell must not
+    # cross, floored one tick above the market price
     common = {**_COMMON, "market_price": Decimal("0.0400")}
     plan = plan_consolidation(
-        positions=[_row(1, "0.0290", day=1), _row(2, "0.0290", day=2)], **common
+        positions=[_row(1, "0.0290", day=1), _row(2, "0.0290", day=2)],
+        **common,
     )
     assert plan[0].new_tp_price == Decimal("0.04001")

@@ -1,16 +1,8 @@
-"""Merge duplicate open positions sitting at the same price into one lot.
+"""Merge duplicate open positions at the same price into one lot.
 
-Historical races left some prices carrying two or more open positions, each with
-its own resting sell — the very stacking the one-buy-per-level rule now prevents.
-This collapses each such group into a single position (cost-weighted entry, one
-take-profit over the combined quantity), cancelling the group's sells and placing
-one merged sell in their place.
-
-Dry-run by default; pass ``--commit`` to cancel/replace orders and rewrite rows.
-Run with the trader STOPPED so its heal loop does not race the cancels.
-
-    uv run python manage.py consolidate_positions            # preview
-    uv run python manage.py consolidate_positions --commit    # execute
+Collapses each same-price group into one position (cost-weighted entry,
+one TP). Dry-run by default; ``--commit`` to act. Run with the trader
+stopped so its heal loop does not race the cancels.
 """
 
 from __future__ import annotations
@@ -32,18 +24,29 @@ from core.trading.models import StrategyConfig
 
 
 class Command(BaseCommand):
-    help = "Collapse duplicate open positions at the same price into a single lot + sell."
+    """Merge duplicate same-price open positions into one lot."""
+
+    help = (
+        "Collapse duplicate open positions at the same price into a "
+        "single lot + sell."
+    )
 
     def add_arguments(self, parser: CommandParser) -> None:
-        parser.add_argument("--commit", action="store_true", help="Cancel/replace and rewrite.")
+        """Register CLI arguments."""
+        parser.add_argument(
+            "--commit", action="store_true", help="Cancel/replace and rewrite."
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
+        """Run the consolidation (dry-run unless --commit)."""
         asyncio.run(self._run(commit=options["commit"]))
 
     async def _run(self, *, commit: bool) -> None:
         creds = bybit_settings()
         if not creds.api_key or not creds.api_secret:
-            self.stdout.write(self.style.ERROR("BYBIT_API_KEY / SECRET not set."))
+            self.stdout.write(
+                self.style.ERROR("BYBIT_API_KEY / SECRET not set.")
+            )
             raise SystemExit(1)
         client = BybitClient.from_credentials(
             creds.api_key, creds.api_secret, testnet=creds.testnet
@@ -66,26 +69,43 @@ class Command(BaseCommand):
             market_price=price,
         )
 
-        self.stdout.write(self.style.MIGRATE_HEADING("\n=== CONSOLIDATION PLAN ==="))
+        self.stdout.write(
+            self.style.MIGRATE_HEADING("\n=== CONSOLIDATION PLAN ===")
+        )
         if not plan:
-            self.stdout.write("no duplicate-price positions — nothing to consolidate.")
+            self.stdout.write(
+                "no duplicate-price positions — nothing to consolidate."
+            )
             return
         for g in plan:
             self.stdout.write(
-                f"  @ {g.price_key}: keep #{g.survivor_id}, absorb {g.absorbed_ids} -> "
-                f"{g.combined_qty} @ entry {g.weighted_entry} -> TP {g.new_tp_price} "
-                f"(=${g.combined_qty * g.new_tp_price:.2f}), cancel {len(g.cancel_order_ids)} sell(s)"
+                f"  @ {g.price_key}: keep #{g.survivor_id}, "
+                f"absorb {g.absorbed_ids} -> {g.combined_qty} "
+                f"@ entry {g.weighted_entry} -> TP {g.new_tp_price} "
+                f"(=${g.combined_qty * g.new_tp_price:.2f}), "
+                f"cancel {len(g.cancel_order_ids)} sell(s)"
             )
         absorbed = sum(len(g.absorbed_ids) for g in plan)
-        self.stdout.write(f"total: {len(plan)} group(s), {absorbed} position(s) absorbed")
+        self.stdout.write(
+            f"total: {len(plan)} group(s), {absorbed} position(s) absorbed"
+        )
 
         if not commit:
             self.stdout.write(
-                self.style.WARNING("\nDRY-RUN — nothing changed. Re-run with --commit.")
+                self.style.WARNING(
+                    "\nDRY-RUN — nothing changed. Re-run with --commit."
+                )
             )
             return
 
-        done = await commit_consolidation(client=client, symbol=symbol, config=config, plan=plan)
+        done = await commit_consolidation(
+            client=client, symbol=symbol, config=config, plan=plan
+        )
         for g in done:
-            self.stdout.write(f"merged @ {g.price_key}: #{g.survivor_id} now {g.combined_qty}")
-        self.stdout.write(self.style.SUCCESS(f"\nConsolidated {len(done)} group(s)."))
+            self.stdout.write(
+                f"merged @ {g.price_key}: "
+                f"#{g.survivor_id} now {g.combined_qty}"
+            )
+        self.stdout.write(
+            self.style.SUCCESS(f"\nConsolidated {len(done)} group(s).")
+        )

@@ -12,7 +12,13 @@ import structlog
 from asgiref.sync import sync_to_async
 
 from core.exchange.bybit import BybitClient
-from core.trading.models import BotStatus, GridLevel, LevelStatus, Position, PositionStatus
+from core.trading.models import (
+    BotStatus,
+    GridLevel,
+    LevelStatus,
+    Position,
+    PositionStatus,
+)
 
 log = structlog.get_logger()
 

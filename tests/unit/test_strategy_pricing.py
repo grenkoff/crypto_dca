@@ -64,7 +64,8 @@ def test_min_profit_overrides_when_tp_step_too_small() -> None:
 
 
 def test_breakeven_floor_when_min_profit_zero() -> None:
-    # min_profit=0 -> floor is break-even; a below-break-even tp_step is lifted to it
+    # min_profit=0 -> floor is break-even; a below-break-even tp_step is lifted
+    # to it
     entry = Decimal("0.03100")
     qty = Decimal("193.54")
     fees_in = entry * qty * Decimal("0.000625")
@@ -89,8 +90,8 @@ def test_breakeven_floor_when_min_profit_zero() -> None:
 
 
 def test_min_notional_floor_lifts_tp_for_small_position() -> None:
-    # 164.91 KAS: entry+tp_step = 0.0303 -> notional $4.997 < $5, so TP is lifted
-    # until the sell clears the exchange minimum.
+    # 164.91 KAS: entry+tp_step = 0.0303 -> notional $4.997 < $5, so TP is
+    # lifted until the sell clears the exchange minimum.
     entry = Decimal("0.0302")
     qty = Decimal("164.91")
     tp = compute_tp_price(

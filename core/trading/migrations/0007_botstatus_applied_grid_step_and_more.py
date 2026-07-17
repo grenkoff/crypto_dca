@@ -12,11 +12,15 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="botstatus",
             name="applied_grid_step",
-            field=models.DecimalField(blank=True, decimal_places=12, max_digits=28, null=True),
+            field=models.DecimalField(
+                blank=True, decimal_places=12, max_digits=28, null=True
+            ),
         ),
         migrations.AddField(
             model_name="botstatus",
             name="applied_order_qty",
-            field=models.DecimalField(blank=True, decimal_places=12, max_digits=28, null=True),
+            field=models.DecimalField(
+                blank=True, decimal_places=12, max_digits=28, null=True
+            ),
         ),
     ]

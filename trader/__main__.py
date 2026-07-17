@@ -1,3 +1,5 @@
+"""Trader daemon entrypoint: bootstrap and run the live TraderRuntime."""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,6 +12,7 @@ log = structlog.get_logger()
 
 
 async def run() -> None:
+    """Configure logging and Django, build the bus, run the trader."""
     from core.config.logging import configure_logging
 
     configure_logging()
@@ -35,6 +38,7 @@ async def run() -> None:
 
 
 def main() -> None:
+    """Console entrypoint: run the async trader to completion."""
     asyncio.run(run())
 
 

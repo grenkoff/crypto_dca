@@ -1,9 +1,8 @@
 """Dry-run wrapper around BybitClient.
 
-Reads pass through to the real client; mutating calls (place/cancel) are logged
-and return fake order IDs without touching the exchange. Useful for verifying
-that the trader produces the expected sequence of operations before risking
-real funds.
+Reads pass through to the real client; mutating calls (place/cancel) are
+logged and faked, so the trader's operation sequence can be verified
+without touching the exchange.
 """
 
 from __future__ import annotations
@@ -26,24 +25,27 @@ class DryRunBybitClient:
         self._inner = inner
         self._counter = 0
 
-    # --- reads pass through -------------------------------------------------
-
     async def get_instrument(self, symbol: str) -> Instrument:
+        """Pass through to the real client."""
         return await self._inner.get_instrument(symbol)
 
     async def get_last_price(self, symbol: str) -> Decimal:
+        """Pass through to the real client."""
         return await self._inner.get_last_price(symbol)
 
     async def get_balances(self) -> dict[str, Balance]:
+        """Pass through to the real client."""
         return await self._inner.get_balances()
 
     async def get_open_orders(self, symbol: str) -> list[Order]:
+        """Pass through to the real client."""
         return await self._inner.get_open_orders(symbol)
 
-    async def get_executions(self, symbol: str, *, limit: int = 50) -> list[Execution]:
+    async def get_executions(
+        self, symbol: str, *, limit: int = 50
+    ) -> list[Execution]:
+        """Pass through to the real client."""
         return await self._inner.get_executions(symbol, limit=limit)
-
-    # --- mutations are no-ops ----------------------------------------------
 
     async def place_limit(
         self,
@@ -55,6 +57,7 @@ class DryRunBybitClient:
         order_link_id: str | None = None,
         post_only: bool = True,
     ) -> str:
+        """Log the intended order and return a fake order id."""
         self._counter += 1
         fake_id = f"dry-{self._counter}-{uuid.uuid4().hex[:8]}"
         log.info(
@@ -69,7 +72,9 @@ class DryRunBybitClient:
         return fake_id
 
     async def cancel_order(self, symbol: str, order_id: str) -> None:
+        """Log the intended cancel (no-op)."""
         log.info("dry_run.cancel_order", symbol=symbol, order_id=order_id)
 
     async def cancel_all(self, symbol: str) -> None:
+        """Log the intended cancel-all (no-op)."""
         log.info("dry_run.cancel_all", symbol=symbol)

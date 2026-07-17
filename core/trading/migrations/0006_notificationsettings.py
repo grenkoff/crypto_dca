@@ -16,7 +16,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.SmallIntegerField(
-                        default=1, editable=False, primary_key=True, serialize=False
+                        default=1,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
                     ),
                 ),
                 ("notify_errors", models.BooleanField(default=True)),
@@ -25,7 +28,10 @@ class Migration(migrations.Migration):
                 ("notify_opened", models.BooleanField(default=True)),
                 ("notify_order_placed", models.BooleanField(default=True)),
                 ("digest_enabled", models.BooleanField(default=True)),
-                ("digest_time_utc", models.TimeField(default=datetime.time(19, 0))),
+                (
+                    "digest_time_utc",
+                    models.TimeField(default=datetime.time(19, 0)),
+                ),
                 ("digest_last_sent", models.DateField(blank=True, null=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
             ],

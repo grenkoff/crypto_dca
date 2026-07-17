@@ -1,23 +1,8 @@
 """Adopt manually-held spot inventory into the bot as OPEN positions.
 
-Two sources are folded into the strategy so pairwise compensation can work them
-toward break-even out of future realized profit:
-
-1. **Existing sell orders** already resting on the exchange become positions
-   linked to those orders (no new orders are placed).
-2. **Naked base balance** (coins held with no sell order) is chunked and gets
-   fresh take-profit sell orders priced at the guaranteed-profit minimum.
-
-Because the true cost basis of a manual bag is unknown, an ``--entry`` estimate
-is supplied. The per-pair realized result of every compensated close equals
-``(entry_estimate - true_cost) * qty``, so **over-estimating entry guarantees a
-non-negative real outcome**. Pick ``--entry`` at or above the real average.
-
-Dry-run by default (prints the plan, touches nothing). Pass ``--commit`` to
-place the naked take-profit orders and write the Position rows.
-
-    uv run python manage.py adopt_positions --entry 0.052            # preview
-    uv run python manage.py adopt_positions --entry 0.052 --commit   # execute
+Existing sell orders become linked positions; naked balance gets fresh
+take-profit sells. Supply ``--entry`` at or above the real average
+(over-estimating guarantees a non-negative outcome); ``--commit`` to run.
 """
 
 from __future__ import annotations
@@ -26,7 +11,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from asgiref.sync import sync_to_async
 from django.core.management.base import BaseCommand, CommandParser
@@ -39,57 +24,78 @@ from core.exchange.types import Instrument, Order, OrderStatus, Side
 from core.strategy.rounding import round_down_to_tick, round_up_to_tick
 from core.trading.models import Position, PositionStatus, StrategyConfig
 
-# Adopted positions live outside the bot's own grid index range (0..max_open_orders)
-# so they never collide with generated grid levels.
 ADOPTED_LEVEL_BASE = 1000
 
-# Leave a sliver of base coin unsold to absorb rounding / fee dust.
 DUST_KEEP = Decimal("0.99")
 
 
 @dataclass
 class PlannedPosition:
-    kind: str  # "existing" | "naked"
+    """A planned adoption: a position to write and its TP order."""
+
+    kind: str
     qty: Decimal
     entry: Decimal
     fees_in: Decimal
     tp_price: Decimal
-    tp_order_id: str  # empty for naked until placed
+    tp_order_id: str
     level_index: int
 
 
-def _breakeven_tp(entry: Decimal, qty: Decimal, fees_in: Decimal, maker_fee: Decimal) -> Decimal:
-    """Lowest sell price whose net PnL is >= 0 against ``entry`` (before min-profit)."""
+def _breakeven_tp(
+    entry: Decimal, qty: Decimal, fees_in: Decimal, maker_fee: Decimal
+) -> Decimal:
+    """Lowest sell price whose net PnL is >= 0 against ``entry`` (before min-
+    profit)."""
     return (entry * qty + fees_in) / (qty * (Decimal(1) - maker_fee))
 
 
 class Command(BaseCommand):
-    help = "Adopt manually-held spot inventory (open sells + naked balance) as bot positions."
+    """Adopt manually-held spot inventory as bot positions."""
+
+    help = (
+        "Adopt manually-held spot inventory (open sells + naked balance) "
+        "as bot positions."
+    )
 
     def add_arguments(self, parser: CommandParser) -> None:
+        """Register CLI arguments."""
         parser.add_argument(
             "--entry",
             type=Decimal,
             default=Decimal("0.052"),
-            help="Estimated average entry price of the manual bag (over-estimate to stay safe).",
+            help=(
+                "Estimated average entry price of the manual bag "
+                "(over-estimate to stay safe)."
+            ),
         )
         parser.add_argument(
             "--commit",
             action="store_true",
-            help="Actually place naked take-profit orders and write positions (default: dry-run).",
+            help=(
+                "Actually place naked take-profit orders and write "
+                "positions (default: dry-run)."
+            ),
         )
         parser.add_argument(
             "--skip-naked",
             action="store_true",
-            help="Only adopt existing sell orders; leave naked balance untouched.",
+            help=(
+                "Only adopt existing sell orders; leave naked balance "
+                "untouched."
+            ),
         )
         parser.add_argument(
             "--force",
             action="store_true",
-            help="Proceed even if OPEN positions already exist (re-adoption guard).",
+            help=(
+                "Proceed even if OPEN positions already exist "
+                "(re-adoption guard)."
+            ),
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
+        """Run the adoption (dry-run unless --commit)."""
         asyncio.run(self._run(options))
 
     async def _run(self, opts: dict[str, Any]) -> None:
@@ -101,18 +107,23 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.ERROR(
                     f"{existing_open} OPEN position(s) already exist. "
-                    "Re-running would duplicate them. Pass --force only if you know why."
+                    "Re-running would duplicate them. Pass --force only "
+                    "if you know why."
                 )
             )
             raise SystemExit(1)
 
         creds = bybit_settings()
         if not creds.api_key or not creds.api_secret:
-            self.stdout.write(self.style.ERROR("BYBIT_API_KEY / SECRET not set."))
+            self.stdout.write(
+                self.style.ERROR("BYBIT_API_KEY / SECRET not set.")
+            )
             raise SystemExit(1)
 
-        real = BybitClient.from_credentials(creds.api_key, creds.api_secret, testnet=creds.testnet)
-        client: BybitClient = real if commit else DryRunBybitClient(real)  # type: ignore[assignment]
+        real = BybitClient.from_credentials(
+            creds.api_key, creds.api_secret, testnet=creds.testnet
+        )
+        client = cast(BybitClient, real if commit else DryRunBybitClient(real))
 
         config = await sync_to_async(StrategyConfig.load)()
         symbol = str(config.symbol)
@@ -122,26 +133,30 @@ class Command(BaseCommand):
         orders = await real.get_open_orders(symbol)
         balances = await real.get_balances()
 
-        # Only resting limit sells hold inventory; skip conditional/untriggered orders.
         resting = {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED}
-        sells = [o for o in orders if o.side == Side.SELL and o.status in resting]
+        sells = [
+            o for o in orders if o.side == Side.SELL and o.status in resting
+        ]
         free_base = (
-            balances[instrument.base_coin].free if instrument.base_coin in balances else Decimal(0)
+            balances[instrument.base_coin].free
+            if instrument.base_coin in balances
+            else Decimal(0)
         )
 
         self.stdout.write(
-            f"symbol={symbol} price={price} entry_estimate={entry} maker_fee={maker_fee}"
+            f"symbol={symbol} price={price} "
+            f"entry_estimate={entry} maker_fee={maker_fee}"
         )
         self.stdout.write(
-            f"instrument: tick={instrument.tick_size} lot={instrument.lot_size} "
-            f"min_qty={instrument.min_order_qty} min_amt={instrument.min_order_amt}"
+            f"instrument: tick={instrument.tick_size} "
+            f"lot={instrument.lot_size} min_qty={instrument.min_order_qty} "
+            f"min_amt={instrument.min_order_amt}"
         )
         self._sanity(entry, price, sells)
 
         plan: list[PlannedPosition] = []
         level = ADOPTED_LEVEL_BASE
 
-        # 1. Existing sell orders -> positions bound to those orders.
         for o in sells:
             fees_in = entry * o.qty * maker_fee
             plan.append(
@@ -157,7 +172,6 @@ class Command(BaseCommand):
             )
             level += 1
 
-        # 2. Naked base balance -> chunked positions with fresh TP sells.
         naked_chunks: list[Decimal] = []
         if not opts["skip_naked"]:
             naked_chunks = _chunk_naked(
@@ -190,18 +204,22 @@ class Command(BaseCommand):
         if not commit:
             self.stdout.write(
                 self.style.WARNING(
-                    "\nDRY-RUN: nothing placed or written. Re-run with --commit to execute."
+                    "\nDRY-RUN: nothing placed or written. "
+                    "Re-run with --commit to execute."
                 )
             )
             return
 
         await self._commit(plan, client, symbol, instrument)
 
-    def _sanity(self, entry: Decimal, price: Decimal, sells: list[Order]) -> None:
+    def _sanity(
+        self, entry: Decimal, price: Decimal, sells: list[Order]
+    ) -> None:
         if entry <= price:
             self.stdout.write(
                 self.style.ERROR(
-                    f"entry_estimate {entry} <= current price {price}: the bag is not underwater "
+                    f"entry_estimate {entry} <= current price {price}: "
+                    f"the bag is not underwater "
                     "at this estimate; adoption math is meaningless. Aborting."
                 )
             )
@@ -211,7 +229,8 @@ class Command(BaseCommand):
             above = len(sells) - len(below)
             self.stdout.write(
                 self.style.WARNING(
-                    f"{above} existing sell(s) priced ABOVE entry_estimate {entry} — those close "
+                    f"{above} existing sell(s) priced ABOVE "
+                    f"entry_estimate {entry} — those close "
                     "in real profit already; fine, just noting."
                 )
             )
@@ -233,19 +252,24 @@ class Command(BaseCommand):
         )
         for p in existing:
             self.stdout.write(
-                f"  L{p.level_index}  qty={p.qty}  TP@{p.tp_price} (order {p.tp_order_id[:12]})"
+                f"  L{p.level_index}  qty={p.qty}  TP@{p.tp_price} "
+                f"(order {p.tp_order_id[:12]})"
             )
         self.stdout.write(
-            f"\nNaked balance -> {len(naked)} new TP sell order(s) at break-even+min_profit:"
+            f"\nNaked balance -> {len(naked)} new TP sell order(s) "
+            f"at break-even+min_profit:"
         )
         for p in naked:
-            self.stdout.write(f"  L{p.level_index}  qty={p.qty}  new TP@{p.tp_price}")
+            self.stdout.write(
+                f"  L{p.level_index}  qty={p.qty}  new TP@{p.tp_price}"
+            )
 
         adopted_qty = sum(p.qty for p in plan)
         naked_qty = sum(p.qty for p in naked)
         self.stdout.write("")
         self.stdout.write(
-            f"Totals: {len(plan)} positions, {adopted_qty} {instrument.base_coin} adopted "
+            f"Totals: {len(plan)} positions, "
+            f"{adopted_qty} {instrument.base_coin} adopted "
             f"({naked_qty} of it into {len(naked)} fresh sells)."
         )
         self.stdout.write(
@@ -260,7 +284,6 @@ class Command(BaseCommand):
         symbol: str,
         instrument: Instrument,
     ) -> None:
-        # Place naked TP sells first; capture their order ids before writing rows.
         for p in plan:
             if p.kind == "naked":
                 p.tp_order_id = await client.place_limit(
@@ -270,10 +293,14 @@ class Command(BaseCommand):
                     p.tp_price,
                     order_link_id=f"adopt-naked-{p.level_index}",
                 )
-                self.stdout.write(f"placed naked sell L{p.level_index}: {p.tp_order_id}")
+                self.stdout.write(
+                    f"placed naked sell L{p.level_index}: {p.tp_order_id}"
+                )
 
         await sync_to_async(_write_positions)(plan)
-        self.stdout.write(self.style.SUCCESS(f"\nAdopted {len(plan)} positions. Done."))
+        self.stdout.write(
+            self.style.SUCCESS(f"\nAdopted {len(plan)} positions. Done.")
+        )
 
 
 def _chunk_naked(
@@ -283,21 +310,28 @@ def _chunk_naked(
     entry: Decimal,
     instrument: Instrument,
 ) -> list[Decimal]:
-    """Split free base balance into lot-aligned chunks of ~target_notional each."""
+    """Split free base balance into lot-aligned chunks of ~target_notional
+    each."""
     chunk = round_down_to_tick(target_notional / entry, instrument.lot_size)
-    if chunk < instrument.min_order_qty or chunk * entry < instrument.min_order_amt:
-        # Bump chunk until it clears both minimums.
+    if (
+        chunk < instrument.min_order_qty
+        or chunk * entry < instrument.min_order_amt
+    ):
         chunk = max(
             instrument.min_order_qty,
-            round_up_to_tick(instrument.min_order_amt / entry, instrument.lot_size),
+            round_up_to_tick(
+                instrument.min_order_amt / entry, instrument.lot_size
+            ),
         )
     chunks: list[Decimal] = []
     remaining = round_down_to_tick(free_base, instrument.lot_size)
     while remaining >= chunk:
         chunks.append(chunk)
         remaining -= chunk
-    # Fold a valid remainder into a final chunk.
-    if remaining >= instrument.min_order_qty and remaining * entry >= instrument.min_order_amt:
+    if (
+        remaining >= instrument.min_order_qty
+        and remaining * entry >= instrument.min_order_amt
+    ):
         chunks.append(remaining)
     return chunks
 

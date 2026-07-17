@@ -20,7 +20,8 @@ def _instrument(lot: str = "0.01", min_amt: str = "5") -> Instrument:
 
 def test_boundary_bumps_one_lot_to_clear_minimum() -> None:
     inst = _instrument()
-    # $5 / 0.0287 = 174.216 -> floor 174.21 -> $4.9998 (below min) -> bump to 174.22
+    # $5 / 0.0287 = 174.216 -> floor 174.21 -> $4.9998 (below min) -> bump to
+    # 174.22
     qty = compute_buy_qty(Decimal("5"), Decimal("0.0287"), inst)
     assert qty == Decimal("174.22")
     assert qty * Decimal("0.0287") >= inst.min_order_amt

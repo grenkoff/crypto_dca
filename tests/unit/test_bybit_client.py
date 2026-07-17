@@ -56,11 +56,23 @@ class FakeHTTP:
 
 
 def _ok(result: dict[str, Any]) -> dict[str, Any]:
-    return {"retCode": 0, "retMsg": "OK", "result": result, "time": 0, "retExtInfo": {}}
+    return {
+        "retCode": 0,
+        "retMsg": "OK",
+        "result": result,
+        "time": 0,
+        "retExtInfo": {},
+    }
 
 
 def _err(code: int, msg: str = "fail") -> dict[str, Any]:
-    return {"retCode": code, "retMsg": msg, "result": {}, "time": 0, "retExtInfo": {}}
+    return {
+        "retCode": code,
+        "retMsg": msg,
+        "result": {},
+        "time": 0,
+        "retExtInfo": {},
+    }
 
 
 @pytest.fixture
@@ -73,7 +85,9 @@ def client(http: FakeHTTP) -> BybitClient:
     return BybitClient(http)
 
 
-async def test_get_instrument_parses_filters(http: FakeHTTP, client: BybitClient) -> None:
+async def test_get_instrument_parses_filters(
+    http: FakeHTTP, client: BybitClient
+) -> None:
     http.responses["get_instruments_info"] = _ok(
         {
             "list": [
@@ -98,7 +112,9 @@ async def test_get_instrument_parses_filters(http: FakeHTTP, client: BybitClient
     assert http.calls[0][1] == {"category": "spot", "symbol": "BTCUSDT"}
 
 
-async def test_get_instrument_not_found(http: FakeHTTP, client: BybitClient) -> None:
+async def test_get_instrument_not_found(
+    http: FakeHTTP, client: BybitClient
+) -> None:
     http.responses["get_instruments_info"] = _ok({"list": []})
     with pytest.raises(BybitError, match="not found"):
         await client.get_instrument("FOO")
@@ -141,9 +157,15 @@ async def test_get_balances(http: FakeHTTP, client: BybitClient) -> None:
 
 
 async def test_place_limit_buy(http: FakeHTTP, client: BybitClient) -> None:
-    http.responses["place_order"] = _ok({"orderId": "abc-123", "orderLinkId": ""})
+    http.responses["place_order"] = _ok(
+        {"orderId": "abc-123", "orderLinkId": ""}
+    )
     order_id = await client.place_limit(
-        "BTCUSDT", Side.BUY, Decimal("0.001"), Decimal("60000"), order_link_id="grid-7"
+        "BTCUSDT",
+        Side.BUY,
+        Decimal("0.001"),
+        Decimal("60000"),
+        order_link_id="grid-7",
     )
     assert order_id == "abc-123"
     call = http.calls[0][1]
@@ -154,7 +176,9 @@ async def test_place_limit_buy(http: FakeHTTP, client: BybitClient) -> None:
     assert call["orderLinkId"] == "grid-7"
 
 
-async def test_cancel_order_and_all(http: FakeHTTP, client: BybitClient) -> None:
+async def test_cancel_order_and_all(
+    http: FakeHTTP, client: BybitClient
+) -> None:
     http.responses["cancel_order"] = _ok({"orderId": "abc"})
     http.responses["cancel_all_orders"] = _ok({"list": []})
     await client.cancel_order("BTCUSDT", "abc")
@@ -227,4 +251,6 @@ async def test_error_mapping(
 ) -> None:
     http.responses["place_order"] = _err(code, "boom")
     with pytest.raises(exc):
-        await client.place_limit("BTCUSDT", Side.BUY, Decimal("0.001"), Decimal("60000"))
+        await client.place_limit(
+            "BTCUSDT", Side.BUY, Decimal("0.001"), Decimal("60000")
+        )

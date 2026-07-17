@@ -13,6 +13,8 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="position",
             name="compensation_credit",
-            field=models.DecimalField(decimal_places=12, default=Decimal("0"), max_digits=28),
+            field=models.DecimalField(
+                decimal_places=12, default=Decimal("0"), max_digits=28
+            ),
         ),
     ]

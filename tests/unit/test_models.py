@@ -39,7 +39,9 @@ def test_bot_status_singleton_defaults() -> None:
 def test_grid_level_unique_index() -> None:
     GridLevel.objects.create(level_index=0, target_buy_price=Decimal("60000"))
     with pytest.raises(IntegrityError):
-        GridLevel.objects.create(level_index=0, target_buy_price=Decimal("59000"))
+        GridLevel.objects.create(
+            level_index=0, target_buy_price=Decimal("59000")
+        )
 
 
 def test_position_is_open() -> None:

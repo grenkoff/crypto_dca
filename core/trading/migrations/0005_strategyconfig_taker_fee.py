@@ -13,6 +13,8 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="strategyconfig",
             name="taker_fee",
-            field=models.DecimalField(decimal_places=8, default=Decimal("0.00075"), max_digits=10),
+            field=models.DecimalField(
+                decimal_places=8, default=Decimal("0.00075"), max_digits=10
+            ),
         ),
     ]

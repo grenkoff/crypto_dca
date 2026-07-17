@@ -1,9 +1,11 @@
-#!/usr/bin/env python
+"""Django management CLI entrypoint."""
+
 import os
 import sys
 
 
 def main() -> None:
+    """Run Django's command-line utility with the project settings."""
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "web.settings")
     from django.core.management import execute_from_command_line
 

@@ -1,3 +1,5 @@
+"""Telegram bot entrypoint: polling, digest scheduler, event subscriber."""
+
 from __future__ import annotations
 
 import asyncio
@@ -12,6 +14,7 @@ log = structlog.get_logger()
 
 
 async def run() -> None:
+    """Start the bot polling, digest scheduler and Redis subscriber."""
     from core.config.logging import configure_logging
 
     configure_logging()
@@ -44,7 +47,9 @@ async def run() -> None:
 
     log.info("tgbot.starting", has_redis=bus is not None)
 
-    polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+    polling_task = asyncio.create_task(
+        dp.start_polling(bot, handle_signals=False)
+    )
     digest_task = asyncio.create_task(run_digest_scheduler(bot, stop))
     subscriber_task: asyncio.Task[None] | None = None
     if bus is not None:
@@ -70,6 +75,7 @@ async def run() -> None:
 
 
 def main() -> None:
+    """Console entrypoint: run the async bot to completion."""
     asyncio.run(run())
 
 

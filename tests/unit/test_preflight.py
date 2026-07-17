@@ -10,7 +10,9 @@ from django.core.management import call_command
 pytestmark = pytest.mark.django_db
 
 
-def test_preflight_fails_with_no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preflight_fails_with_no_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("BYBIT_API_KEY", "")
     monkeypatch.setenv("BYBIT_API_SECRET", "")
     monkeypatch.setenv("REDIS_URL", "")
@@ -33,7 +35,8 @@ def test_preflight_fails_with_no_credentials(monkeypatch: pytest.MonkeyPatch) ->
 def test_preflight_warns_when_strategy_config_defaults_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With default sane config + no creds, we still expect creds-fail; the config check should pass."""
+    """With default sane config + no creds, we still expect creds-fail; the
+    config check should pass."""
     monkeypatch.setenv("BYBIT_API_KEY", "")
     monkeypatch.setenv("BYBIT_API_SECRET", "")
     monkeypatch.setenv("REDIS_URL", "")
