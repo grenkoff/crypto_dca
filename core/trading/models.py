@@ -4,12 +4,19 @@ from __future__ import annotations
 
 from datetime import time
 from decimal import Decimal
-from typing import Self
+from typing import Any, Self
 
 from django.db import models
 
 PRICE_DIGITS = 28
 PRICE_DECIMALS = 12
+
+
+def _amount(**kwargs: Any) -> models.DecimalField[Decimal, Decimal]:
+    """A price/quantity ``DecimalField`` at the shared precision."""
+    return models.DecimalField(
+        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS, **kwargs
+    )
 
 
 class _Singleton(models.Model):
@@ -60,33 +67,19 @@ class StrategyConfig(_Singleton):
     grid_mode = models.CharField(
         max_length=16, choices=GridMode.choices, default=GridMode.PERCENT
     )
-    grid_step = models.DecimalField(
-        max_digits=PRICE_DIGITS,
-        decimal_places=PRICE_DECIMALS,
-        default=Decimal("0.005"),
-    )
-    tp_step = models.DecimalField(
-        max_digits=PRICE_DIGITS,
-        decimal_places=PRICE_DECIMALS,
+    grid_step = _amount(default=Decimal("0.005"))
+    tp_step = _amount(
         default=Decimal("0.00005"),
         help_text="Absolute price offset above entry for the take-profit.",
     )
-    order_qty_quote = models.DecimalField(
-        max_digits=PRICE_DIGITS,
-        decimal_places=PRICE_DECIMALS,
-        default=Decimal("10"),
-    )
+    order_qty_quote = _amount(default=Decimal("10"))
     top_anchor = models.DecimalField(
         max_digits=PRICE_DIGITS,
         decimal_places=PRICE_DECIMALS,
         null=True,
         blank=True,
     )
-    min_profit_quote = models.DecimalField(
-        max_digits=PRICE_DIGITS,
-        decimal_places=PRICE_DECIMALS,
-        default=Decimal("0.01"),
-    )
+    min_profit_quote = _amount(default=Decimal("0.01"))
     maker_fee = models.DecimalField(
         max_digits=10, decimal_places=8, default=Decimal("0.001")
     )
@@ -158,9 +151,7 @@ class GridLevel(models.Model):
     """A grid price level and its current buy-order state."""
 
     level_index = models.IntegerField(unique=True)
-    target_buy_price = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
-    )
+    target_buy_price = _amount()
     current_buy_order_id = models.CharField(max_length=64, blank=True)
     status = models.CharField(
         max_length=16, choices=LevelStatus.choices, default=LevelStatus.IDLE
@@ -178,32 +169,12 @@ class Position(models.Model):
     """An opened lot: entry, quantity, take-profit, and realized PnL."""
 
     level_index = models.IntegerField()
-    entry_price = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
-    )
-    qty = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
-    )
-    fees_in = models.DecimalField(
-        max_digits=PRICE_DIGITS,
-        decimal_places=PRICE_DECIMALS,
-        default=Decimal(0),
-    )
-    fees_out = models.DecimalField(
-        max_digits=PRICE_DIGITS,
-        decimal_places=PRICE_DECIMALS,
-        default=Decimal(0),
-    )
-    filled_qty = models.DecimalField(
-        max_digits=PRICE_DIGITS,
-        decimal_places=PRICE_DECIMALS,
-        default=Decimal(0),
-    )
-    sell_value = models.DecimalField(
-        max_digits=PRICE_DIGITS,
-        decimal_places=PRICE_DECIMALS,
-        default=Decimal(0),
-    )
+    entry_price = _amount()
+    qty = _amount()
+    fees_in = _amount(default=Decimal(0))
+    fees_out = _amount(default=Decimal(0))
+    filled_qty = _amount(default=Decimal(0))
+    sell_value = _amount(default=Decimal(0))
     tp_order_id = models.CharField(max_length=64, blank=True)
     tp_price = models.DecimalField(
         max_digits=PRICE_DIGITS,
@@ -216,16 +187,8 @@ class Position(models.Model):
         choices=PositionStatus.choices,
         default=PositionStatus.OPEN,
     )
-    realized_pnl = models.DecimalField(
-        max_digits=PRICE_DIGITS,
-        decimal_places=PRICE_DECIMALS,
-        default=Decimal(0),
-    )
-    compensation_credit = models.DecimalField(
-        max_digits=PRICE_DIGITS,
-        decimal_places=PRICE_DECIMALS,
-        default=Decimal(0),
-    )
+    realized_pnl = _amount(default=Decimal(0))
+    compensation_credit = _amount(default=Decimal(0))
     opened_at = models.DateTimeField()
     closed_at = models.DateTimeField(null=True, blank=True)
 
@@ -256,15 +219,9 @@ class ExecutionLog(models.Model):
     order_id = models.CharField(max_length=64, db_index=True)
     symbol = models.CharField(max_length=32)
     side = models.CharField(max_length=8, choices=OrderSide.choices)
-    price = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
-    )
-    qty = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
-    )
-    fee = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
-    )
+    price = _amount()
+    qty = _amount()
+    fee = _amount()
     fee_coin = models.CharField(max_length=16, blank=True)
     executed_at = models.DateTimeField()
     received_at = models.DateTimeField(auto_now_add=True)
@@ -286,12 +243,8 @@ class CompensationLink(models.Model):
         on_delete=models.CASCADE,
         related_name="compensations_received",
     )
-    profit_applied = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
-    )
-    new_tp_price = models.DecimalField(
-        max_digits=PRICE_DIGITS, decimal_places=PRICE_DECIMALS
-    )
+    profit_applied = _amount()
+    new_tp_price = _amount()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

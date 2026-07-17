@@ -9,7 +9,6 @@ from typing import Any
 from asgiref.sync import sync_to_async
 from django.db.models import F, QuerySet, Sum
 
-from core.config.settings import bybit_settings
 from core.exchange.bybit import BybitClient
 from core.trading.models import (
     BotStatus,
@@ -26,6 +25,11 @@ from tgbot.formatters import (
     StatusSnapshot,
 )
 from tgbot.notify_settings import ASTANA_OFFSET
+
+
+def _sum(qs: QuerySet[Position], field: str = "realized_pnl") -> Decimal:
+    """Sum ``field`` over the queryset, treating an empty result as 0."""
+    return qs.aggregate(s=Sum(field))["s"] or Decimal(0)
 
 
 @sync_to_async
@@ -50,9 +54,6 @@ def pnl_snapshot() -> PnlSnapshot:
     month_start = today_start - timedelta(days=30)
     year_start = today_start - timedelta(days=365)
     base = Position.objects.filter(status=PositionStatus.CLOSED)
-
-    def _sum(qs: QuerySet[Position]) -> Decimal:
-        return qs.aggregate(s=Sum("realized_pnl"))["s"] or Decimal(0)
 
     return PnlSnapshot(
         today=_sum(base.filter(closed_at__gte=today_start)),
@@ -88,9 +89,6 @@ def _digest_db() -> dict[str, Any]:
     closed = Position.objects.filter(status=PositionStatus.CLOSED)
     open_qs = Position.objects.filter(status=PositionStatus.OPEN)
 
-    def _sum(qs: QuerySet[Position], field: str = "realized_pnl") -> Decimal:
-        return qs.aggregate(s=Sum(field))["s"] or Decimal(0)
-
     return {
         "closed_24h": closed.filter(closed_at__gte=d24).count(),
         "pnl_24h": _sum(closed.filter(closed_at__gte=d24)),
@@ -108,10 +106,7 @@ def _digest_db() -> dict[str, Any]:
 async def digest_snapshot() -> DigestSnapshot:
     """Build the daily digest snapshot (DB plus live price)."""
     db = await _digest_db()
-    settings = bybit_settings()
-    client = BybitClient.from_credentials(
-        settings.api_key, settings.api_secret, testnet=settings.testnet
-    )
+    client = BybitClient.from_settings()
     free_usdt = Decimal(0)
     price: Decimal | None = None
     try:
@@ -147,10 +142,7 @@ def _symbol() -> str:
 
 async def balance_snapshot() -> BalanceSnapshot:
     """Build the /balance snapshot from wallet balances."""
-    settings = bybit_settings()
-    client = BybitClient.from_credentials(
-        settings.api_key, settings.api_secret, testnet=settings.testnet
-    )
+    client = BybitClient.from_settings()
     balances = await client.get_balances()
     return BalanceSnapshot(
         balances={coin: b.free for coin, b in balances.items() if b.total > 0}

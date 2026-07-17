@@ -128,9 +128,7 @@ async def _check_bybit_and_balance() -> list[Check]:
         balance_check.fail("skipped — no credentials")
         return [creds_check, inst_check, balance_check]
 
-    client = BybitClient.from_credentials(
-        creds.api_key, creds.api_secret, testnet=creds.testnet
-    )
+    client = BybitClient.from_settings()
     try:
         balances = await client.get_balances()
     except Exception as exc:

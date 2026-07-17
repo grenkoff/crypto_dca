@@ -18,7 +18,7 @@ from django.db import transaction
 from core.exchange.bybit import BybitClient
 from core.exchange.types import Side
 from core.strategy.pricing import compute_tp_price
-from core.strategy.rounding import round_down_to_tick, round_up_to_tick
+from core.strategy.rounding import next_tick_above, round_down_to_tick
 from core.trading.models import Position, PositionStatus, StrategyConfig
 
 log = structlog.get_logger()
@@ -75,7 +75,7 @@ def plan_consolidation(
     """
     if step <= 0:
         raise ValueError("step must be positive")
-    market_floor = round_up_to_tick(market_price + tick_size, tick_size)
+    market_floor = next_tick_above(market_price, tick_size)
 
     groups: dict[Decimal, list[PosRow]] = {}
     for p in positions:

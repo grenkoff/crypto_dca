@@ -120,9 +120,7 @@ class Command(BaseCommand):
             )
             raise SystemExit(1)
 
-        real = BybitClient.from_credentials(
-            creds.api_key, creds.api_secret, testnet=creds.testnet
-        )
+        real = BybitClient.from_settings()
         client = cast(BybitClient, real if commit else DryRunBybitClient(real))
 
         config = await sync_to_async(StrategyConfig.load)()

@@ -68,10 +68,7 @@ class TraderRuntime:
     async def bootstrap(self) -> None:
         """Load config, build the OrderManager, lay the initial grid."""
         await self._guard_single_instance()
-        settings = bybit_settings()
-        real_client = BybitClient.from_credentials(
-            settings.api_key, settings.api_secret, testnet=settings.testnet
-        )
+        real_client = BybitClient.from_settings()
         if trader_settings().dry_run:
             log.warning("trader.dry_run_enabled")
             self._client = cast(BybitClient, DryRunBybitClient(real_client))

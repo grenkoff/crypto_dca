@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 import signal
 
-import django
 import structlog
 
 log = structlog.get_logger()
@@ -15,11 +13,9 @@ log = structlog.get_logger()
 
 async def run() -> None:
     """Start the bot polling, digest scheduler and Redis subscriber."""
-    from core.config.logging import configure_logging
+    from core.config.bootstrap import bootstrap_django
 
-    configure_logging()
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "web.settings")
-    django.setup()
+    bootstrap_django()
 
     from aiogram import Bot, Dispatcher
 

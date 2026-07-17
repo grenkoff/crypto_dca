@@ -22,7 +22,11 @@ from core.exchange.types import Instrument, Side
 from core.services.events import EventBus
 from core.strategy.compensation import plan_compensation
 from core.strategy.pricing import compute_tp_price
-from core.strategy.rounding import round_down_to_tick, round_up_to_tick
+from core.strategy.rounding import (
+    min_notional_price,
+    next_tick_above,
+    round_down_to_tick,
+)
 from core.strategy.types import GridMode, OpenPosition
 from core.trading.models import (
     CompensationLink,
@@ -333,12 +337,12 @@ class OrderManager:
         Priced at the higher of the original TP, one tick above market, and the
         minimum notional, so it is never left naked. Returns the new order id.
         """
-        market_floor = round_up_to_tick(
-            current_price + self.instrument.tick_size,
-            self.instrument.tick_size,
+        market_floor = next_tick_above(
+            current_price, self.instrument.tick_size
         )
-        min_price = round_up_to_tick(
-            self.instrument.min_order_amt / position.qty,
+        min_price = min_notional_price(
+            self.instrument.min_order_amt,
+            position.qty,
             self.instrument.tick_size,
         )
         price = max(position.tp_price or Decimal(0), market_floor, min_price)
@@ -390,8 +394,9 @@ class OrderManager:
         Priced at the higher of the old TP and the minimum notional price so it
         always clears the exchange minimum — the position is never left naked.
         """
-        min_price = round_up_to_tick(
-            self.instrument.min_order_amt / target.qty,
+        min_price = min_notional_price(
+            self.instrument.min_order_amt,
+            target.qty,
             self.instrument.tick_size,
         )
         price = max(target.tp_price or Decimal(0), min_price)

@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
-import django
 import structlog
 
 log = structlog.get_logger()
@@ -13,11 +11,9 @@ log = structlog.get_logger()
 
 async def run() -> None:
     """Configure logging and Django, build the bus, run the trader."""
-    from core.config.logging import configure_logging
+    from core.config.bootstrap import bootstrap_django
 
-    configure_logging()
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "web.settings")
-    django.setup()
+    bootstrap_django()
     from core.config.settings import redis_settings
     from core.services.events import EventBus, NoOpEventBus
     from core.services.redis_bus import RedisEventBus
