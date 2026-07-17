@@ -147,15 +147,3 @@ async def balance_snapshot() -> BalanceSnapshot:
     return BalanceSnapshot(
         balances={coin: b.free for coin, b in balances.items() if b.total > 0}
     )
-
-
-@sync_to_async
-def list_open_buy_order_ids() -> list[str]:
-    """Order ids of all awaiting-fill grid buy orders."""
-    from core.trading.models import GridLevel, LevelStatus
-
-    return list(
-        GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL)
-        .exclude(current_buy_order_id="")
-        .values_list("current_buy_order_id", flat=True)
-    )

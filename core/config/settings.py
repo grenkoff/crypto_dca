@@ -48,15 +48,6 @@ class TelegramSettings(BaseSettings):
     )
 
     bot_token: str = Field(default="")
-    allowed_chat_ids: str = Field(default="")
-
-    def allowed_chat_id_set(self) -> set[int]:
-        """Parse the comma-separated allowed chat ids into a set."""
-        return {
-            int(x.strip())
-            for x in self.allowed_chat_ids.split(",")
-            if x.strip()
-        }
 
 
 @lru_cache(maxsize=1)
