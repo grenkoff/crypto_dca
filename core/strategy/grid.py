@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from decimal import Decimal
 
 from core.strategy.rounding import round_down_to_tick
@@ -46,3 +47,43 @@ def generate_levels(
             break
         levels.append(GridLevelSpec(level_index=i, price=price))
     return levels
+
+
+def resting_buy_levels(
+    price: Decimal, step: Decimal, count: int, held: set[Decimal]
+) -> list[tuple[int, Decimal]]:
+    """The ``count`` highest step-aligned prices below ``price`` not held.
+
+    Walks round levels down from a full step below market, skipping held
+    levels, until ``count`` are collected or price reaches zero.
+    """
+    if step <= 0 or price <= 0 or count <= 0:
+        return []
+    k_floor = int(price / step)
+    if Decimal(k_floor) * step > price:
+        k_floor -= 1
+    k_top = k_floor - 1
+    levels: list[tuple[int, Decimal]] = []
+    k = k_top
+    while len(levels) < count:
+        p = Decimal(k) * step
+        if p <= 0:
+            break
+        if p not in held:
+            levels.append((k, p))
+        k -= 1
+    return levels
+
+
+def buys_to_prune(
+    resting_prices: Iterable[Decimal], target_prices: set[Decimal]
+) -> list[Decimal]:
+    """Resting buy prices to cancel: only those below the band bottom.
+
+    Buys stranded below the deepest target redeploy near price; buys in-band
+    or above (a falling market will fill them) are kept.
+    """
+    if not target_prices:
+        return []
+    bottom = min(target_prices)
+    return [p for p in resting_prices if p < bottom]

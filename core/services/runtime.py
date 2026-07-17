@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
@@ -22,7 +21,11 @@ from core.exchange.ws import BybitPrivateStream, StreamEvent
 from core.services.events import EventBus, NoOpEventBus
 from core.services.order_manager import OrderManager
 from core.services.reconciliation import reconcile_once
-from core.strategy.grid import generate_levels
+from core.strategy.grid import (
+    buys_to_prune,
+    generate_levels,
+    resting_buy_levels,
+)
 from core.trading.models import (
     BotStatus,
     ExecutionLog,
@@ -468,32 +471,6 @@ def _existing_active_levels() -> set[int]:
     )
 
 
-def resting_buy_levels(
-    price: Decimal, step: Decimal, count: int, held: set[Decimal]
-) -> list[tuple[int, Decimal]]:
-    """The ``count`` highest step-aligned prices below ``price`` not held.
-
-    Walks round levels down from a full step below market, skipping held
-    levels, until ``count`` are collected or price reaches zero.
-    """
-    if step <= 0 or price <= 0 or count <= 0:
-        return []
-    k_floor = int(price / step)
-    if Decimal(k_floor) * step > price:
-        k_floor -= 1
-    k_top = k_floor - 1
-    levels: list[tuple[int, Decimal]] = []
-    k = k_top
-    while len(levels) < count:
-        p = Decimal(k) * step
-        if p <= 0:
-            break
-        if p not in held:
-            levels.append((k, p))
-        k -= 1
-    return levels
-
-
 def naked_positions(
     candidates: list[tuple[int, str]], live_order_ids: set[str]
 ) -> list[tuple[int, str]]:
@@ -519,20 +496,6 @@ def _get_open_position(pos_id: int) -> Position | None:
     return Position.objects.filter(
         id=pos_id, status=PositionStatus.OPEN
     ).first()
-
-
-def buys_to_prune(
-    resting_prices: Iterable[Decimal], target_prices: set[Decimal]
-) -> list[Decimal]:
-    """Resting buy prices to cancel: only those below the band bottom.
-
-    Buys stranded below the deepest target redeploy near price; buys in-band
-    or above (a falling market will fill them) are kept.
-    """
-    if not target_prices:
-        return []
-    bottom = min(target_prices)
-    return [p for p in resting_prices if p < bottom]
 
 
 def _grid_state(

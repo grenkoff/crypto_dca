@@ -13,11 +13,10 @@ from core.services.runtime import (
     _record_applied_grid_params,
     _reset_all_grid_levels,
     another_instance_alive,
-    buys_to_prune,
     naked_positions,
     plan_level_heal,
-    resting_buy_levels,
 )
+from core.strategy.grid import buys_to_prune, resting_buy_levels
 from core.trading.models import (
     BotStatus,
     GridLevel,
