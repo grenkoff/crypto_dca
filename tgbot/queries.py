@@ -16,6 +16,7 @@ from core.trading.models import (
     CompensationLink,
     Position,
     PositionStatus,
+    StrategyConfig,
 )
 from tgbot.formatters import (
     BalanceSnapshot,
@@ -65,6 +66,36 @@ def pnl_snapshot() -> PnlSnapshot:
         year=_sum(base.filter(closed_at__gte=year_start)),
         total=_sum(base),
     )
+
+
+@sync_to_async
+def pnl_curve_data() -> tuple[list[Decimal], list[Decimal]]:
+    """Chart inputs: realized of closed trades (by time) and open TP gains.
+
+    Closed trades are ordered by ``closed_at`` (their realized PnL); open
+    positions are ordered by ``tp_price`` (the gain each would book at its
+    take-profit), so the projection fills nearest-TP first.
+    """
+    closed = list(
+        Position.objects.filter(status=PositionStatus.CLOSED)
+        .order_by("closed_at")
+        .values_list("realized_pnl", flat=True)
+    )
+    fee = StrategyConfig.load().maker_fee
+    open_gains: list[Decimal] = []
+    for p in (
+        Position.objects.filter(status=PositionStatus.OPEN)
+        .exclude(tp_price__isnull=True)
+        .order_by("tp_price")
+    ):
+        if p.tp_price is None:
+            continue
+        open_gains.append(
+            p.tp_price * p.qty * (Decimal(1) - fee)
+            - p.entry_price * p.qty
+            - p.fees_in
+        )
+    return closed, open_gains
 
 
 @sync_to_async
@@ -138,7 +169,6 @@ async def digest_snapshot() -> DigestSnapshot:
 
 @sync_to_async
 def _symbol() -> str:
-    from core.trading.models import StrategyConfig
 
     return str(StrategyConfig.objects.get(pk=1).symbol)
 

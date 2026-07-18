@@ -13,6 +13,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "redis>=5.2",
     "dj-database-url>=2.3",
+    "matplotlib>=3.11.1",
 ]
 
 [dependency-groups]
@@ -122,7 +123,7 @@ ignore-paths = ["^.*/migrations/.*$"]
 min-similarity-lines = 8
 
 [[tool.mypy.overrides]]
-module = ["pybit.*", "fakeredis.*"]
+module = ["pybit.*", "fakeredis.*", "matplotlib.*"]
 ignore_missing_imports = true
 
 [tool.django-stubs]

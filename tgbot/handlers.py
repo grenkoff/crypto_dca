@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import time
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
+    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -14,6 +16,7 @@ from aiogram.types import (
 )
 
 from core.trading.models import NotificationSettings
+from tgbot.charts import pnl_curve, render_pnl_chart
 from tgbot.filters import AdminUserFilter
 from tgbot.formatters import (
     build_balance,
@@ -31,6 +34,7 @@ from tgbot.notify_settings import (
 from tgbot.queries import (
     balance_snapshot,
     orders_snapshot,
+    pnl_curve_data,
     pnl_snapshot,
     status_snapshot,
 )
@@ -132,9 +136,20 @@ async def cmd_balance(message: Message) -> None:
 
 @router.message(Command("pnl"))
 async def cmd_pnl(message: Message) -> None:
-    """Reply with realized PnL."""
+    """Reply with realized PnL and a cumulative profit chart."""
     snap = await pnl_snapshot()
-    await message.answer(build_pnl(snap), parse_mode="Markdown")
+    caption = build_pnl(snap)
+    closed, open_gains = await pnl_curve_data()
+    cum, split = pnl_curve(closed, open_gains)
+    if not cum:
+        await message.answer(caption, parse_mode="Markdown")
+        return
+    png = await asyncio.to_thread(render_pnl_chart, cum, split)
+    await message.answer_photo(
+        BufferedInputFile(png, filename="pnl.png"),
+        caption=caption,
+        parse_mode="Markdown",
+    )
 
 
 @router.message(Command("orders"))
