@@ -30,6 +30,7 @@ dev = [
     "vulture>=2.16",
     "pylint>=4.0.6",
     "hypothesis>=6.0",
+    "import-linter>=2.0",
 ]
 
 [tool.ruff]
@@ -130,3 +131,25 @@ omit = ["*/migrations/*", "*/tests/*"]
 # onto the operational management commands / entrypoints that are 0% by design.
 fail_under = 63
 show_missing = true
+
+[tool.importlinter]
+# Enforces the separation-of-concerns layering documented in CLAUDE.md.
+root_packages = ["core", "tgbot", "trader", "web"]
+
+[[tool.importlinter.contracts]]
+name = "core layers: services > exchange > strategy"
+type = "layers"
+containers = ["core"]
+layers = ["services", "exchange", "strategy"]
+
+[[tool.importlinter.contracts]]
+name = "strategy stays pure logic (no I/O or ORM)"
+type = "forbidden"
+source_modules = ["core.strategy"]
+forbidden_modules = ["core.exchange", "core.services", "core.trading"]
+
+[[tool.importlinter.contracts]]
+name = "core does not import the entrypoints (tgbot / trader / web)"
+type = "forbidden"
+source_modules = ["core"]
+forbidden_modules = ["tgbot", "trader", "web"]

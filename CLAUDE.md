@@ -136,6 +136,10 @@ Judgement (no gate — write this way, can't be linted):
 - **YAGNI** — build only what's needed now; no speculative abstraction.
 - **Separation of concerns** — keep the layers apart (`strategy` = pure logic,
   `exchange` = I/O, `services` = orchestration, `tgbot`/`trader` = entrypoints).
+  This one **is** gated: `import-linter` (`lint-imports`, in `/qa` and CI)
+  enforces the layering — `core.services` > `core.exchange` > `core.strategy`,
+  `strategy` imports no I/O/ORM, and nothing in `core` imports an entrypoint.
+  Contracts live in `[tool.importlinter]` in `pyproject.toml`.
 - **Fail fast** — raise on invalid state immediately (`ValueError`, guards),
   don't limp on with bad data.
 - **Least astonishment** — code behaves the way a reader expects; no surprises.

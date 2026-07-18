@@ -51,6 +51,9 @@ jobs:
       - name: Transaction checks (ACID)
         run: uv run python scripts/check_transactions.py
 
+      - name: Import contracts (layer boundaries)
+        run: uv run lint-imports
+
       - name: Pytest (unit) + coverage floor
         run: uv run pytest -ra --ignore=tests/integration --cov
 
