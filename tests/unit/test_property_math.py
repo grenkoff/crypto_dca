@@ -1,0 +1,184 @@
+"""Property-based tests for the pure Decimal money math (hypothesis).
+
+These assert invariants that must hold for *any* input — the places where a
+rounding or boundary bug would silently cost money — rather than a handful of
+hand-picked examples.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+from hypothesis import given
+from hypothesis import strategies as st
+
+from core.exchange.types import Instrument
+from core.services.order_manager import compute_buy_qty
+from core.strategy.grid import buys_to_prune, resting_buy_levels
+from core.strategy.pricing import compute_tp_price
+from core.strategy.rounding import (
+    min_notional_price,
+    next_tick_above,
+    round_down_to_tick,
+    round_up_to_tick,
+)
+
+# Real exchange ticks/lots are powers of ten; using those keeps the grid
+# arithmetic exact and the invariants free of Decimal-precision noise.
+TICKS = st.sampled_from([Decimal(10) ** -k for k in range(9)])
+
+
+def _dec(lo: str, hi: str, places: int = 8) -> st.SearchStrategy[Decimal]:
+    return st.decimals(
+        min_value=Decimal(lo),
+        max_value=Decimal(hi),
+        allow_nan=False,
+        allow_infinity=False,
+        places=places,
+    )
+
+
+def _on_grid(value: Decimal, tick: Decimal) -> bool:
+    return value == (value / tick).to_integral_value() * tick
+
+
+@given(price=_dec("0", "1000000"), tick=TICKS)
+def test_round_down_stays_at_or_below_within_one_tick(
+    price: Decimal, tick: Decimal
+) -> None:
+    r = round_down_to_tick(price, tick)
+    assert 0 <= r <= price
+    assert price - r < tick
+    assert _on_grid(r, tick)
+
+
+@given(price=_dec("0", "1000000"), tick=TICKS)
+def test_round_up_stays_at_or_above_within_one_tick(
+    price: Decimal, tick: Decimal
+) -> None:
+    r = round_up_to_tick(price, tick)
+    assert r >= price
+    assert r - price < tick
+    assert _on_grid(r, tick)
+
+
+@given(price=_dec("0", "1000000"), tick=TICKS)
+def test_next_tick_above_is_strictly_above_and_on_grid(
+    price: Decimal, tick: Decimal
+) -> None:
+    r = next_tick_above(price, tick)
+    assert r > price
+    assert _on_grid(r, tick)
+
+
+@given(
+    min_amt=_dec("0", "10000", places=2),
+    qty=_dec("0.001", "1000000"),
+    tick=TICKS,
+)
+def test_min_notional_price_clears_the_minimum(
+    min_amt: Decimal, qty: Decimal, tick: Decimal
+) -> None:
+    r = min_notional_price(min_amt, qty, tick)
+    assert _on_grid(r, tick)
+    # rounded UP from min_amt/qty, so it never sits below the requirement
+    assert r >= min_amt / qty
+
+
+@given(
+    entry_price=_dec("0.00001", "100000"),
+    qty=_dec("0.001", "100000"),
+    fees_in=_dec("0", "1000", places=2),
+    tp_step=_dec("0", "10000"),
+    min_profit=_dec("0", "1000", places=2),
+    maker_fee=st.sampled_from(
+        [Decimal(f) for f in ("0", "0.0001", "0.001", "0.01", "0.1")]
+    ),
+    tick=TICKS,
+    min_order_amt=_dec("0", "100", places=2),
+)
+def test_tp_price_never_below_entry_and_on_grid(
+    entry_price: Decimal,
+    qty: Decimal,
+    fees_in: Decimal,
+    tp_step: Decimal,
+    min_profit: Decimal,
+    maker_fee: Decimal,
+    tick: Decimal,
+    min_order_amt: Decimal,
+) -> None:
+    tp = compute_tp_price(
+        entry_price=entry_price,
+        qty=qty,
+        fees_in=fees_in,
+        tp_step=tp_step,
+        min_profit_quote=min_profit,
+        maker_fee=maker_fee,
+        tick_size=tick,
+        min_order_amt=min_order_amt,
+    )
+    assert _on_grid(tp, tick)
+    # the position is never sold below its entry cost
+    assert tp >= entry_price
+
+
+@given(
+    price=_dec("0.00001", "1000000"),
+    tick=TICKS,
+    count=st.integers(min_value=1, max_value=20),
+    held=st.sets(_dec("0", "1000000"), max_size=10),
+)
+def test_resting_buy_levels_are_below_market_descending_and_unheld(
+    price: Decimal, tick: Decimal, count: int, held: set[Decimal]
+) -> None:
+    levels = resting_buy_levels(price, tick, count, held)
+    prices = [p for _, p in levels]
+    assert len(levels) <= count
+    assert all(p < price for p in prices)
+    assert all(p > 0 for p in prices)
+    assert all(_on_grid(p, tick) for p in prices)
+    assert all(p not in held for p in prices)
+    assert prices == sorted(prices, reverse=True)
+    assert len(set(prices)) == len(prices)
+
+
+@given(
+    resting=st.lists(_dec("0", "1000000"), max_size=30),
+    targets=st.sets(_dec("0.00001", "1000000"), min_size=1, max_size=20),
+)
+def test_buys_to_prune_are_exactly_those_below_the_band_bottom(
+    resting: list[Decimal], targets: set[Decimal]
+) -> None:
+    bottom = min(targets)
+    prune = buys_to_prune(resting, targets)
+    assert all(p in resting for p in prune)
+    assert all(p < bottom for p in prune)
+    # completeness: nothing at/above the bottom is pruned
+    assert all(p >= bottom for p in resting if p not in prune)
+
+
+@given(
+    quote=_dec("0.01", "100000", places=2),
+    price=_dec("0.00001", "100000"),
+    lot=TICKS,
+    min_order_amt=_dec("0", "100", places=2),
+)
+def test_compute_buy_qty_lot_aligned_and_clears_min_when_funded(
+    quote: Decimal, price: Decimal, lot: Decimal, min_order_amt: Decimal
+) -> None:
+    instrument = Instrument(
+        symbol="XUSDT",
+        base_coin="X",
+        quote_coin="USDT",
+        tick_size=lot,
+        lot_size=lot,
+        min_order_qty=lot,
+        min_order_amt=min_order_amt,
+    )
+    qty = compute_buy_qty(quote, price, instrument)
+    assert qty >= 0
+    assert _on_grid(qty, lot)
+    # the sub-min boundary is only permitted when the *request* is sub-min;
+    # a properly funded request must always clear the exchange minimum
+    if quote >= min_order_amt:
+        assert qty * price >= min_order_amt
