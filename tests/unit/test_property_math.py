@@ -292,8 +292,8 @@ def test_compensation_decision_invariants(
         - victim.fees_in
     )
     assert realized + decision.new_credit > 0
-    # never below the wall floor (market / nearest_buy + tp_step)
+    # never below the wall floor (market / nearest_buy + tp_step + grid_step)
     floor = next_tick_above(market, _COMP_TICK)
     if nearest_buy > 0:
-        floor = max(floor, nearest_buy + _COMP_TP_STEP)
+        floor = max(floor, nearest_buy + _COMP_TP_STEP + _COMP_GRID)
     assert decision.new_tp_price >= floor

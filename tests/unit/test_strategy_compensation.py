@@ -98,17 +98,19 @@ def test_off_grid_tp_is_pulled_onto_the_lattice() -> None:
     assert decision.new_tp_price == Decimal("0.02835")
 
 
-def test_bottom_tp_not_pushed_below_nearest_buy_plus_tp_step() -> None:
-    # wall_floor = 0.02760 + 0.0001 = 0.02770; a TP already there cannot move
-    positions = [_pos(1, "0.02770")]
+def test_bottom_tp_not_pushed_below_wall_floor() -> None:
+    # wall_floor = nearest_buy 0.02760 + tp_step 0.0001 + grid_step 0.00005
+    #            = 0.02775; a TP already there cannot move lower
+    positions = [_pos(1, "0.02775")]
     assert plan_compensation(positions, _ctx(nearest_buy="0.02760")) is None
 
 
 def test_tp_one_step_above_floor_moves_down_to_the_floor() -> None:
-    positions = [_pos(1, "0.02775")]
+    # floor 0.02775; a TP one grid_step above it settles onto it
+    positions = [_pos(1, "0.02780")]
     decision = plan_compensation(positions, _ctx(nearest_buy="0.02760"))
     assert decision is not None
-    assert decision.new_tp_price == Decimal("0.02770")
+    assert decision.new_tp_price == Decimal("0.02775")
 
 
 def test_underwater_move_draws_credit_and_keeps_pair_positive() -> None:
