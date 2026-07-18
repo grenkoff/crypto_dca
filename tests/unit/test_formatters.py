@@ -185,6 +185,21 @@ def test_format_event_position_closed_loss() -> None:
     assert text == "🔴 `0.02890` → `-0.0063` USDT"
 
 
+def test_format_event_position_closed_compensated() -> None:
+    text = format_event(
+        {
+            "type": "position.closed",
+            "payload": {
+                "level": 712,
+                "price": "0.0277",
+                "realized": "-0.006250158750",
+                "compensation_credit": "0.006250158850",
+            },
+        }
+    )
+    assert text == ("💊 `0.02770` → `-0.0063` USDT (компенс., пара `+0.0000`)")
+
+
 def test_format_event_compensation() -> None:
     text = format_event(
         {

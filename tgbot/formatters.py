@@ -151,6 +151,32 @@ def _signed(amount: Decimal, places: str = "0.0001") -> str:
     return f"+{q}" if q >= 0 else str(q)
 
 
+def _dec(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal(0)
+
+
+def _format_closed(payload: dict[str, Any]) -> str:
+    """Render a position.closed event, flagging compensated closes.
+
+    A compensated lot's own realized is small-negative by design; showing the
+    pair (realized + credit) makes clear the paired result stays in profit.
+    """
+    realized = _dec(payload.get("realized"))
+    credit = _dec(payload.get("compensation_credit"))
+    price = _price5(payload.get("price"))
+    if credit > 0:
+        pair = realized + credit
+        return (
+            f"💊 `{price}` → `{_signed(realized)}` USDT "
+            f"(компенс., пара `{_signed(pair)}`)"
+        )
+    emoji = "💰" if realized >= 0 else "🔴"
+    return f"{emoji} `{price}` → `{_signed(realized)}` USDT"
+
+
 def build_digest(snap: DigestSnapshot) -> str:
     """Render the daily digest message."""
     price = f"`{snap.price}`" if snap.price is not None else "_n/a_"
@@ -180,15 +206,7 @@ def format_event(event: dict[str, Any]) -> str:
             f"TP `{_price5(payload.get('tp_price'))}`"
         )
     if etype == "position.closed":
-        try:
-            realized = Decimal(str(payload.get("realized", "0")))
-        except (InvalidOperation, TypeError, ValueError):
-            realized = Decimal(0)
-        emoji = "💰" if realized >= 0 else "🔴"
-        return (
-            f"{emoji} `{_price5(payload.get('price'))}` → "
-            f"`{_signed(realized, '0.0001')}` USDT"
-        )
+        return _format_closed(payload)
     if etype == "compensation.applied":
         return f"💊 TP↓ `{_price5(payload.get('new_tp'))}`"
     if etype == "error":

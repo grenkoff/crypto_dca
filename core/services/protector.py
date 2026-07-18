@@ -94,6 +94,7 @@ class Protector:
                 "realized": str(realized),
                 "price": str(price),
                 "position_id": position.id,
+                "compensation_credit": str(position.compensation_credit),
             },
         )
         return realized

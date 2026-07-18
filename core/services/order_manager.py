@@ -241,6 +241,7 @@ class OrderManager:
                 "realized": str(result.realized),
                 "price": str(position.tp_price),
                 "position_id": position.id,
+                "compensation_credit": str(position.compensation_credit),
             },
         )
         if result.realized > 0:
