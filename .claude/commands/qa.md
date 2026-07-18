@@ -12,6 +12,9 @@ Run `bash scripts/qa.sh`. It checks, in order:
 - `vulture` — dead code (unused functions/classes/methods); framework
   false positives are whitelisted in `whitelist_vulture.py`
 - `pylint duplicate-code` — DRY (copy-paste of ≥ 8 similar lines)
+- `check_transactions` — ACID/transactions: no `await` inside
+  `transaction.atomic()` (A), and ≥ 2 ORM writes in one function must be
+  wrapped in `atomic()` (B)
 - `pytest`
 
 For each failure:
@@ -25,5 +28,10 @@ For each failure:
 - **Duplication (pylint)** — if it is the same knowledge, extract a shared
   helper; if it is coincidental (false DRY — similar code that changes for
   different reasons), leave it and say why.
+- **Transactions (check_transactions)** — **A**: move the `await` out of the
+  `atomic()` block (do exchange I/O before/after, never while holding the
+  transaction). **B**: wrap the multiple writes in `transaction.atomic()`; only
+  if they are genuinely independent, add `path.py:function` to
+  `whitelist_transactions.txt` and say why.
 
 Re-run until it prints `QA: ALL GREEN`, then summarise what you changed.

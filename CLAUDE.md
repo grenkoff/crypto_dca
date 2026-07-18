@@ -48,8 +48,8 @@ NOT tests or migrations.
   1. **Per-edit hook** (`.claude/settings.json`) runs `ruff format` +
      `ruff check --fix` — PEP 8 and unused imports/variables, instantly.
   2. **End of task**: run `bash scripts/qa.sh` (or `/qa`) — adds `mypy`,
-     `vulture` (dead code), `pylint duplicate-code` (DRY), `pytest`. Get to
-     `QA: ALL GREEN`.
+     `vulture` (dead code), `pylint duplicate-code` (DRY),
+     `check_transactions` (ACID), `pytest`. Get to `QA: ALL GREEN`.
   3. **CI** blocks the merge on all of the above.
 - **`vulture`** flags dead code. Django/aiogram/pydantic produce false
   positives (`Command`/`Meta`/model fields, `@router` handlers, `model_config`,
@@ -59,6 +59,45 @@ NOT tests or migrations.
 - **`pylint --enable=duplicate-code`** flags copy-paste (≥ 8 similar lines);
   we use it instead of jscpd to avoid a Node toolchain. It only sees textual
   duplication — real DRY judgement is still yours.
+
+## Data integrity — ACID / transactions
+
+The DB is the source of truth (positions, grid levels, executions); the
+exchange is an external, non-transactional system. Write with ACID in mind.
+
+Judgement (write this way):
+
+- **Atomicity** — a multi-step change is all-or-nothing. Any operation that
+  writes more than one row/table as one logical unit (open a position + mark
+  the level + log the execution) goes inside a single
+  `with transaction.atomic():` block. Never leave a half-applied state.
+- **Consistency** — never limp on with data that breaks an invariant; enforce
+  it with model constraints/guards and fail fast. A sub-minimum notional, a
+  missing TP, a negative qty is a raise, not a silent write.
+- **Isolation** — when a row is read then written under possible concurrency
+  (two fills racing one position/level), take `select_for_update()` inside the
+  atomic block so the read-modify-write can't interleave. Keep transactions
+  short.
+- **Durability** — after commit the state must survive a crash/restart; that
+  is *why* recovery reads from the DB. On reconnect the WS may redeliver, so
+  fill handling is **idempotent on `exec_id`** (check-then-write in the same
+  transaction) — never double-book.
+- **The exchange is outside the transaction.** Do exchange I/O (place/cancel)
+  *before or after* the atomic block, never while holding it — a network
+  round-trip must not keep row locks open, and the exchange can't roll back.
+  The mismatch this leaves is closed by the reconcile/heal layer
+  (`reconcile_once`, `Healer`, `Compensator._restore_protection`), not by
+  pretending the two systems are one unit.
+
+Machine-enforced (a gate, like DRY) — `scripts/check_transactions.py`, in
+`/qa` and CI:
+
+- **A** — no `await` inside `transaction.atomic()` (atomic blocks stay
+  synchronous; keep exchange I/O out of them).
+- **B** — a function with ≥ 2 ORM writes must wrap them in
+  `transaction.atomic()`. Genuinely-independent writes can be exempted in
+  `whitelist_transactions.txt` (`path.py:function`) — prefer fixing over
+  exempting.
 
 ## Design principles
 

@@ -26,6 +26,8 @@ run "vulture (dead code)" .venv/bin/vulture
 run "pylint duplicate-code (DRY)" \
   .venv/bin/pylint core tgbot trader web manage.py \
   --disable=all --enable=duplicate-code
+run "check_transactions (ACID)" \
+  .venv/bin/python scripts/check_transactions.py
 run "pytest" .venv/bin/python -m pytest -q --ignore=tests/integration
 
 echo
