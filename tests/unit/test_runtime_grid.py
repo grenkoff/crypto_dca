@@ -10,7 +10,11 @@ from core.exchange.types import Execution, Side
 from core.services import repository
 from core.services.healer import naked_positions, plan_level_heal
 from core.services.runtime import another_instance_alive
-from core.strategy.grid import buys_to_prune, resting_buy_levels
+from core.strategy.grid import (
+    buys_to_prune,
+    fundable_targets,
+    resting_buy_levels,
+)
 from core.trading.models import (
     BotStatus,
     GridLevel,
@@ -112,6 +116,32 @@ def test_buys_to_prune_cancels_only_below_band_bottom() -> None:
 
 def test_buys_to_prune_empty_targets_prunes_nothing() -> None:
     assert buys_to_prune([Decimal("0.02950")], set()) == []
+
+
+def test_fundable_targets_stops_when_budget_runs_out() -> None:
+    targets = [
+        (10, Decimal("0.0275")),
+        (9, Decimal("0.0274")),
+        (8, Decimal("0.0273")),
+    ]
+    # budget funds only two orders of 5 -> deepest target is left for later
+    got = fundable_targets(targets, set(), Decimal("12"), Decimal("5"))
+    assert got == [(10, Decimal("0.0275")), (9, Decimal("0.0274"))]
+
+
+def test_fundable_targets_skips_covered_prices() -> None:
+    targets = [(10, Decimal("0.0275")), (9, Decimal("0.0274"))]
+    covered = {Decimal("0.0275")}
+    got = fundable_targets(targets, covered, Decimal("100"), Decimal("5"))
+    assert got == [(9, Decimal("0.0274"))]
+
+
+def test_fundable_targets_places_nothing_when_budget_below_one_order() -> None:
+    # the reported case: fully deployed, only dust free -> no doomed calls
+    targets = [(10, Decimal("0.0275"))]
+    assert (
+        fundable_targets(targets, set(), Decimal("3.44"), Decimal("5")) == []
+    )
 
 
 def test_naked_positions_flags_only_missing_tp_orders() -> None:

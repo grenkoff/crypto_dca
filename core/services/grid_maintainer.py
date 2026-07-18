@@ -14,6 +14,7 @@ from core.services.events import EventBus
 from core.services.order_manager import OrderManager
 from core.strategy.grid import (
     buys_to_prune,
+    fundable_targets,
     generate_levels,
     resting_buy_levels,
 )
@@ -53,24 +54,25 @@ class GridMaintainer:
 
         balances = await self._om.client.get_balances()
         quote = balances.get(self._om.instrument.quote_coin)
-        total_quote = (
-            (quote.free + quote.locked) if quote is not None else Decimal(0)
-        )
-        n = min(int(total_quote / per_order), int(cfg.max_open_orders))
+        free = quote.free if quote is not None else Decimal(0)
+        locked = quote.locked if quote is not None else Decimal(0)
+        n = min(int((free + locked) / per_order), int(cfg.max_open_orders))
 
         resting, held = await sync_to_async(repository.grid_state)(step)
         targets = resting_buy_levels(price, step, n, held)
         target_prices = {p for _, p in targets}
         prune = set(buys_to_prune(resting.keys(), target_prices))
-        await self._prune_out_of_band(resting, prune)
-        await self._place_missing(targets, resting, held)
+        freed = await self._prune_out_of_band(resting, prune)
+        budget = free + freed * per_order
+        await self._place_missing(targets, set(resting) | held, budget)
 
     async def _prune_out_of_band(
         self,
         resting: dict[Decimal, tuple[int, str]],
         prune: set[Decimal],
-    ) -> None:
-        """Cancel and idle every resting buy that fell out of the band."""
+    ) -> int:
+        """Cancel and idle out-of-band resting buys; return the count freed."""
+        freed = 0
         for p, (k, order_id) in list(resting.items()):
             if p not in prune:
                 continue
@@ -89,19 +91,24 @@ class GridMaintainer:
                     continue
             await sync_to_async(repository.idle_level)(k)
             log.info("grid.pruned", price=str(p))
+            freed += 1
             if cancelled:
                 await self._bus.publish("order.cancelled", {"price": str(p)})
+        return freed
 
     async def _place_missing(
         self,
         targets: list[tuple[int, Decimal]],
-        resting: dict[Decimal, tuple[int, str]],
-        held: set[Decimal],
+        covered: set[Decimal],
+        budget: Decimal,
     ) -> None:
-        """Place a buy at each target price not already resting or held."""
-        for k, p in targets:
-            if p in resting or p in held:
-                continue
+        """Place a buy at each fundable target not already covered.
+
+        Only as many orders as the free ``budget`` can fund are attempted, so
+        a fully-deployed grid stops firing doomed insufficient-balance calls.
+        """
+        per_order = self._om.config.order_qty_quote
+        for k, p in fundable_targets(targets, covered, budget, per_order):
             try:
                 await self._om.place_buy_at_level(k, p)
             except Exception as exc:
