@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import structlog
 from asgiref.sync import sync_to_async
 from django.db.models import F, QuerySet, Sum
 
@@ -25,6 +26,8 @@ from tgbot.formatters import (
     StatusSnapshot,
 )
 from tgbot.notify_settings import ASTANA_OFFSET
+
+log = structlog.get_logger()
 
 
 def _sum(qs: QuerySet[Position], field: str = "realized_pnl") -> Decimal:
@@ -116,8 +119,8 @@ async def digest_snapshot() -> DigestSnapshot:
             free_usdt = usdt.free
         cfg = await _symbol()
         price = await client.get_last_price(cfg)
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("digest.live_fetch_failed", error=str(exc)[:100])
     when_astana = (datetime.now(tz=UTC) + ASTANA_OFFSET).replace(tzinfo=None)
     return DigestSnapshot(
         when_astana=when_astana,

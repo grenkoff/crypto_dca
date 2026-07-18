@@ -44,12 +44,20 @@ select = [
     "UP",           # pyupgrade
     "SIM",          # simplify
     "RUF",          # ruff-specific
+    "S",            # flake8-bandit (security): timeouts, secrets, shell, ...
     # pydocstyle: mandatory docstrings on modules, packages, public
     # classes/functions/methods (D419 forbids empty ones)
     "D100", "D101", "D102", "D103", "D104", "D419",
     # complexity/size limits (KISS / single-responsibility). Thresholds are
     # ratcheted to current worst — they block regression, not existing code.
     "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915",
+]
+ignore = [
+    # `assert` is used only for mypy type-narrowing of internal, post-bootstrap
+    # invariants (self._om etc.), never for runtime validation, and the daemons
+    # are never run under `python -O` — so S101's strip-under-O concern doesn't
+    # apply. Real validation uses explicit raises/guards.
+    "S101",
 ]
 # E501 (line length) is enforced at 79 per PEP 8; the formatter reflows code,
 # and any remaining over-long lines (strings/comments) are flagged to fix by hand.
@@ -62,7 +70,7 @@ max-args = 8
 max-returns = 7
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "D", "C901", "PLR09"]
+"tests/**" = ["S", "D", "C901", "PLR09"]
 "**/migrations/*" = ["E501", "RUF012", "I001", "D"]
 "**/__init__.py" = ["D104"]  # keep package __init__ files empty
 "**/models.py" = ["RUF012"]  # Django Meta class attrs trigger false positives
@@ -114,3 +122,10 @@ markers = [
 [tool.coverage.run]
 source = ["core"]
 omit = ["*/migrations/*", "*/tests/*"]
+
+[tool.coverage.report]
+# Regression floor on `core`, ratcheted just below current (64%) like the
+# ruff complexity gates: it blocks a coverage drop, it does not force tests
+# onto the operational management commands / entrypoints that are 0% by design.
+fail_under = 63
+show_missing = true

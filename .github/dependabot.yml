@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Python dependencies (pyproject.toml + uv.lock, uv under the pip ecosystem)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      python-deps:
+        patterns:
+          - "*"
+
+  # Keep the GitHub Actions used in CI up to date
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"

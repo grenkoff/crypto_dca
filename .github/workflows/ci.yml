@@ -51,5 +51,17 @@ jobs:
       - name: Transaction checks (ACID)
         run: uv run python scripts/check_transactions.py
 
-      - name: Pytest (unit)
-        run: uv run pytest -ra --ignore=tests/integration
+      - name: Pytest (unit) + coverage floor
+        run: uv run pytest -ra --ignore=tests/integration --cov
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks (secret scan)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

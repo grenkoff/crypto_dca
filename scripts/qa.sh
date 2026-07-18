@@ -28,7 +28,8 @@ run "pylint duplicate-code (DRY)" \
   --disable=all --enable=duplicate-code
 run "check_transactions (ACID)" \
   .venv/bin/python scripts/check_transactions.py
-run "pytest" .venv/bin/python -m pytest -q --ignore=tests/integration
+run "pytest (+ coverage floor)" \
+  .venv/bin/python -m pytest -q --ignore=tests/integration --cov
 
 echo
 if [ "${fail}" -eq 0 ]; then
