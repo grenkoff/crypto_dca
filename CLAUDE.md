@@ -130,3 +130,46 @@ Judgement (no gate — write this way, can't be linted):
     depend on methods they don't use.
   - **D** dependency inversion — depend on abstractions and inject them
     (constructor DI in `OrderManager`/`TraderRuntime`).
+
+## Design patterns (GoF)
+
+Judgement, **no linter gate** — a pattern is a design choice, not an
+invariant, so it can't be machine-checked. Use the GoF catalogue as shared
+vocabulary and a toolbox, never as a target.
+
+- **Apply a pattern only when it earns its place** — it must remove real
+  duplication, decouple a real seam, or tame conditional logic that will keep
+  growing. KISS/YAGNI break every tie. **Rule of Three**: don't abstract until
+  the third case.
+- **Prefer the lightweight Python idiom.** Many GoF patterns dissolve into
+  first-class functions, a dict dispatch, `@dataclass`, a context manager, or
+  duck typing. Reach for a class hierarchy only when that idiom stops scaling.
+- **No speculative patterns.** A Strategy with one strategy, a Factory that
+  makes one thing, an interface with one impl, indirection with one caller —
+  that's over-engineering; delete it.
+
+Smell → pattern (the trigger that justifies it):
+
+| Smell in the change | Pattern to consider |
+|---|---|
+| growing `if/elif` on a type/mode picking behavior | **Strategy** (or dict of callables) |
+| repeated conditional object construction | **Factory Method** / named `from_*` ctor |
+| gluing an incompatible external API to ours | **Adapter** |
+| cross-cutting behavior wrapping a client (dry-run, retry, log) | **Decorator/Proxy** — wrap, don't edit |
+| callers reaching into a subsystem's internals | **Facade** |
+| one action must notify N unrelated reactions | **Observer / pub-sub** (`EventBus`) |
+| behavior depends on a lifecycle status with transitions | **State** (often an enum + guards suffices) |
+| near-identical procedures differing in one step | **Template Method** (often just a callable arg) |
+| operations needing undo/queue/replay/log | **Command** |
+
+Already in the codebase (recognise, don't reinvent): **Strategy** (`EventBus`
+impls, grid modes), **Observer** (`EventBus`), **Proxy/Decorator**
+(`DryRunBybitClient`), **Facade** (`repository`, the runtime collaborators),
+**Factory** (`BybitClient.from_settings`), **Singleton** (`BotStatus.load`),
+**Command** (Django management commands).
+
+After a design-touching change, run a **`/patterns`** review pass (advisory,
+after `/qa` is green): for each significant hunk, ask "would a pattern here
+remove real duplication/coupling?" *and* the reverse "is any pattern here
+unnecessary?". For a large redesign, the **`pattern-reviewer`** subagent does
+the same review in depth. Neither blocks a merge — they surface suggestions.
