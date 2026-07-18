@@ -28,15 +28,15 @@ def _row(
     )
 
 
-_COMMON = dict(
-    step=Decimal("0.00005"),
-    tp_step=Decimal("0.0001"),
-    min_profit_quote=Decimal("0"),
-    maker_fee=Decimal("0.000625"),
-    tick_size=Decimal("0.00001"),
-    min_order_amt=Decimal("5"),
-    market_price=Decimal("0.0287"),
-)
+_COMMON = {
+    "step": Decimal("0.00005"),
+    "tp_step": Decimal("0.0001"),
+    "min_profit_quote": Decimal("0"),
+    "maker_fee": Decimal("0.000625"),
+    "tick_size": Decimal("0.00001"),
+    "min_order_amt": Decimal("5"),
+    "market_price": Decimal("0.0287"),
+}
 
 
 def test_merges_two_positions_at_same_price() -> None:

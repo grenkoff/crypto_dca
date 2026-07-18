@@ -47,6 +47,19 @@ select = [
     "SIM",          # simplify
     "RUF",          # ruff-specific
     "S",            # flake8-bandit (security): timeouts, secrets, shell, ...
+    # cookbook idioms (Python + Django best-practice recipes as lint):
+    "C4",           # comprehensions
+    "RET",          # return
+    "PIE",          # misc anti-patterns
+    "PTH",          # use pathlib over os.path
+    "PERF",         # perflint
+    "TRY",          # exception handling (tryceratops)
+    "LOG", "G",     # logging call hygiene
+    "RSE",          # raise
+    "SLF",          # private-member access
+    "INP",          # implicit namespace packages
+    "N",            # pep8-naming
+    "DJ",           # flake8-django (__str__, Meta, ...)
     # pydocstyle: mandatory docstrings on modules, packages, public
     # classes/functions/methods (D419 forbids empty ones)
     "D100", "D101", "D102", "D103", "D104", "D419",
@@ -60,6 +73,9 @@ ignore = [
     # are never run under `python -O` — so S101's strip-under-O concern doesn't
     # apply. Real validation uses explicit raises/guards.
     "S101",
+    # TRY003: we raise built-in exceptions with inline messages by design;
+    # a custom-exception class per message is more ceremony than it's worth.
+    "TRY003",
 ]
 # E501 (line length) is enforced at 79 per PEP 8; the formatter reflows code,
 # and any remaining over-long lines (strings/comments) are flagged to fix by hand.
@@ -72,7 +88,7 @@ max-args = 8
 max-returns = 7
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S", "D", "C901", "PLR09"]
+"tests/**" = ["S", "D", "C901", "PLR09", "SLF"]  # tests may poke internals
 "**/migrations/*" = ["E501", "RUF012", "I001", "D"]
 "**/__init__.py" = ["D104"]  # keep package __init__ files empty
 "**/models.py" = ["RUF012"]  # Django Meta class attrs trigger false positives

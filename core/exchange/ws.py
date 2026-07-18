@@ -114,4 +114,4 @@ class BybitPrivateStream:
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
-            log.error("bybit_ws.queue_full_dropping", kind=event.kind)
+            log.exception("bybit_ws.queue_full_dropping", kind=event.kind)

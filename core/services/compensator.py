@@ -162,7 +162,7 @@ class Compensator:
                 order_link_id=link_id("grid-tp-restore", target.level_index),
             )
         except Exception as restore_error:
-            log.error(
+            log.exception(
                 "compensation.restore_failed",
                 id=target.id,
                 place_error=str(place_error),

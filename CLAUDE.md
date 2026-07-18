@@ -200,3 +200,30 @@ after `/qa` is green): for each significant hunk, ask "would a pattern here
 remove real duplication/coupling?" *and* the reverse "is any pattern here
 unnecessary?". For a large redesign, the **`pattern-reviewer`** subagent does
 the same review in depth. Neither blocks a merge — they surface suggestions.
+
+## Cookbook idioms (Python / Django)
+
+Write idiomatic, recipe-driven code — the "cookbook" best practices. FastAPI
+is not used here.
+
+Machine-enforced (a gate) — the lintable recipes are ruff rule groups plus
+Django's own checks, in `/qa` and CI:
+
+- ruff: `C4` (comprehensions), `RET` (returns), `PIE`, `PTH` (pathlib over
+  `os.path`), `PERF` (perflint), `TRY` (exceptions — `log.exception` inside
+  `except`), `LOG`/`G` (logging), `RSE`, `SLF`, `INP`, `N` (naming), `DJ`
+  (flake8-django: `__str__`, `Meta` order). `TRY003` is ignored (inline
+  messages on built-in exceptions are fine).
+- `manage.py check` — Django system checks (models, config, migrations).
+
+Judgement (write this way; can't be linted) — for the recipes a linter can't
+see, run the **`/cookbook`** review after a change (advisory, after `/qa`):
+
+- **Settings per environment** — no secrets/hosts hardcoded; read from env.
+- **Query efficiency** — avoid N+1; use `select_related`/`prefetch_related`,
+  `.values_list(...)`, `.exists()`/`.count()` over materializing querysets.
+- **Async ORM** — ORM access from async code goes through `sync_to_async` (or
+  the `a*` API) and multi-write units stay atomic (see ACID).
+- **Migration hygiene** — one logical change per migration; never edit an
+  applied migration; keep them reversible.
+- **Structlog over `print`** — structured events with kwargs, not f-strings.

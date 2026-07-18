@@ -171,7 +171,7 @@ class OrderManager:
                 order_link_id=link_id("grid-tp", level.level_index),
             )
         except Exception as exc:
-            log.error(
+            log.exception(
                 "buy_fill.tp_failed_coin_free",
                 level=level.level_index,
                 qty=str(execution.qty),
