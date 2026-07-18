@@ -28,6 +28,7 @@ run "pylint duplicate-code (DRY)" \
   --disable=all --enable=duplicate-code
 run "check_transactions (ACID)" \
   .venv/bin/python scripts/check_transactions.py
+run "import-linter (layer boundaries)" .venv/bin/lint-imports
 run "pytest (+ coverage floor)" \
   .venv/bin/python -m pytest -q --ignore=tests/integration --cov
 

@@ -16,6 +16,8 @@ Run `bash scripts/qa.sh`. It checks, in order:
 - `check_transactions` — ACID/transactions: no `await` inside
   `transaction.atomic()` (A), and ≥ 2 ORM writes in one function must be
   wrapped in `atomic()` (B)
+- `import-linter` — layer boundaries (SoC): `services > exchange > strategy`,
+  `strategy` stays pure, `core` never imports an entrypoint
 - `pytest` — unit tests **+ coverage floor** on `core` (`fail_under`,
   ratcheted; a drop fails the run)
 
@@ -27,6 +29,10 @@ For each failure:
   a reason.
 - **Coverage floor** — a drop means new logic landed without tests: add tests
   for it. Only raise `fail_under` (never lower it) once coverage improves.
+- **Import contract broken** — a layer boundary was crossed (e.g. `strategy`
+  importing `exchange`/ORM, or `core` importing an entrypoint). Fix the
+  dependency direction (move the code or invert the dependency); do not relax
+  the contract to make it pass.
 - **Dead code (vulture)** — remove it if it is genuinely unused. If it is a
   framework false positive (Django `Command`/`Meta`/model fields, aiogram
   `@router` handlers, pydantic `model_config`, a tested public API method,
