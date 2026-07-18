@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import signal
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from typing import cast
 
 import structlog
@@ -18,6 +18,7 @@ from core.exchange.bybit import BybitClient
 from core.exchange.dry_run import DryRunBybitClient
 from core.exchange.types import Execution, Side
 from core.exchange.ws import BybitPrivateStream, StreamEvent
+from core.services import repository
 from core.services.events import EventBus, NoOpEventBus
 from core.services.order_manager import OrderManager
 from core.services.reconciliation import reconcile_once
@@ -28,11 +29,6 @@ from core.strategy.grid import (
 )
 from core.trading.models import (
     BotStatus,
-    ExecutionLog,
-    GridLevel,
-    LevelStatus,
-    Position,
-    PositionStatus,
     StrategyConfig,
 )
 
@@ -109,7 +105,7 @@ class TraderRuntime:
         below market; gaps fill, out-of-band buys prune, held levels skip.
         """
         assert self._om is not None
-        if await sync_to_async(_is_paused)():
+        if await sync_to_async(repository.is_paused)():
             return
         if self._om.grid_mode != "absolute":
             await self._ensure_grid_percent()
@@ -128,7 +124,7 @@ class TraderRuntime:
         )
         n = min(int(total_quote / per_order), int(cfg.max_open_orders))
 
-        resting, held = await sync_to_async(_grid_state)(step)
+        resting, held = await sync_to_async(repository.grid_state)(step)
         targets = resting_buy_levels(price, step, n, held)
         target_prices = {p for _, p in targets}
         prune = set(buys_to_prune(resting.keys(), target_prices))
@@ -148,7 +144,7 @@ class TraderRuntime:
                         "grid.prune_failed", price=str(p), error=str(exc)
                     )
                     continue
-            await sync_to_async(_idle_level)(k)
+            await sync_to_async(repository.idle_level)(k)
             log.info("grid.pruned", price=str(p))
             if cancelled:
                 await self._bus.publish("order.cancelled", {"price": str(p)})
@@ -178,7 +174,7 @@ class TraderRuntime:
             count=config.max_open_orders,
             tick_size=self._om.instrument.tick_size,
         )
-        existing = await sync_to_async(_existing_active_levels)()
+        existing = await sync_to_async(repository.existing_active_levels)()
         for spec in specs:
             if spec.level_index in existing:
                 continue
@@ -266,7 +262,7 @@ class TraderRuntime:
         """
         assert self._om is not None
         cfg = self._om.config
-        if not await sync_to_async(_grid_params_changed)(
+        if not await sync_to_async(repository.grid_params_changed)(
             cfg.grid_step, cfg.order_qty_quote
         ):
             return
@@ -288,8 +284,8 @@ class TraderRuntime:
                     order_id=order.order_id,
                     error=str(exc),
                 )
-        await sync_to_async(_reset_all_grid_levels)()
-        await sync_to_async(_record_applied_grid_params)(
+        await sync_to_async(repository.reset_all_grid_levels)()
+        await sync_to_async(repository.record_applied_grid_params)(
             cfg.grid_step, cfg.order_qty_quote
         )
 
@@ -300,7 +296,9 @@ class TraderRuntime:
         filled unseen, else re-place a protective TP so it is never naked.
         """
         assert self._om is not None
-        candidates = await sync_to_async(_naked_candidates)(_NAKED_MIN_AGE_S)
+        candidates = await sync_to_async(repository.naked_candidates)(
+            _NAKED_MIN_AGE_S
+        )
         if not candidates:
             return
         orders = await self._om.client.get_open_orders(self._om.symbol)
@@ -318,7 +316,9 @@ class TraderRuntime:
             sells = [e for e in execs if e.side == Side.SELL]
             if sells:
                 for execution in sells:
-                    if await sync_to_async(_exec_logged)(execution.exec_id):
+                    if await sync_to_async(repository.exec_logged)(
+                        execution.exec_id
+                    ):
                         continue
                     log.warning(
                         "heal.naked_settle", id=pos_id, order_id=tp_order_id
@@ -327,7 +327,7 @@ class TraderRuntime:
                         execution, self._current_price
                     )
                 continue
-            pos = await sync_to_async(_get_open_position)(pos_id)
+            pos = await sync_to_async(repository.get_open_position)(pos_id)
             if pos is None:
                 continue
             log.warning(
@@ -352,7 +352,7 @@ class TraderRuntime:
         that filled, idle one that did not so the grid re-places it.
         """
         assert self._om is not None
-        awaiting = await sync_to_async(_awaiting_buy_levels)()
+        awaiting = await sync_to_async(repository.awaiting_buy_levels)()
         if not awaiting:
             return
         orders = await self._om.client.get_open_orders(self._om.symbol)
@@ -369,10 +369,10 @@ class TraderRuntime:
         idle, replay = plan_level_heal(awaiting, open_ids, fills_by_order)
         for idx in idle:
             log.warning("grid.heal_idle_stale_level", level=idx)
-            await sync_to_async(_idle_level)(idx)
+            await sync_to_async(repository.idle_level)(idx)
         for idx, fill in replay:
-            if await sync_to_async(_exec_logged)(fill.exec_id):
-                await sync_to_async(_idle_level)(idx)
+            if await sync_to_async(repository.exec_logged)(fill.exec_id):
+                await sync_to_async(repository.idle_level)(idx)
                 continue
             log.warning(
                 "grid.heal_replaying_buy", level=idx, order_id=fill.order_id
@@ -383,7 +383,7 @@ class TraderRuntime:
                 log.warning(
                     "grid.heal_replay_failed", level=idx, error=str(exc)[:120]
                 )
-                await sync_to_async(_idle_level)(idx)
+                await sync_to_async(repository.idle_level)(idx)
                 continue
             if booked is None:
                 log.warning(
@@ -391,7 +391,7 @@ class TraderRuntime:
                     level=idx,
                     order_id=fill.order_id,
                 )
-                await sync_to_async(_idle_level)(idx)
+                await sync_to_async(repository.idle_level)(idx)
 
     async def _recover_missed_fills(self) -> None:
         """Replay TP fills the WS stream dropped (e.g. on a reconnect).
@@ -400,7 +400,7 @@ class TraderRuntime:
         normal fill path (idempotent on ``exec_id``) to close it correctly.
         """
         assert self._om is not None
-        tp_ids = await sync_to_async(_open_tp_order_ids)()
+        tp_ids = await sync_to_async(repository.open_tp_order_ids)()
         if not tp_ids:
             return
         for execution in await self._om.client.get_executions(
@@ -408,7 +408,7 @@ class TraderRuntime:
         ):
             if execution.side != Side.SELL or execution.order_id not in tp_ids:
                 continue
-            if await sync_to_async(_exec_logged)(execution.exec_id):
+            if await sync_to_async(repository.exec_logged)(execution.exec_id):
                 continue
             log.warning(
                 "reconcile.replaying_missed_sell",
@@ -459,18 +459,6 @@ class TraderRuntime:
         await sync_to_async(_persist)()
 
 
-def _existing_active_levels() -> set[int]:
-    return set(
-        GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL).values_list(
-            "level_index", flat=True
-        )
-    ) | set(
-        Position.objects.filter(status=PositionStatus.OPEN).values_list(
-            "level_index", flat=True
-        )
-    )
-
-
 def naked_positions(
     candidates: list[tuple[int, str]], live_order_ids: set[str]
 ) -> list[tuple[int, str]]:
@@ -478,96 +466,6 @@ def naked_positions(
     longer live on the exchange — i.e. positions left without a resting
     protective sell."""
     return [(pid, oid) for pid, oid in candidates if oid not in live_order_ids]
-
-
-def _naked_candidates(min_age_seconds: int) -> list[tuple[int, str]]:
-    cutoff = datetime.now(tz=UTC) - timedelta(seconds=min_age_seconds)
-    return [
-        (int(pid), str(oid))
-        for pid, oid in Position.objects.filter(
-            status=PositionStatus.OPEN, opened_at__lt=cutoff
-        )
-        .exclude(tp_order_id="")
-        .values_list("id", "tp_order_id")
-    ]
-
-
-def _get_open_position(pos_id: int) -> Position | None:
-    return Position.objects.filter(
-        id=pos_id, status=PositionStatus.OPEN
-    ).first()
-
-
-def _grid_state(
-    step: Decimal,
-) -> tuple[dict[Decimal, tuple[int, str]], set[Decimal]]:
-    """Snapshot for band maintenance: resting buys keyed by price, and the set
-    of round prices currently *held* (an open grid position sits there)."""
-    resting = {
-        g.target_buy_price: (int(g.level_index), g.current_buy_order_id)
-        for g in GridLevel.objects.filter(
-            status=LevelStatus.AWAITING_FILL
-        ).exclude(current_buy_order_id="")
-    }
-    held: set[Decimal] = set()
-    for entry in Position.objects.filter(
-        status=PositionStatus.OPEN
-    ).values_list("entry_price", flat=True):
-        k = int((entry / step).to_integral_value(rounding=ROUND_HALF_UP))
-        held.add(Decimal(k) * step)
-    return resting, held
-
-
-def _idle_level(level_index: int) -> None:
-    GridLevel.objects.filter(level_index=level_index).update(
-        status=LevelStatus.IDLE, current_buy_order_id=""
-    )
-
-
-def _grid_params_changed(grid_step: Decimal, order_qty: Decimal) -> bool:
-    """Whether grid geometry differs from what it was last built with.
-
-    On the first run the applied values are unset, so we adopt the current
-    geometry without forcing a rebuild.
-    """
-    bot = BotStatus.load()
-    if bot.applied_grid_step is None or bot.applied_order_qty is None:
-        bot.applied_grid_step = grid_step
-        bot.applied_order_qty = order_qty
-        bot.save(update_fields=["applied_grid_step", "applied_order_qty"])
-        return False
-    return (
-        bot.applied_grid_step != grid_step
-        or bot.applied_order_qty != order_qty
-    )
-
-
-def _reset_all_grid_levels() -> None:
-    GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL).update(
-        status=LevelStatus.IDLE, current_buy_order_id=""
-    )
-
-
-def _record_applied_grid_params(
-    grid_step: Decimal, order_qty: Decimal
-) -> None:
-    bot = BotStatus.load()
-    bot.applied_grid_step = grid_step
-    bot.applied_order_qty = order_qty
-    bot.save(update_fields=["applied_grid_step", "applied_order_qty"])
-
-
-def _awaiting_buy_levels() -> list[tuple[int, str]]:
-    """(level_index, order_id) for every grid level still expecting a buy
-    fill."""
-    return [
-        (int(idx), oid)
-        for idx, oid in GridLevel.objects.filter(
-            status=LevelStatus.AWAITING_FILL
-        )
-        .exclude(current_buy_order_id="")
-        .values_list("level_index", "current_buy_order_id")
-    ]
 
 
 def plan_level_heal(
@@ -591,19 +489,3 @@ def plan_level_heal(
         else:
             replay.append((idx, fill))
     return idle, replay
-
-
-def _open_tp_order_ids() -> set[str]:
-    return set(
-        Position.objects.filter(status=PositionStatus.OPEN)
-        .exclude(tp_order_id="")
-        .values_list("tp_order_id", flat=True)
-    )
-
-
-def _exec_logged(exec_id: str) -> bool:
-    return ExecutionLog.objects.filter(exec_id=exec_id).exists()
-
-
-def _is_paused() -> bool:
-    return bool(BotStatus.load().paused)
