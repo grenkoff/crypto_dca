@@ -5,7 +5,9 @@ the nearest-to-market one that has an empty ``grid_step`` slot directly
 below it — descends into that slot, funded so the compensated pair stays
 strictly in profit; otherwise the profit stays banked until it can. This
 compacts the TP wall toward market with no gaps and no off-lattice orders,
-its bottom resting one ``tp_step`` above the nearest buy.
+its bottom resting ``tp_step + grid_step`` above the nearest buy (a filled
+buy's TP sits ``tp_step`` above it, and the next resting buy is one
+``grid_step`` lower).
 """
 
 from __future__ import annotations
@@ -44,17 +46,17 @@ def plan_compensation(
     """Plan the next TP compaction move, or None to keep banking the pool.
 
     Picks the nearest-to-market TP whose grid slot directly below is empty
-    and at or above the wall floor (``nearest_buy + tp_step``, market, min
-    notional), then moves it there if the pool funds a strictly-positive
-    pair. If that nearest gap can't be funded yet, returns None so the
-    profit keeps accumulating.
+    and at or above the wall floor (``nearest_buy + tp_step + grid_step``,
+    market, min notional), then moves it there if the pool funds a
+    strictly-positive pair. If that nearest gap can't be funded yet, returns
+    None so the profit keeps accumulating.
     """
     if ctx.pool <= 0 or ctx.grid_step <= 0 or not open_positions:
         return None
 
     market_floor = next_tick_above(ctx.current_price, ctx.tick_size)
     wall_floor = (
-        ctx.nearest_buy_price + ctx.tp_step
+        ctx.nearest_buy_price + ctx.tp_step + ctx.grid_step
         if ctx.nearest_buy_price > 0
         else market_floor
     )
