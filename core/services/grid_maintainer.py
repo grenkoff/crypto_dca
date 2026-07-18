@@ -62,6 +62,15 @@ class GridMaintainer:
         targets = resting_buy_levels(price, step, n, held)
         target_prices = {p for _, p in targets}
         prune = set(buys_to_prune(resting.keys(), target_prices))
+        await self._prune_out_of_band(resting, prune)
+        await self._place_missing(targets, resting, held)
+
+    async def _prune_out_of_band(
+        self,
+        resting: dict[Decimal, tuple[int, str]],
+        prune: set[Decimal],
+    ) -> None:
+        """Cancel and idle every resting buy that fell out of the band."""
         for p, (k, order_id) in list(resting.items()):
             if p not in prune:
                 continue
@@ -82,6 +91,14 @@ class GridMaintainer:
             log.info("grid.pruned", price=str(p))
             if cancelled:
                 await self._bus.publish("order.cancelled", {"price": str(p)})
+
+    async def _place_missing(
+        self,
+        targets: list[tuple[int, Decimal]],
+        resting: dict[Decimal, tuple[int, str]],
+        held: set[Decimal],
+    ) -> None:
+        """Place a buy at each target price not already resting or held."""
         for k, p in targets:
             if p in resting or p in held:
                 continue
