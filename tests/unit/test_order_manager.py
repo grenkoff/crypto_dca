@@ -12,6 +12,7 @@ from asgiref.sync import sync_to_async
 from core.exchange.types import Execution, Instrument, Side
 from core.services.events import RecordingEventBus
 from core.services.order_manager import OrderManager
+from core.services.protector import Protector
 from core.trading.models import (
     CompensationLink,
     ExecutionLog,
@@ -109,6 +110,21 @@ def om(
     bus: RecordingEventBus,
 ) -> OrderManager:
     return OrderManager(
+        client=client,  # type: ignore[arg-type]
+        instrument=instrument,
+        config=config,
+        bus=bus,
+    )
+
+
+@pytest.fixture
+def protector(
+    client: FakeBybitClient,
+    instrument: Instrument,
+    config: StrategyConfig,
+    bus: RecordingEventBus,
+) -> Protector:
+    return Protector(
         client=client,  # type: ignore[arg-type]
         instrument=instrument,
         config=config,
@@ -466,7 +482,7 @@ def _exec(
 
 
 async def test_reprotect_places_maker_sell_above_market(
-    om: OrderManager, client: FakeBybitClient
+    protector: Protector, client: FakeBybitClient
 ) -> None:
     pos = await sync_to_async(Position.objects.create)(
         level_index=5,
@@ -479,7 +495,7 @@ async def test_reprotect_places_maker_sell_above_market(
     # market ran up to 60000: the original TP (59500) now sits below market, so
     # the reprotected sell is floored one tick above market instead of
     # crossing.
-    order_id = await om.reprotect(pos, current_price=Decimal("60000"))
+    order_id = await protector.reprotect(pos, current_price=Decimal("60000"))
     placed = client.placed[-1]
     assert placed["side"] == Side.SELL
     assert placed["qty"] == Decimal("0.001")
@@ -490,7 +506,7 @@ async def test_reprotect_places_maker_sell_above_market(
 
 
 async def test_settle_phantom_closes_at_tp_and_frees_level(
-    om: OrderManager, bus: RecordingEventBus
+    protector: Protector, config: StrategyConfig, bus: RecordingEventBus
 ) -> None:
     await sync_to_async(GridLevel.objects.create)(
         level_index=7,
@@ -506,14 +522,14 @@ async def test_settle_phantom_closes_at_tp_and_frees_level(
         status=PositionStatus.OPEN,
         opened_at=datetime.now(tz=UTC),
     )
-    realized = await om.settle_phantom(pos)
+    realized = await protector.settle_phantom(pos)
 
     await sync_to_async(pos.refresh_from_db)()
     assert pos.status == PositionStatus.CLOSED
     assert pos.filled_qty == Decimal("0.001")
     # booked at the recorded TP price, net of the maker sell fee
     expected = Decimal("59100") * Decimal("0.001") * (
-        Decimal(1) - om.config.maker_fee
+        Decimal(1) - config.maker_fee
     ) - Decimal("59000") * Decimal("0.001")
     assert pos.realized_pnl == expected
     assert realized == expected
