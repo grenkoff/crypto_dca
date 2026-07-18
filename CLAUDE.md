@@ -227,3 +227,11 @@ see, run the **`/cookbook`** review after a change (advisory, after `/qa`):
 - **Migration hygiene** — one logical change per migration; never edit an
   applied migration; keep them reversible.
 - **Structlog over `print`** — structured events with kwargs, not f-strings.
+- **Comprehensions** — build collections with a list/dict/set comprehension
+  rather than a loop-and-append (the mechanical cases are already gated by
+  `C4`/`PERF`). Keep them side-effect-free and readable — a plain loop wins
+  when the body is complex.
+- **`match`** — use it for multi-way dispatch on an enum/`Literal` or for
+  destructuring tuples/dataclasses, where it reads clearer than an `if/elif`
+  ladder. For 2-branch or range conditions keep `if`/guard clauses — don't
+  force `match` where it adds ceremony (KISS / least astonishment).

@@ -35,6 +35,13 @@ Only what changed on this branch:
   updates and complex filters; `bulk_create`/`bulk_update` for batches.
 - **Logging** — `structlog` structured events (kwargs), not `print` or
   f-string-formatted messages; `log.exception` in `except` blocks.
+- **Comprehensions** — a loop that only builds a collection should be a
+  list/dict/set comprehension (or `.extend`); flag it. But leave a plain loop
+  when the body has side effects or is too complex to read as a comprehension.
+- **`match`** — an `if/elif` ladder dispatching on an enum/`Literal`, or code
+  destructuring a tuple/dataclass, often reads clearer as `match`; suggest it
+  there. Do *not* suggest `match` for 2-branch or range conditions — `if`
+  wins.
 
 ## Output
 
