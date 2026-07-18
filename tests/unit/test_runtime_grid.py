@@ -8,11 +8,8 @@ from asgiref.sync import sync_to_async
 
 from core.exchange.types import Execution, Side
 from core.services import repository
-from core.services.runtime import (
-    another_instance_alive,
-    naked_positions,
-    plan_level_heal,
-)
+from core.services.healer import naked_positions, plan_level_heal
+from core.services.runtime import another_instance_alive
 from core.strategy.grid import buys_to_prune, resting_buy_levels
 from core.trading.models import (
     BotStatus,
@@ -325,8 +322,8 @@ async def test_heal_stale_buy_replay_failure_idles_level_no_loop() -> None:
     # (insufficient balance) must be idled, not crash the cycle or loop
     # forever.
     from core.exchange.types import Instrument
+    from core.services.healer import Healer
     from core.services.order_manager import OrderManager
-    from core.services.runtime import TraderRuntime
     from core.trading.models import StrategyConfig
 
     @sync_to_async
@@ -391,11 +388,9 @@ async def test_heal_stale_buy_replay_failure_idles_level_no_loop() -> None:
         config=cfg,
         bus=NoOpEventBus(),
     )
-    rt = TraderRuntime()
-    rt._om = om
-    rt._current_price = Decimal("0.0295")
+    healer = Healer(om)
 
-    await rt._heal_stale_buy_levels()  # must not raise
+    await healer.heal_stale_buy_levels(Decimal("0.0295"))  # must not raise
 
     level = await sync_to_async(GridLevel.objects.get)(level_index=590)
     assert level.status == LevelStatus.IDLE
@@ -414,8 +409,8 @@ async def test_heal_stale_buy_replay_submin_fill_idles_level_no_loop() -> None:
     # (the reconcile.drift loop).
     from core.exchange.types import Instrument
     from core.services.events import NoOpEventBus
+    from core.services.healer import Healer
     from core.services.order_manager import OrderManager
-    from core.services.runtime import TraderRuntime
     from core.trading.models import StrategyConfig
 
     @sync_to_async
@@ -477,11 +472,9 @@ async def test_heal_stale_buy_replay_submin_fill_idles_level_no_loop() -> None:
         config=cfg,
         bus=NoOpEventBus(),
     )
-    rt = TraderRuntime()
-    rt._om = om
-    rt._current_price = Decimal("0.0286")
+    healer = Healer(om)
 
-    await rt._heal_stale_buy_levels()  # must not raise
+    await healer.heal_stale_buy_levels(Decimal("0.0286"))  # must not raise
 
     level = await sync_to_async(GridLevel.objects.get)(level_index=573)
     assert level.status == LevelStatus.IDLE
