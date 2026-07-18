@@ -20,13 +20,9 @@ from core.exchange.types import Execution, Side
 from core.exchange.ws import BybitPrivateStream, StreamEvent
 from core.services import repository
 from core.services.events import EventBus, NoOpEventBus
+from core.services.grid_maintainer import GridMaintainer
 from core.services.order_manager import OrderManager
 from core.services.reconciliation import reconcile_once
-from core.strategy.grid import (
-    buys_to_prune,
-    generate_levels,
-    resting_buy_levels,
-)
 from core.trading.models import (
     BotStatus,
     StrategyConfig,
@@ -62,7 +58,7 @@ class TraderRuntime:
         self._client: BybitClient | None = None
         self._stream: BybitPrivateStream | None = None
         self._current_price = Decimal(0)
-        self._grid_lock = asyncio.Lock()
+        self._grid: GridMaintainer | None = None
 
     async def bootstrap(self) -> None:
         """Load config, build the OrderManager, lay the initial grid."""
@@ -84,6 +80,7 @@ class TraderRuntime:
             config=config,
             bus=self._bus,
         )
+        self._grid = GridMaintainer(self._om, self._bus)
         await self._mark_started()
         log.info(
             "trader.bootstrap",
@@ -91,94 +88,8 @@ class TraderRuntime:
             current_price=str(self._current_price),
             tick=str(instrument.tick_size),
         )
-        await self._rebuild_grid_on_param_change()
-        await self._ensure_grid()
-
-    async def _ensure_grid(self) -> None:
-        async with self._grid_lock:
-            await self._ensure_grid_impl()
-
-    async def _ensure_grid_impl(self) -> None:
-        """Maintain a contiguous band of buy orders below the current price.
-
-        The band is the ``max_open_orders`` highest ``grid_step`` steps
-        below market; gaps fill, out-of-band buys prune, held levels skip.
-        """
-        assert self._om is not None
-        if await sync_to_async(repository.is_paused)():
-            return
-        if self._om.grid_mode != "absolute":
-            await self._ensure_grid_percent()
-            return
-        cfg = self._om.config
-        step: Decimal = cfg.grid_step
-        price = self._current_price
-        per_order: Decimal = cfg.order_qty_quote
-        if step <= 0 or price <= 0 or per_order <= 0:
-            return
-
-        balances = await self._om.client.get_balances()
-        quote = balances.get(self._om.instrument.quote_coin)
-        total_quote = (
-            (quote.free + quote.locked) if quote is not None else Decimal(0)
-        )
-        n = min(int(total_quote / per_order), int(cfg.max_open_orders))
-
-        resting, held = await sync_to_async(repository.grid_state)(step)
-        targets = resting_buy_levels(price, step, n, held)
-        target_prices = {p for _, p in targets}
-        prune = set(buys_to_prune(resting.keys(), target_prices))
-        for p, (k, order_id) in list(resting.items()):
-            if p not in prune:
-                continue
-            cancelled = False
-            try:
-                await self._om.client.cancel_order(self._om.symbol, order_id)
-                cancelled = True
-            except Exception as exc:
-                if (
-                    "170213" not in str(exc)
-                    and "does not exist" not in str(exc).lower()
-                ):
-                    log.warning(
-                        "grid.prune_failed", price=str(p), error=str(exc)
-                    )
-                    continue
-            await sync_to_async(repository.idle_level)(k)
-            log.info("grid.pruned", price=str(p))
-            if cancelled:
-                await self._bus.publish("order.cancelled", {"price": str(p)})
-        for k, p in targets:
-            if p in resting or p in held:
-                continue
-            try:
-                await self._om.place_buy_at_level(k, p)
-            except Exception as exc:
-                log.warning(
-                    "grid.place_skipped", price=str(p), error=str(exc)[:100]
-                )
-
-    async def _ensure_grid_percent(self) -> None:
-        """Legacy percent-mode grid (relative levels off a moving anchor)."""
-        assert self._om is not None
-        config = self._om.config
-        anchor = (
-            config.top_anchor
-            if config.top_anchor is not None
-            else self._current_price
-        )
-        specs = generate_levels(
-            top_anchor=anchor,
-            mode=self._om.grid_mode,
-            step=config.grid_step,
-            count=config.max_open_orders,
-            tick_size=self._om.instrument.tick_size,
-        )
-        existing = await sync_to_async(repository.existing_active_levels)()
-        for spec in specs:
-            if spec.level_index in existing:
-                continue
-            await self._om.place_buy_at_level(spec.level_index, spec.price)
+        await self._grid.rebuild_on_param_change()
+        await self._grid.ensure(self._current_price)
 
     async def run(self) -> None:
         """Open the WS and run the event and reconcile loops."""
@@ -217,7 +128,11 @@ class TraderRuntime:
                 )
 
     async def _handle_event(self, event: StreamEvent) -> None:
-        assert self._om is not None and self._client is not None
+        assert (
+            self._om is not None
+            and self._client is not None
+            and self._grid is not None
+        )
         if event.kind != "execution":
             return
         from core.exchange.types import Execution as BybitExecution
@@ -231,10 +146,14 @@ class TraderRuntime:
             await self._om.handle_buy_fill(event.payload)
         else:
             await self._om.handle_sell_fill(event.payload, self._current_price)
-        await self._ensure_grid()
+        await self._grid.ensure(self._current_price)
 
     async def _reconcile_loop(self) -> None:
-        assert self._client is not None and self._om is not None
+        assert (
+            self._client is not None
+            and self._om is not None
+            and self._grid is not None
+        )
         while not self._stop.is_set():
             try:
                 self._current_price = await self._client.get_last_price(
@@ -244,7 +163,7 @@ class TraderRuntime:
                 await self._recover_missed_fills()
                 await self._heal_naked_positions()
                 await self._heal_stale_buy_levels()
-                await self._ensure_grid()
+                await self._grid.ensure(self._current_price)
             except Exception as exc:
                 log.exception("reconcile.error", error=str(exc))
             try:
@@ -253,41 +172,6 @@ class TraderRuntime:
                 )
             except TimeoutError:
                 continue
-
-    async def _rebuild_grid_on_param_change(self) -> None:
-        """Rebuild the buy grid when ``grid_step``/``order_qty_quote`` changed.
-
-        Live orders are never resized, so on a geometry change we cancel every
-        resting buy (TP sells untouched) and idle their levels to rebuild.
-        """
-        assert self._om is not None
-        cfg = self._om.config
-        if not await sync_to_async(repository.grid_params_changed)(
-            cfg.grid_step, cfg.order_qty_quote
-        ):
-            return
-        log.warning(
-            "grid.params_changed_rebuild",
-            grid_step=str(cfg.grid_step),
-            order_qty=str(cfg.order_qty_quote),
-        )
-        for order in await self._om.client.get_open_orders(self._om.symbol):
-            if order.side != Side.BUY:
-                continue
-            try:
-                await self._om.client.cancel_order(
-                    self._om.symbol, order.order_id
-                )
-            except Exception as exc:
-                log.warning(
-                    "grid.rebuild_cancel_failed",
-                    order_id=order.order_id,
-                    error=str(exc),
-                )
-        await sync_to_async(repository.reset_all_grid_levels)()
-        await sync_to_async(repository.record_applied_grid_params)(
-            cfg.grid_step, cfg.order_qty_quote
-        )
 
     async def _heal_naked_positions(self) -> None:
         """Settle or reprotect open positions whose take-profit order vanished.
