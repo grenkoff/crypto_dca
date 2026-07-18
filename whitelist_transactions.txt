@@ -1,0 +1,7 @@
+# Exemptions for check_transactions.py check B (multi-write without atomic).
+# One entry per line: relative/path.py:function_name
+# Use ONLY when the multiple ORM writes are genuinely independent — a mid-way
+# failure leaving one applied and the other not is acceptable. If they must
+# succeed together, wrap them in transaction.atomic() instead of exempting.
+#
+# (currently empty — all multi-write functions are atomic)

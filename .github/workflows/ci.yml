@@ -48,5 +48,8 @@ jobs:
           uv run pylint core tgbot trader web manage.py
           --disable=all --enable=duplicate-code
 
+      - name: Transaction checks (ACID)
+        run: uv run python scripts/check_transactions.py
+
       - name: Pytest (unit)
         run: uv run pytest -ra --ignore=tests/integration
