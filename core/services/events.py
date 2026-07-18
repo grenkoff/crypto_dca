@@ -22,7 +22,7 @@ class NoOpEventBus:
 
     async def publish(self, event_type: str, payload: dict[str, Any]) -> None:
         """Discard the event."""
-        return None
+        return
 
 
 class RecordingEventBus:

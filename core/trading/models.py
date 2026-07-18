@@ -200,16 +200,16 @@ class Position(models.Model):
         ]
         ordering = ["-opened_at"]
 
-    @property
-    def is_open(self) -> bool:
-        """Whether the position is still open."""
-        return self.status == PositionStatus.OPEN
-
     def __str__(self) -> str:
         return (
             f"Position(L{self.level_index}, {self.qty}@{self.entry_price}, "
             f"{self.status})"
         )
+
+    @property
+    def is_open(self) -> bool:
+        """Whether the position is still open."""
+        return self.status == PositionStatus.OPEN
 
 
 class ExecutionLog(models.Model):
@@ -231,6 +231,9 @@ class ExecutionLog(models.Model):
         ordering = ["-executed_at"]
         indexes = [models.Index(fields=["-executed_at"])]
 
+    def __str__(self) -> str:
+        return f"ExecutionLog({self.exec_id}, {self.side} {self.qty})"
+
 
 class CompensationLink(models.Model):
     """Records that a profitable position's PnL was applied to compensate
@@ -250,6 +253,12 @@ class CompensationLink(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return (
+            f"CompensationLink({self.profitable_position_id}"
+            f"->{self.compensated_position_id})"
+        )
 
 
 class TelegramUser(models.Model):

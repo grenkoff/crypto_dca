@@ -116,7 +116,7 @@ class Healer:
                     log.warning("heal.naked_settle_phantom", id=pos_id)
                     await self._protector.settle_phantom(pos)
                 else:
-                    log.error(
+                    log.exception(
                         "heal.reprotect_failed", id=pos_id, error=msg[:100]
                     )
 

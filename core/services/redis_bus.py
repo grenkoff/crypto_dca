@@ -41,7 +41,7 @@ class RedisEventBus:
         try:
             await self._client.publish(CHANNEL, message)
         except Exception as exc:
-            log.error(
+            log.exception(
                 "redis_bus.publish_failed",
                 event_type=event_type,
                 error=str(exc),

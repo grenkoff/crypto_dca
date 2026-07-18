@@ -166,19 +166,19 @@ def check_file(path: Path, whitelist: set[str]) -> list[str]:
     violations: list[str] = []
 
     for node in _iter_atomic_withs(tree):
-        for await_node in _awaits_in_scope(node.body):
-            violations.append(
-                f"{path}:{await_node.lineno}: [A] await inside "
-                "transaction.atomic() — atomic blocks must be synchronous"
-            )
+        violations.extend(
+            f"{path}:{await_node.lineno}: [A] await inside "
+            "transaction.atomic() — atomic blocks must be synchronous"
+            for await_node in _awaits_in_scope(node.body)
+        )
     for fn in _iter_functions(tree):
         if not _has_atomic_decorator(fn):
             continue
-        for await_node in _awaits_in_scope(fn.body):
-            violations.append(
-                f"{path}:{await_node.lineno}: [A] await inside "
-                "@transaction.atomic function — must be synchronous"
-            )
+        violations.extend(
+            f"{path}:{await_node.lineno}: [A] await inside "
+            "@transaction.atomic function — must be synchronous"
+            for await_node in _awaits_in_scope(fn.body)
+        )
 
     for fn in _iter_functions(tree):
         start_atomic = _has_atomic_decorator(fn)

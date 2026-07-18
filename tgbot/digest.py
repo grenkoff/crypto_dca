@@ -63,14 +63,11 @@ async def _send_digest(bot: Bot) -> None:
 async def run_digest_scheduler(bot: Bot, stop: asyncio.Event) -> None:
     """Send the daily digest at the configured time until stopped."""
     log.info("tgbot.digest_scheduler_started")
-    try:
-        while not stop.is_set():
-            try:
-                if await _claim_due():
-                    await _send_digest(bot)
-            except Exception as exc:
-                log.exception("tgbot.digest_failed", error=str(exc))
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(stop.wait(), timeout=_POLL_SECONDS)
-    except asyncio.CancelledError:
-        raise
+    while not stop.is_set():
+        try:
+            if await _claim_due():
+                await _send_digest(bot)
+        except Exception as exc:
+            log.exception("tgbot.digest_failed", error=str(exc))
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), timeout=_POLL_SECONDS)

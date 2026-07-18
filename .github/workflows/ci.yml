@@ -54,6 +54,9 @@ jobs:
       - name: Import contracts (layer boundaries)
         run: uv run lint-imports
 
+      - name: Django system checks
+        run: uv run python manage.py check
+
       - name: Pytest (unit) + coverage floor
         run: uv run pytest -ra --ignore=tests/integration --cov
 

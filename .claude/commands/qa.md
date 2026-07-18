@@ -8,7 +8,8 @@ Run `bash scripts/qa.sh`. It checks, in order:
 
 - `ruff format --check` + `ruff check` — PEP 8, mandatory docstrings, unused
   imports/variables, function complexity/size limits (`C901` + `PLR09xx`),
-  security lint (`S` / flake8-bandit)
+  security lint (`S` / flake8-bandit), cookbook idioms (`DJ`, `TRY`, `PTH`,
+  `RET`, `C4`, `PERF`, `N`, ...)
 - `mypy` — types
 - `vulture` — dead code (unused functions/classes/methods); framework
   false positives are whitelisted in `whitelist_vulture.py`
@@ -18,6 +19,7 @@ Run `bash scripts/qa.sh`. It checks, in order:
   wrapped in `atomic()` (B)
 - `import-linter` — layer boundaries (SoC): `services > exchange > strategy`,
   `strategy` stays pure, `core` never imports an entrypoint
+- `manage.py check` — Django system checks (models, config, migrations)
 - `pytest` — unit tests **+ coverage floor** on `core` (`fail_under`,
   ratcheted; a drop fails the run)
 
