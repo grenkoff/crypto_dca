@@ -49,7 +49,8 @@ NOT tests or migrations.
      `ruff check --fix` — PEP 8 and unused imports/variables, instantly.
   2. **End of task**: run `bash scripts/qa.sh` (or `/qa`) — adds `mypy`,
      `vulture` (dead code), `pylint duplicate-code` (DRY),
-     `check_transactions` (ACID), `pytest`. Get to `QA: ALL GREEN`.
+     `check_transactions` (ACID), `pytest` (+ coverage floor). Get to
+     `QA: ALL GREEN`.
   3. **CI** blocks the merge on all of the above.
 - **`vulture`** flags dead code. Django/aiogram/pydantic produce false
   positives (`Command`/`Meta`/model fields, `@router` handlers, `model_config`,
@@ -98,6 +99,28 @@ Machine-enforced (a gate, like DRY) — `scripts/check_transactions.py`, in
   `transaction.atomic()`. Genuinely-independent writes can be exempted in
   `whitelist_transactions.txt` (`path.py:function`) — prefer fixing over
   exempting.
+
+## Security & supply chain
+
+This bot holds live exchange API keys and moves real money, so treat security
+as a gate, not an afterthought.
+
+- **Never commit secrets.** Keys/tokens come from env/settings, never
+  hardcoded. CI runs **gitleaks** (`secret-scan` job) over the diff and history
+  — a hit blocks the merge. If one ever lands, rotate the key, don't just
+  delete the commit.
+- **Security lint** — ruff `S` (flake8-bandit) is in `select`: network calls
+  need a `timeout`, no `shell=True`, no hardcoded credentials, no weak `random`
+  for anything security-sensitive. `S101` (assert) is ignored on purpose —
+  asserts are only mypy type-narrowing here. Fix findings; don't blanket-ignore
+  a rule (narrow it in `pyproject.toml` with a reason if truly a false hit).
+- **Dependencies** — `.github/dependabot.yml` opens weekly update PRs for the
+  Python deps (uv) and the CI actions. Review and merge them; a known CVE in
+  `pybit`/`aiogram`/`django` is your problem too. `uv sync --frozen` keeps
+  builds reproducible from `uv.lock`.
+- **Test coverage floor** — `pytest --cov` enforces `fail_under` on `core`
+  (ratcheted like the complexity gates). A drop means money-path logic landed
+  untested; add the tests rather than lowering the floor.
 
 ## Design principles
 

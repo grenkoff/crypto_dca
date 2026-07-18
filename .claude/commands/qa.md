@@ -7,7 +7,8 @@ Run the project QA suite and get it fully green before reporting the task done.
 Run `bash scripts/qa.sh`. It checks, in order:
 
 - `ruff format --check` + `ruff check` — PEP 8, mandatory docstrings, unused
-  imports/variables, function complexity/size limits (`C901` + `PLR09xx`)
+  imports/variables, function complexity/size limits (`C901` + `PLR09xx`),
+  security lint (`S` / flake8-bandit)
 - `mypy` — types
 - `vulture` — dead code (unused functions/classes/methods); framework
   false positives are whitelisted in `whitelist_vulture.py`
@@ -15,11 +16,17 @@ Run `bash scripts/qa.sh`. It checks, in order:
 - `check_transactions` — ACID/transactions: no `await` inside
   `transaction.atomic()` (A), and ≥ 2 ORM writes in one function must be
   wrapped in `atomic()` (B)
-- `pytest`
+- `pytest` — unit tests **+ coverage floor** on `core` (`fail_under`,
+  ratcheted; a drop fails the run)
 
 For each failure:
 
-- **PEP 8 / format / types / unused** — fix the code.
+- **PEP 8 / format / types / unused / security (`S`)** — fix the code (add a
+  request timeout, drop the hardcoded value, etc.). Don't blanket-ignore an
+  `S` rule; if it's a real false positive, narrow it in `pyproject.toml` with
+  a reason.
+- **Coverage floor** — a drop means new logic landed without tests: add tests
+  for it. Only raise `fail_under` (never lower it) once coverage improves.
 - **Dead code (vulture)** — remove it if it is genuinely unused. If it is a
   framework false positive (Django `Command`/`Meta`/model fields, aiogram
   `@router` handlers, pydantic `model_config`, a tested public API method,
