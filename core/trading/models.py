@@ -115,6 +115,7 @@ class BotStatus(_Singleton):
         null=True,
         blank=True,
     )
+    pending_credit = _amount(default=Decimal(0))
 
     def __str__(self) -> str:
         return "paused" if self.paused else "running"

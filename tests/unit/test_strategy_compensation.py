@@ -2,20 +2,16 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from core.strategy.compensation import (
-    compute_compensation,
-    plan_compensation,
-    select_compensation_target,
-)
-from core.strategy.types import OpenPosition
+from core.strategy.compensation import plan_compensation, slot_below
+from core.strategy.types import CompensationContext, OpenPosition
 
 
 def _pos(
     pid: int,
-    entry: str,
-    qty: str = "0.001",
+    tp: str,
+    entry: str = "0.02000",
+    qty: str = "200",
     fees_in: str = "0",
-    tp: str = "0",
     credit: str = "0",
 ) -> OpenPosition:
     return OpenPosition(
@@ -28,192 +24,125 @@ def _pos(
     )
 
 
-def test_select_picks_second_nearest_tp_above_market() -> None:
+def _ctx(
+    *,
+    pool: str = "1000",
+    market: str = "0.02768",
+    nearest_buy: str = "0.02785",
+    grid_step: str = "0.00005",
+    tp_step: str = "0.0001",
+    tick: str = "0.00001",
+    maker_fee: str = "0.000625",
+    min_order_amt: str = "0",
+) -> CompensationContext:
+    return CompensationContext(
+        pool=Decimal(pool),
+        maker_fee=Decimal(maker_fee),
+        current_price=Decimal(market),
+        tick_size=Decimal(tick),
+        grid_step=Decimal(grid_step),
+        tp_step=Decimal(tp_step),
+        nearest_buy_price=Decimal(nearest_buy),
+        min_order_amt=Decimal(min_order_amt),
+    )
+
+
+def test_slot_below_on_grid_steps_one_grid_step() -> None:
+    assert slot_below(Decimal("0.02810"), Decimal("0.00005")) == Decimal(
+        "0.02805"
+    )
+
+
+def test_slot_below_off_grid_snaps_to_lattice() -> None:
+    # 0.02836 is off the 0.00005 lattice -> pulled down to 0.02835
+    assert slot_below(Decimal("0.02836"), Decimal("0.00005")) == Decimal(
+        "0.02835"
+    )
+
+
+def test_fills_nearest_hole_above_the_wall() -> None:
+    # wall_floor = 0.02785 + 0.0001 = 0.02795; contiguous 02795/02800, gap
+    # 02805, then 02810. The bottom two can't move (at floor / slot occupied);
+    # 02810 drops into the hole 02805.
     positions = [
-        _pos(1, "60000", tp="61000"),  # farthest
-        _pos(2, "58000", tp="59000"),  # second-nearest — the victim
-        _pos(3, "55000", tp="58000"),  # nearest — left to fill on its own
+        _pos(3, "0.02795"),
+        _pos(2, "0.02800"),
+        _pos(1, "0.02810"),
     ]
-    victim = select_compensation_target(
-        positions, Decimal("57000"), Decimal("0.01")
-    )
-    assert victim is not None and victim.id == 2
-
-
-def test_select_falls_back_to_single_candidate() -> None:
-    positions = [
-        _pos(1, "60000", tp="61000"),
-        _pos(2, "50000", tp="56000"),  # below market — not a candidate
-    ]
-    victim = select_compensation_target(
-        positions, Decimal("57000"), Decimal("0.01")
-    )
-    assert victim is not None and victim.id == 1
-
-
-def test_select_skips_tp_at_or_below_market() -> None:
-    positions = [_pos(1, "50000", tp="56000"), _pos(2, "55000", tp="56500")]
-    victim = select_compensation_target(
-        positions, Decimal("60000"), Decimal("0.01")
-    )
-    assert victim is None
-
-
-def test_select_returns_none_on_empty() -> None:
-    assert (
-        select_compensation_target([], Decimal("60000"), Decimal("0.01"))
-        is None
-    )
-
-
-def test_compensation_lowers_tp_by_exactly_one_step() -> None:
-    target = _pos(1, "60000", qty="0.001", fees_in="0.06", tp="61000")
-    decision = compute_compensation(
-        target=target,
-        profit_from_other=Decimal("0.50"),
-        maker_fee=Decimal("0.001"),
-        current_price=Decimal("57000"),
-        tick_size=Decimal("0.01"),
-        step=Decimal("100"),
-    )
+    decision = plan_compensation(positions, _ctx())
     assert decision is not None
-    assert decision.new_tp_price == Decimal("60900")  # one step down, no more
-    assert decision.new_credit == Decimal("0.50")  # profit booked as credit
-
-
-def test_compensation_steps_accumulate_credit_across_calls() -> None:
-    t1 = _pos(1, "60000", qty="0.001", fees_in="0.06", tp="61000", credit="0")
-    d1 = compute_compensation(
-        target=t1,
-        profit_from_other=Decimal("0.50"),
-        maker_fee=Decimal("0.001"),
-        current_price=Decimal("57000"),
-        tick_size=Decimal("0.01"),
-        step=Decimal("100"),
-    )
-    assert d1 is not None and d1.new_tp_price == Decimal("60900")
-    t2 = _pos(
-        1,
-        "60000",
-        qty="0.001",
-        fees_in="0.06",
-        tp=str(d1.new_tp_price),
-        credit="0.50",
-    )
-    d2 = compute_compensation(
-        target=t2,
-        profit_from_other=Decimal("0.50"),
-        maker_fee=Decimal("0.001"),
-        current_price=Decimal("57000"),
-        tick_size=Decimal("0.01"),
-        step=Decimal("100"),
-    )
-    assert d2 is not None
-    assert d2.new_tp_price == Decimal("60800")  # another single step
-    assert d2.new_credit == Decimal("1.00")
-
-
-def test_compensation_step_smaller_than_tick_still_moves_one_tick() -> None:
-    # step below tick granularity must still produce a real (one-tick)
-    # decrease.
-    target = _pos(1, "60000", qty="0.001", fees_in="0", tp="61000")
-    decision = compute_compensation(
-        target=target,
-        profit_from_other=Decimal("0.10"),
-        maker_fee=Decimal("0.001"),
-        current_price=Decimal("57000"),
-        tick_size=Decimal("0.01"),
-        step=Decimal("0.001"),
-    )
-    assert decision is not None
-    assert decision.new_tp_price == Decimal("60999.99")
-
-
-def test_compute_compensation_caps_at_market_floor() -> None:
-    # Low entry (break-even below market) + credit: a full step would land
-    # below market, so it is floored one tick above it.
-    target = _pos(
-        1, "59000", qty="0.001", fees_in="0", tp="59000.05", credit="0.10"
-    )
-    decision = compute_compensation(
-        target=target,
-        profit_from_other=Decimal("0.05"),
-        maker_fee=Decimal("0.001"),
-        current_price=Decimal("59000"),
-        tick_size=Decimal("0.01"),
-        step=Decimal("100"),
-    )
-    assert decision is not None and decision.new_tp_price == Decimal(
-        "59000.01"
-    )
-
-
-def test_compute_compensation_skips_when_credit_insufficient() -> None:
-    # TP already far below break-even; the tiny credit can't cover the loss ->
-    # skip (the credit floor sits above the current TP), so the profit is kept
-    # instead.
-    target = _pos(
-        1, "60000", qty="0.001", fees_in="0", tp="59000.05", credit="0"
-    )
-    decision = compute_compensation(
-        target=target,
-        profit_from_other=Decimal("0.10"),
-        maker_fee=Decimal("0.001"),
-        current_price=Decimal("57000"),
-        tick_size=Decimal("0.01"),
-        step=Decimal("100"),
-    )
-    assert decision is None
-
-
-def test_compute_compensation_skips_when_profit_nonpositive() -> None:
-    target = _pos(1, "60000", qty="0.001", fees_in="0", tp="61000")
-    assert (
-        compute_compensation(
-            target=target,
-            profit_from_other=Decimal("0"),
-            maker_fee=Decimal("0.001"),
-            current_price=Decimal("57000"),
-            tick_size=Decimal("0.01"),
-            step=Decimal("100"),
-        )
-        is None
-    )
-
-
-def test_plan_compensation_end_to_end() -> None:
-    positions = [
-        _pos(1, "60000", qty="0.001", fees_in="0.06", tp="61000"),
-        _pos(2, "58000", qty="0.001", fees_in="0.058", tp="59000"),
-    ]
-    decision = plan_compensation(
-        open_positions=positions,
-        profit_from_other=Decimal("0.50"),
-        maker_fee=Decimal("0.001"),
-        current_price=Decimal("57000"),
-        tick_size=Decimal("0.01"),
-        step=Decimal("100"),
-    )
-    assert decision is not None
-    # Nearest TP (59000) is left alone; the second-nearest (61000) steps down.
     assert decision.target_position_id == 1
-    assert decision.new_tp_price == Decimal("60900")
+    assert decision.new_tp_price == Decimal("0.02805")
+    assert decision.credit_drawn == Decimal("0")  # winner moves for free
 
 
-def test_compute_compensation_floors_at_min_notional() -> None:
-    # 164.91 KAS: a step from 0.0304 to 0.0303 would put the sell at $4.9976 —
-    # below the $5 exchange minimum — so the price is floored to stay
-    # placeable.
-    target = _pos(1, "0.0302", qty="164.91", fees_in="0", tp="0.0304")
-    decision = compute_compensation(
-        target=target,
-        profit_from_other=Decimal("0.05"),
-        maker_fee=Decimal("0.000625"),
-        current_price=Decimal("0.0295"),
-        tick_size=Decimal("0.00001"),
-        step=Decimal("0.0001"),
-        min_order_amt=Decimal("5"),
-    )
+def test_isolated_tp_steps_down_one_grid_step() -> None:
+    # contiguous 02795..02810, isolated 02830 -> it steps to 02825
+    positions = [
+        _pos(1, "0.02795"),
+        _pos(2, "0.02800"),
+        _pos(3, "0.02805"),
+        _pos(4, "0.02810"),
+        _pos(5, "0.02830"),
+    ]
+    decision = plan_compensation(positions, _ctx())
     assert decision is not None
-    assert decision.new_tp_price * target.qty >= Decimal("5")
-    assert decision.new_tp_price < target.current_tp_price
+    assert decision.target_position_id == 5
+    assert decision.new_tp_price == Decimal("0.02825")
+
+
+def test_off_grid_tp_is_pulled_onto_the_lattice() -> None:
+    positions = [_pos(1, "0.02836")]
+    decision = plan_compensation(positions, _ctx(nearest_buy="0"))
+    assert decision is not None
+    assert decision.new_tp_price == Decimal("0.02835")
+
+
+def test_bottom_tp_not_pushed_below_nearest_buy_plus_tp_step() -> None:
+    # wall_floor = 0.02760 + 0.0001 = 0.02770; a TP already there cannot move
+    positions = [_pos(1, "0.02770")]
+    assert plan_compensation(positions, _ctx(nearest_buy="0.02760")) is None
+
+
+def test_tp_one_step_above_floor_moves_down_to_the_floor() -> None:
+    positions = [_pos(1, "0.02775")]
+    decision = plan_compensation(positions, _ctx(nearest_buy="0.02760"))
+    assert decision is not None
+    assert decision.new_tp_price == Decimal("0.02770")
+
+
+def test_underwater_move_draws_credit_and_keeps_pair_positive() -> None:
+    victim = _pos(1, "0.02810", entry="0.03000", qty="200")
+    decision = plan_compensation([victim], _ctx(nearest_buy="0"))
+    assert decision is not None
+    assert decision.new_tp_price == Decimal("0.02805")
+    assert decision.credit_drawn > 0
+    realized = (
+        decision.new_tp_price * victim.qty * (Decimal(1) - Decimal("0.000625"))
+        - victim.entry_price * victim.qty
+        - victim.fees_in
+    )
+    assert realized + decision.new_credit > 0  # pair strictly in profit
+
+
+def test_underwater_move_skipped_when_pool_too_small() -> None:
+    victim = _pos(1, "0.02810", entry="0.03000", qty="200")
+    assert (
+        plan_compensation([victim], _ctx(pool="0.10", nearest_buy="0")) is None
+    )
+
+
+def test_occupied_slot_below_is_skipped_for_next_victim() -> None:
+    # 02800's slot (02795) is occupied; the mover is 02810 into empty 02805
+    positions = [
+        _pos(1, "0.02795"),
+        _pos(2, "0.02800"),
+        _pos(3, "0.02810"),
+    ]
+    decision = plan_compensation(positions, _ctx())
+    assert decision is not None and decision.target_position_id == 3
+
+
+def test_no_move_when_pool_nonpositive_or_empty() -> None:
+    assert plan_compensation([_pos(1, "0.02810")], _ctx(pool="0")) is None
+    assert plan_compensation([], _ctx()) is None
