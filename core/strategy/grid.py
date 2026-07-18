@@ -87,3 +87,29 @@ def buys_to_prune(
         return []
     bottom = min(target_prices)
     return [p for p in resting_prices if p < bottom]
+
+
+def fundable_targets(
+    targets: list[tuple[int, Decimal]],
+    covered: set[Decimal],
+    budget: Decimal,
+    per_order: Decimal,
+) -> list[tuple[int, Decimal]]:
+    """Targets to actually place this cycle, capped by free budget.
+
+    Skips prices already covered (resting or held); places nearest-market
+    first and stops once the remaining free budget can't fund another
+    ``per_order`` — the deeper levels wait for capital to free up next cycle.
+    """
+    if per_order <= 0:
+        return []
+    out: list[tuple[int, Decimal]] = []
+    remaining = budget
+    for k, p in targets:
+        if p in covered:
+            continue
+        if remaining < per_order:
+            break
+        out.append((k, p))
+        remaining -= per_order
+    return out

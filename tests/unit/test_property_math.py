@@ -14,7 +14,11 @@ from hypothesis import strategies as st
 
 from core.exchange.types import Instrument
 from core.services.order_manager import compute_buy_qty
-from core.strategy.grid import buys_to_prune, resting_buy_levels
+from core.strategy.grid import (
+    buys_to_prune,
+    fundable_targets,
+    resting_buy_levels,
+)
 from core.strategy.pricing import compute_tp_price
 from core.strategy.rounding import (
     min_notional_price,
@@ -155,6 +159,32 @@ def test_buys_to_prune_are_exactly_those_below_the_band_bottom(
     assert all(p < bottom for p in prune)
     # completeness: nothing at/above the bottom is pruned
     assert all(p >= bottom for p in resting if p not in prune)
+
+
+@given(
+    targets=st.lists(
+        st.tuples(
+            st.integers(min_value=0, max_value=10000),
+            _dec("0.00001", "1000000"),
+        ),
+        max_size=30,
+    ),
+    covered=st.sets(_dec("0", "1000000"), max_size=10),
+    budget=_dec("0", "100000", places=2),
+    per_order=_dec("0.01", "1000", places=2),
+)
+def test_fundable_targets_never_exceeds_budget(
+    targets: list[tuple[int, Decimal]],
+    covered: set[Decimal],
+    budget: Decimal,
+    per_order: Decimal,
+) -> None:
+    chosen = fundable_targets(targets, covered, budget, per_order)
+    # never plans to spend more free capital than it has
+    assert len(chosen) * per_order <= budget
+    # only ever picks real, uncovered targets
+    assert all((k, p) in targets for k, p in chosen)
+    assert all(p not in covered for _, p in chosen)
 
 
 @given(
