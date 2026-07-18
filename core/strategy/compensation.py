@@ -1,7 +1,11 @@
-"""Pairwise compensation: profit pulls a near-market TP one step down.
+"""Take-profit grid compaction: pull TPs down onto empty grid slots.
 
-Targets the second-nearest TP above market, bounded by a credit floor so
-the pair never nets below zero; the new TP rests as a maker above market.
+On each profitable close the profit is banked into a credit pool. One TP —
+the nearest-to-market one that has an empty ``grid_step`` slot directly
+below it — descends into that slot, funded so the compensated pair stays
+strictly in profit; otherwise the profit stays banked until it can. This
+compacts the TP wall toward market with no gaps and no off-lattice orders,
+its bottom resting one ``tp_step`` above the nearest buy.
 """
 
 from __future__ import annotations
@@ -12,88 +16,80 @@ from core.strategy.rounding import (
     min_notional_price,
     next_tick_above,
     round_down_to_tick,
-    round_up_to_tick,
 )
-from core.strategy.types import CompensationDecision, OpenPosition
+from core.strategy.types import (
+    CompensationContext,
+    CompensationDecision,
+    OpenPosition,
+)
+
+_PROFIT_EPS = Decimal("1E-10")
 
 
-def select_compensation_target(
-    positions: list[OpenPosition], current_price: Decimal, tick_size: Decimal
-) -> OpenPosition | None:
-    """Pick the position whose TP to pull down: second-nearest above market.
+def slot_below(tp_price: Decimal, grid_step: Decimal) -> Decimal:
+    """The nearest ``grid_step`` level strictly below ``tp_price``.
 
-    Only TPs above the market floor are workable; the nearest fills on its
-    own, so the one behind it gets the step (or the sole candidate).
+    An on-grid price steps down a full ``grid_step``; an off-grid price
+    snaps down to its grid level, pulling a stray TP back onto the lattice.
     """
-    floor = next_tick_above(current_price, tick_size)
-    candidates = sorted(
-        (p for p in positions if p.current_tp_price > floor),
-        key=lambda p: p.current_tp_price,
-    )
-    if not candidates:
-        return None
-    return candidates[1] if len(candidates) > 1 else candidates[0]
-
-
-def compute_compensation(
-    *,
-    target: OpenPosition,
-    profit_from_other: Decimal,
-    maker_fee: Decimal,
-    current_price: Decimal,
-    tick_size: Decimal,
-    step: Decimal,
-    min_order_amt: Decimal = Decimal(0),
-) -> CompensationDecision | None:
-    """Compute the compensated TP move for ``target``, or None if unfunded."""
-    if profit_from_other <= 0 or step <= 0:
-        return None
-    new_credit = target.compensation_credit + profit_from_other
-
-    step_target = round_down_to_tick(target.current_tp_price - step, tick_size)
-    credit_floor = round_up_to_tick(
-        (target.entry_price * target.qty + target.fees_in - new_credit)
-        / (target.qty * (Decimal(1) - maker_fee)),
-        tick_size,
-    )
-    floor = max(credit_floor, next_tick_above(current_price, tick_size))
-    if min_order_amt > 0:
-        floor = max(
-            floor, min_notional_price(min_order_amt, target.qty, tick_size)
-        )
-
-    new_tp = max(step_target, floor)
-    if new_tp >= target.current_tp_price:
-        return None
-    return CompensationDecision(
-        target_position_id=target.id,
-        new_tp_price=new_tp,
-        new_credit=new_credit,
-    )
+    snapped = round_down_to_tick(tp_price, grid_step)
+    if snapped < tp_price:
+        return snapped
+    return tp_price - grid_step
 
 
 def plan_compensation(
-    *,
-    open_positions: list[OpenPosition],
-    profit_from_other: Decimal,
-    maker_fee: Decimal,
-    current_price: Decimal,
-    tick_size: Decimal,
-    step: Decimal,
-    min_order_amt: Decimal = Decimal(0),
+    open_positions: list[OpenPosition], ctx: CompensationContext
 ) -> CompensationDecision | None:
-    """Convenience: pick victim and compute decision in one call."""
-    victim = select_compensation_target(
-        open_positions, current_price, tick_size
-    )
-    if victim is None:
+    """Plan the next TP compaction move, or None to keep banking the pool.
+
+    Picks the nearest-to-market TP whose grid slot directly below is empty
+    and at or above the wall floor (``nearest_buy + tp_step``, market, min
+    notional), then moves it there if the pool funds a strictly-positive
+    pair. If that nearest gap can't be funded yet, returns None so the
+    profit keeps accumulating.
+    """
+    if ctx.pool <= 0 or ctx.grid_step <= 0 or not open_positions:
         return None
-    return compute_compensation(
-        target=victim,
-        profit_from_other=profit_from_other,
-        maker_fee=maker_fee,
-        current_price=current_price,
-        tick_size=tick_size,
-        step=step,
-        min_order_amt=min_order_amt,
+
+    market_floor = next_tick_above(ctx.current_price, ctx.tick_size)
+    wall_floor = (
+        ctx.nearest_buy_price + ctx.tp_step
+        if ctx.nearest_buy_price > 0
+        else market_floor
     )
+    floor = max(market_floor, wall_floor)
+
+    occupied = {p.current_tp_price for p in open_positions}
+    for victim in sorted(open_positions, key=lambda p: p.current_tp_price):
+        if victim.current_tp_price <= floor:
+            continue
+        target = slot_below(victim.current_tp_price, ctx.grid_step)
+        if target in occupied:
+            continue
+        victim_floor = floor
+        if ctx.min_order_amt > 0:
+            victim_floor = max(
+                victim_floor,
+                min_notional_price(
+                    ctx.min_order_amt, victim.qty, ctx.tick_size
+                ),
+            )
+        if target < victim_floor:
+            continue
+        realized = (
+            target * victim.qty * (Decimal(1) - ctx.maker_fee)
+            - victim.entry_price * victim.qty
+            - victim.fees_in
+        )
+        pair = realized + victim.compensation_credit
+        draw = Decimal(0) if pair > 0 else (-pair + _PROFIT_EPS)
+        if draw > ctx.pool:
+            return None
+        return CompensationDecision(
+            target_position_id=victim.id,
+            new_tp_price=target,
+            new_credit=victim.compensation_credit + draw,
+            credit_drawn=draw,
+        )
+    return None

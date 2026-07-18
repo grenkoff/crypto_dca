@@ -14,6 +14,7 @@ from hypothesis import strategies as st
 
 from core.exchange.types import Instrument
 from core.services.order_manager import compute_buy_qty
+from core.strategy.compensation import plan_compensation
 from core.strategy.grid import (
     buys_to_prune,
     fundable_targets,
@@ -26,6 +27,7 @@ from core.strategy.rounding import (
     round_down_to_tick,
     round_up_to_tick,
 )
+from core.strategy.types import CompensationContext, OpenPosition
 
 # Real exchange ticks/lots are powers of ten; using those keeps the grid
 # arithmetic exact and the invariants free of Decimal-precision noise.
@@ -212,3 +214,86 @@ def test_compute_buy_qty_lot_aligned_and_clears_min_when_funded(
     # a properly funded request must always clear the exchange minimum
     if quote >= min_order_amt:
         assert qty * price >= min_order_amt
+
+
+_COMP_GRID = Decimal("0.00005")
+_COMP_TP_STEP = Decimal("0.0001")
+_COMP_TICK = Decimal("0.00001")
+
+
+@st.composite
+def _open_positions(draw: st.DrawFn) -> list[OpenPosition]:
+    ks = draw(
+        st.lists(
+            st.integers(min_value=400, max_value=700),
+            min_size=1,
+            max_size=8,
+            unique=True,
+        )
+    )
+    out: list[OpenPosition] = []
+    for i, k in enumerate(ks):
+        out.append(
+            OpenPosition(
+                id=i + 1,
+                entry_price=draw(_dec("0.01", "0.05", 5)),
+                qty=draw(_dec("50", "500", 2)),
+                fees_in=Decimal(0),
+                current_tp_price=Decimal(k) * _COMP_GRID,
+                compensation_credit=draw(_dec("0", "5", 4)),
+            )
+        )
+    return out
+
+
+@given(
+    positions=_open_positions(),
+    pool=_dec("0", "10000", 2),
+    market=_dec("0.015", "0.04", 5),
+    nearest_buy=_dec("0", "0.04", 5),
+    maker_fee=st.sampled_from(
+        [Decimal(f) for f in ("0", "0.000625", "0.001", "0.01")]
+    ),
+)
+def test_compensation_decision_invariants(
+    positions: list[OpenPosition],
+    pool: Decimal,
+    market: Decimal,
+    nearest_buy: Decimal,
+    maker_fee: Decimal,
+) -> None:
+    ctx = CompensationContext(
+        pool=pool,
+        maker_fee=maker_fee,
+        current_price=market,
+        tick_size=_COMP_TICK,
+        grid_step=_COMP_GRID,
+        tp_step=_COMP_TP_STEP,
+        nearest_buy_price=nearest_buy,
+        min_order_amt=Decimal(0),
+    )
+    decision = plan_compensation(positions, ctx)
+    if decision is None:
+        return
+    victim = next(p for p in positions if p.id == decision.target_position_id)
+    # the new TP stays on the grid, strictly below the old one
+    assert _on_grid(decision.new_tp_price, _COMP_GRID)
+    assert decision.new_tp_price < victim.current_tp_price
+    # credit is drawn only from the pool, and tracked on the position
+    assert Decimal(0) <= decision.credit_drawn <= pool
+    assert (
+        decision.new_credit
+        == victim.compensation_credit + decision.credit_drawn
+    )
+    # the compensated pair is strictly in profit
+    realized = (
+        decision.new_tp_price * victim.qty * (Decimal(1) - maker_fee)
+        - victim.entry_price * victim.qty
+        - victim.fees_in
+    )
+    assert realized + decision.new_credit > 0
+    # never below the wall floor (market / nearest_buy + tp_step)
+    floor = next_tick_above(market, _COMP_TICK)
+    if nearest_buy > 0:
+        floor = max(floor, nearest_buy + _COMP_TP_STEP)
+    assert decision.new_tp_price >= floor

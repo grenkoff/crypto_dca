@@ -34,9 +34,24 @@ class OpenPosition:
 
 
 @dataclass(frozen=True)
+class CompensationContext:
+    """Market and grid context for planning a compensation move."""
+
+    pool: Decimal
+    maker_fee: Decimal
+    current_price: Decimal
+    tick_size: Decimal
+    grid_step: Decimal
+    tp_step: Decimal
+    nearest_buy_price: Decimal
+    min_order_amt: Decimal = Decimal(0)
+
+
+@dataclass(frozen=True)
 class CompensationDecision:
     """A planned take-profit move funded by another lot's profit."""
 
     target_position_id: int
     new_tp_price: Decimal
     new_credit: Decimal
+    credit_drawn: Decimal = Decimal(0)

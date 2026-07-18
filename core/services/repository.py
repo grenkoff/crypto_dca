@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.db.models import Max
+
 from core.trading.models import (
     BotStatus,
     ExecutionLog,
@@ -136,3 +138,13 @@ def exec_logged(exec_id: str) -> bool:
 def is_paused() -> bool:
     """Whether the bot is paused."""
     return bool(BotStatus.load().paused)
+
+
+def highest_resting_buy() -> Decimal:
+    """Highest resting buy price (nearest market), or 0 if none."""
+    top = (
+        GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL)
+        .exclude(current_buy_order_id="")
+        .aggregate(m=Max("target_buy_price"))["m"]
+    )
+    return top if top is not None else Decimal(0)
