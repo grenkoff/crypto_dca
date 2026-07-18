@@ -10,6 +10,7 @@ from asgiref.sync import sync_to_async
 from core.exchange.types import Execution, Side
 from core.services import repository
 from core.services.order_manager import OrderManager
+from core.services.protector import Protector
 
 log = structlog.get_logger()
 
@@ -53,6 +54,12 @@ class Healer:
 
     def __init__(self, om: OrderManager) -> None:
         self._om = om
+        self._protector = Protector(
+            client=om.client,
+            instrument=om.instrument,
+            config=om.config,
+            bus=om.bus,
+        )
 
     async def heal(self, price: Decimal) -> None:
         """Run every recovery pass in order for the current price."""
@@ -102,12 +109,12 @@ class Healer:
                 "heal.naked_reprotect", id=pos_id, order_id=tp_order_id
             )
             try:
-                await self._om.reprotect(pos, price)
+                await self._protector.reprotect(pos, price)
             except Exception as exc:
                 msg = str(exc)
                 if "170131" in msg or "insufficient" in msg.lower():
                     log.warning("heal.naked_settle_phantom", id=pos_id)
-                    await self._om.settle_phantom(pos)
+                    await self._protector.settle_phantom(pos)
                 else:
                     log.error(
                         "heal.reprotect_failed", id=pos_id, error=msg[:100]
