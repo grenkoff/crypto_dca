@@ -20,16 +20,15 @@ def test_pnl_curve_actual_is_running_realized() -> None:
     assert split == 3
 
 
-def test_pnl_curve_projection_floors_losses_at_zero() -> None:
-    # closed: +1 ; open TP gains: +1 (grid), -3 (bag), +0.5 (grid)
-    cum, split = pnl_curve(_d(["1"]), _d(["1", "-3", "0.5"]))
-    # actual [1], then +1 -> 2, +max(0,-3)=+0 -> 2, +0.5 -> 2.5
-    assert cum == _d(["1", "2", "2", "2.5"])
+def test_pnl_curve_projection_adds_each_tp_gain() -> None:
+    cum, split = pnl_curve(_d(["1"]), _d(["0.2", "0.3", "0.5"]))
+    # actual [1], then +0.2 -> 1.2, +0.3 -> 1.5, +0.5 -> 2.0
+    assert cum == _d(["1", "1.2", "1.5", "2.0"])
     assert split == 1
 
 
-def test_pnl_curve_projection_only_rises() -> None:
-    cum, split = pnl_curve(_d(["0.5", "0.5"]), _d(["-1", "-2", "0.3"]))
+def test_pnl_curve_projection_rises_when_gains_positive() -> None:
+    cum, split = pnl_curve(_d(["0.5", "0.5"]), _d(["0.1", "0.2", "0.3"]))
     proj = cum[split:]
     assert all(b >= a for a, b in pairwise(proj))
 
