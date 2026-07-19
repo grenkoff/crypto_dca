@@ -9,13 +9,12 @@ from decimal import Decimal
 def pnl_curve(
     closed_realized: list[Decimal], open_tp_profit: list[Decimal]
 ) -> tuple[list[Decimal], int]:
-    """Cumulative PnL points: actual realized, then a floored projection.
+    """Cumulative PnL points: actual realized, then the projection.
 
     Sums realized PnL of closed trades in order, then continues by adding
-    each open position's take-profit gain floored at 0 — a below-entry TP
-    (the bag being worked to break-even) never counts as a loss, so the
-    projected tail only rises. Returns the cumulative points and the index
-    where the projection begins.
+    each open position's gain at its take-profit. Every lot is profitable at
+    its own TP (the strategy never closes below entry), so the projection
+    rises. Returns the cumulative points and the index where it begins.
     """
     cum: list[Decimal] = []
     total = Decimal(0)
@@ -24,7 +23,7 @@ def pnl_curve(
         cum.append(total)
     split = len(cum)
     for gain in open_tp_profit:
-        total += max(Decimal(0), gain)
+        total += gain
         cum.append(total)
     return cum, split
 
