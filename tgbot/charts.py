@@ -32,7 +32,7 @@ def pnl_series(
 def _apply_xticks(ax: Any, labels: list[str], proj_x: int) -> None:
     """Thin the day labels (plus the projection tick) to avoid crowding."""
     ticks = [*range(len(labels)), proj_x]
-    names = [*labels, "прогноз"]
+    names = [*labels, "proj."]
     step = max(1, len(ticks) // 10)
     ax.set_xticks(ticks[::step])
     ax.set_xticklabels(names[::step], fontsize=7, rotation=45)
@@ -65,25 +65,25 @@ def render_pnl_chart(
         [float(v) for v in profits],
         color="#86efac",
         width=0.7,
-        label="прибыль/день",
+        label="profit/day",
     )
-    bar_ax.set_ylabel("прибыль/день, USDT", fontsize=8)
+    bar_ax.set_ylabel("profit/day, USDT", fontsize=8)
 
-    ax.plot(xs, [float(v) for v in equity], color="#16a34a", label="средства")
+    ax.plot(xs, [float(v) for v in equity], color="#16a34a", label="funds")
     ax.plot(
         [last_x, proj_x],
         [last_eq, float(proj)],
         color="#2563eb",
         linestyle="--",
-        label="прогноз (на TP)",
+        label="projection (at TP)",
     )
     ax.axvline(last_x, color="#9ca3af", linestyle=":", linewidth=1)
     ax.set_zorder(bar_ax.get_zorder() + 1)
     ax.patch.set_visible(False)
 
-    ax.set_title("Средства и прибыль, USDT")
-    ax.set_xlabel("дни")
-    ax.set_ylabel("средства, USDT")
+    ax.set_title("Funds & profit, USDT")
+    ax.set_xlabel("days")
+    ax.set_ylabel("funds, USDT")
     ax.grid(visible=True, alpha=0.3)
     _apply_xticks(ax, labels, proj_x)
 

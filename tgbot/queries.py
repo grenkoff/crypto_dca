@@ -72,9 +72,9 @@ def pnl_snapshot() -> PnlSnapshot:
 def pnl_curve_data() -> tuple[list[tuple[str, Decimal]], Decimal, Decimal]:
     """Chart inputs: daily realized profit, capital base, and TP projection.
 
-    Realized PnL of closed trades is bucketed by Astana day (label, sum);
-    ``base_capital`` is the cost basis of the open inventory; ``projection``
-    is the total gain every open position would book at its take-profit.
+    Realized PnL of closed trades is bucketed by UTC day (label, sum) to
+    match the /pnl caption; ``base_capital`` is the cost basis of the open
+    inventory; ``projection`` is the gain every open lot books at its TP.
     """
     daily: dict[date, Decimal] = {}
     for closed_at, realized in (
@@ -84,7 +84,7 @@ def pnl_curve_data() -> tuple[list[tuple[str, Decimal]], Decimal, Decimal]:
     ):
         if closed_at is None:
             continue
-        day = (closed_at + ASTANA_OFFSET).date()
+        day = closed_at.date()
         daily[day] = daily.get(day, Decimal(0)) + realized
     days = [(d.strftime("%d.%m"), v) for d, v in sorted(daily.items())]
 
