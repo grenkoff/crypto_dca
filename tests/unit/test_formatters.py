@@ -57,35 +57,36 @@ def test_build_balance_sorted() -> None:
 def test_build_pnl() -> None:
     text = build_pnl(
         PnlSnapshot(
-            today=Decimal("1.50"),
-            week=Decimal("8.00"),
-            month=Decimal("20.00"),
-            year=Decimal("40.00"),
-            total=Decimal("42"),
+            last_24h=Decimal("1.50"),
+            last_7d=Decimal("8.00"),
+            last_30d=Decimal("20.00"),
+            last_365d=Decimal("40.00"),
+            all_time=Decimal("42"),
         )
     )
-    assert "Today `+1.5000`" in text
-    assert "Week `+8.0000`" in text
-    assert "Month `+20.0000`" in text
-    assert "Year `+40.0000`" in text
-    assert "Total `+42.0000`" in text
-    # one label line under the title
-    assert text.count("\n") == 1
+    assert "last 24 hours `+1.5000`" in text
+    assert "last 7 days `+8.0000`" in text
+    assert "last 30 days `+20.0000`" in text
+    assert "last 365 days `+40.0000`" in text
+    assert "all time `+42.0000`" in text
+    assert "💰" not in text
+    # title plus five window lines
+    assert text.count("\n") == 5
 
 
 def test_build_pnl_rounds_to_four_decimals() -> None:
     text = build_pnl(
         PnlSnapshot(
-            today=Decimal("0.212272180125"),
-            week=Decimal("1.038725796753"),
-            month=Decimal("1.038725796753"),
-            year=Decimal("1.038725796753"),
-            total=Decimal("1.038725796753"),
+            last_24h=Decimal("0.212272180125"),
+            last_7d=Decimal("1.038725796753"),
+            last_30d=Decimal("1.038725796753"),
+            last_365d=Decimal("1.038725796753"),
+            all_time=Decimal("1.038725796753"),
         )
     )
-    assert "Today `+0.2123`" in text
-    assert "Week `+1.0387`" in text
-    assert "Total `+1.0387`" in text
+    assert "last 24 hours `+0.2123`" in text
+    assert "last 7 days `+1.0387`" in text
+    assert "all time `+1.0387`" in text
 
 
 def test_build_orders_empty() -> None:

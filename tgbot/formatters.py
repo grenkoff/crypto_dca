@@ -30,13 +30,13 @@ class BalanceSnapshot:
 
 @dataclass(frozen=True)
 class PnlSnapshot:
-    """Realized PnL over several windows for /pnl."""
+    """Realized PnL over several rolling windows for /pnl."""
 
-    today: Decimal
-    week: Decimal
-    month: Decimal
-    year: Decimal
-    total: Decimal
+    last_24h: Decimal
+    last_7d: Decimal
+    last_30d: Decimal
+    last_365d: Decimal
+    all_time: Decimal
 
 
 @dataclass(frozen=True)
@@ -113,12 +113,12 @@ def build_balance(snap: BalanceSnapshot) -> str:
 def build_pnl(snap: PnlSnapshot) -> str:
     """Render the /pnl message."""
     return (
-        "*Realized PnL (USDT)*\n"
-        f"Today `{_signed(snap.today, '0.0001')}` 💰 "
-        f"Week `{_signed(snap.week, '0.0001')}` 💰 "
-        f"Month `{_signed(snap.month, '0.0001')}` 💰 "
-        f"Year `{_signed(snap.year, '0.0001')}` 💰 "
-        f"Total `{_signed(snap.total, '0.0001')}`"
+        "*Realized PnL, USDT*\n"
+        f"last 24 hours `{_signed(snap.last_24h)}`\n"
+        f"last 7 days `{_signed(snap.last_7d)}`\n"
+        f"last 30 days `{_signed(snap.last_30d)}`\n"
+        f"last 365 days `{_signed(snap.last_365d)}`\n"
+        f"all time `{_signed(snap.all_time)}`"
     )
 
 
