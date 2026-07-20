@@ -55,7 +55,7 @@ async def test_claim_due_skips_before_trigger() -> None:
 
 def test_build_digest_signs_and_labels() -> None:
     snap = DigestSnapshot(
-        when_astana=datetime(2026, 7, 7, 0, 0),
+        when_utc=datetime(2026, 7, 7, 0, 0),
         closed_24h=24,
         pnl_24h=Decimal("0.21"),
         pnl_week=Decimal("1.40"),
@@ -71,13 +71,13 @@ def test_build_digest_signs_and_labels() -> None:
     assert "Closed (24h):* 24" in text
     assert "+0.21" in text
     assert "-3.10" in text  # negative total keeps its sign
-    assert "Astana" in text
+    assert "UTC" in text
     assert "0.0308" in text
 
 
 def test_build_digest_handles_missing_price() -> None:
     snap = DigestSnapshot(
-        when_astana=datetime(2026, 7, 7, 0, 0),
+        when_utc=datetime(2026, 7, 7, 0, 0),
         closed_24h=0,
         pnl_24h=Decimal(0),
         pnl_week=Decimal(0),

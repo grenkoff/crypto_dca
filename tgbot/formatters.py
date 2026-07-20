@@ -43,7 +43,7 @@ class PnlSnapshot:
 class DigestSnapshot:
     """Snapshot for the daily digest message."""
 
-    when_astana: datetime
+    when_utc: datetime
     closed_24h: int
     pnl_24h: Decimal
     pnl_week: Decimal
@@ -190,7 +190,7 @@ def build_digest(snap: DigestSnapshot) -> str:
     """Render the daily digest message."""
     price = f"`{snap.price}`" if snap.price is not None else "_n/a_"
     return (
-        f"📊 *Daily digest* — {snap.when_astana:%d %b %H:%M} Astana\n"
+        f"📊 *Daily digest* — {snap.when_utc:%d %b %H:%M} UTC\n"
         f"*Closed (24h):* {snap.closed_24h} → `{_signed(snap.pnl_24h)}` USDT\n"
         f"*PnL week:* `{_signed(snap.pnl_week)}` · "
         f"*total:* `{_signed(snap.pnl_total)}`\n"

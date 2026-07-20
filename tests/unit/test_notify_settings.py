@@ -7,21 +7,10 @@ import pytest
 from tgbot.notify_settings import (
     EVENT_TOGGLE,
     TOGGLE_LABELS,
-    astana_to_utc,
     event_enabled,
-    set_digest_time_astana,
+    set_digest_time_utc,
     toggle_field,
-    utc_to_astana,
 )
-
-
-def test_astana_utc_roundtrip() -> None:
-    # 00:00 Astana is 19:00 UTC (UTC+5)
-    assert astana_to_utc(time(0, 0)) == time(19, 0)
-    assert utc_to_astana(time(19, 0)) == time(0, 0)
-    # wraps across midnight both ways
-    assert utc_to_astana(time(23, 30)) == time(4, 30)
-    assert astana_to_utc(time(3, 0)) == time(22, 0)
 
 
 def test_every_event_toggle_field_is_a_real_toggle() -> None:
@@ -50,5 +39,5 @@ async def test_unknown_event_type_never_suppressed() -> None:
 
 
 async def test_set_digest_time_stores_utc() -> None:
-    stored = await set_digest_time_astana(time(0, 0))
-    assert stored == time(19, 0)
+    stored = await set_digest_time_utc(time(9, 30))
+    assert stored == time(9, 30)
