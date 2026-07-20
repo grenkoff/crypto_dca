@@ -197,7 +197,9 @@ def test_format_event_position_closed_compensated() -> None:
             },
         }
     )
-    assert text == ("💊 `0.02770` → `-0.0063` USDT (компенс., пара `+0.0000`)")
+    assert text == (
+        "💊 `0.02770` → `-0.0063` USDT (compensated, pair `+0.0000`)"
+    )
 
 
 def test_format_event_compensation() -> None:

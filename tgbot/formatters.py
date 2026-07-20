@@ -171,7 +171,7 @@ def _format_closed(payload: dict[str, Any]) -> str:
         pair = realized + credit
         return (
             f"💊 `{price}` → `{_signed(realized)}` USDT "
-            f"(компенс., пара `{_signed(pair)}`)"
+            f"(compensated, pair `{_signed(pair)}`)"
         )
     emoji = "💰" if realized >= 0 else "🔴"
     return f"{emoji} `{price}` → `{_signed(realized)}` USDT"
