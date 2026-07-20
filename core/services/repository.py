@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from typing import cast
 
-from django.db.models import Max
+from django.db.models import Max, Min
 
 from core.trading.models import (
     BotStatus,
@@ -148,3 +149,14 @@ def highest_resting_buy() -> Decimal:
         .aggregate(m=Max("target_buy_price"))["m"]
     )
     return top if top is not None else Decimal(0)
+
+
+def lowest_resting_tp() -> Decimal | None:
+    """Lowest resting take-profit price (bottom of the wall), or None."""
+    bottom = (
+        Position.objects.filter(status=PositionStatus.OPEN)
+        .exclude(tp_order_id="")
+        .exclude(tp_price__isnull=True)
+        .aggregate(m=Min("tp_price"))["m"]
+    )
+    return cast("Decimal | None", bottom)
