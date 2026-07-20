@@ -201,6 +201,7 @@ def _open_positions_view() -> list[OpenPosition]:
             if p.tp_price is not None
             else Decimal(0),
             compensation_credit=p.compensation_credit,
+            filled_qty=p.filled_qty,
         )
         for p in Position.objects.filter(status=PositionStatus.OPEN)
     ]

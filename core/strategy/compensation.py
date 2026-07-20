@@ -64,6 +64,8 @@ def plan_compensation(
 
     occupied = {p.current_tp_price for p in open_positions}
     for victim in sorted(open_positions, key=lambda p: p.current_tp_price):
+        if victim.filled_qty > 0:
+            continue
         if victim.current_tp_price <= floor:
             continue
         target = slot_below(victim.current_tp_price, ctx.grid_step)

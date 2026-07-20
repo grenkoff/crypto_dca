@@ -31,6 +31,7 @@ class OpenPosition:
     fees_in: Decimal
     current_tp_price: Decimal
     compensation_credit: Decimal = Decimal(0)
+    filled_qty: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True)

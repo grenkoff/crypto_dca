@@ -211,6 +211,11 @@ class Position(models.Model):
         """Whether the position is still open."""
         return self.status == PositionStatus.OPEN
 
+    @property
+    def remaining_qty(self) -> Decimal:
+        """Coins still held: total bought minus what a TP already sold."""
+        return max(self.qty - self.filled_qty, Decimal(0))
+
 
 class ExecutionLog(models.Model):
     """Raw audit trail of fills received from Bybit (WS or REST
