@@ -177,6 +177,15 @@ def _format_closed(payload: dict[str, Any]) -> str:
     return f"{emoji} `{price}` → `{_signed(realized)}` USDT"
 
 
+def _format_compensation(payload: dict[str, Any]) -> str:
+    """Render a compensation.applied event, showing the TP move old -> new."""
+    new_tp = _price5(payload.get("new_tp"))
+    old = payload.get("old_tp")
+    if old:
+        return f"💊 TP `{_price5(old)}` ↓ `{new_tp}`"
+    return f"💊 TP↓ `{new_tp}`"
+
+
 def build_digest(snap: DigestSnapshot) -> str:
     """Render the daily digest message."""
     price = f"`{snap.price}`" if snap.price is not None else "_n/a_"
@@ -208,7 +217,7 @@ def format_event(event: dict[str, Any]) -> str:
     if etype == "position.closed":
         return _format_closed(payload)
     if etype == "compensation.applied":
-        return f"💊 TP↓ `{_price5(payload.get('new_tp'))}`"
+        return _format_compensation(payload)
     if etype == "error":
         return f"❌ Error: {payload.get('message', '?')}"
     return f"📨 {etype}: `{payload}`"
