@@ -52,13 +52,15 @@ def status_snapshot() -> StatusSnapshot:
 def pnl_snapshot() -> PnlSnapshot:
     """Build the /pnl snapshot from closed positions.
 
-    Windows are rolling from now: the last 24 hours, 7/30/365 days, and all
-    time.
+    ``today`` is since UTC midnight; the rest are rolling from now (last 24
+    hours, 7/30/365 days) plus all time.
     """
     now = datetime.now(tz=UTC)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     base = Position.objects.filter(status=PositionStatus.CLOSED)
 
     return PnlSnapshot(
+        today=_sum(base.filter(closed_at__gte=midnight)),
         last_24h=_sum(base.filter(closed_at__gte=now - timedelta(hours=24))),
         last_7d=_sum(base.filter(closed_at__gte=now - timedelta(days=7))),
         last_30d=_sum(base.filter(closed_at__gte=now - timedelta(days=30))),
