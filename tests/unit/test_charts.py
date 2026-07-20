@@ -1,39 +1,48 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from itertools import pairwise
 
-from tgbot.charts import pnl_curve, render_pnl_chart
-
-
-def _d(values: list[str]) -> list[Decimal]:
-    return [Decimal(v) for v in values]
+from tgbot.charts import pnl_series, render_pnl_chart
 
 
-def test_pnl_curve_empty() -> None:
-    assert pnl_curve([], []) == ([], 0)
+def _days(pairs: list[tuple[str, str]]) -> list[tuple[str, Decimal]]:
+    return [(label, Decimal(v)) for label, v in pairs]
 
 
-def test_pnl_curve_actual_is_running_realized() -> None:
-    cum, split = pnl_curve(_d(["1", "-0.5", "2"]), [])
-    assert cum == _d(["1", "0.5", "2.5"])
-    assert split == 3
+def test_pnl_series_empty() -> None:
+    labels, profits, equity, proj = pnl_series(
+        [], Decimal("100"), Decimal("0")
+    )
+    assert labels == [] and profits == [] and equity == []
+    assert proj == Decimal("100")
 
 
-def test_pnl_curve_projection_adds_each_tp_gain() -> None:
-    cum, split = pnl_curve(_d(["1"]), _d(["0.2", "0.3", "0.5"]))
-    # actual [1], then +0.2 -> 1.2, +0.3 -> 1.5, +0.5 -> 2.0
-    assert cum == _d(["1", "1.2", "1.5", "2.0"])
-    assert split == 1
+def test_pnl_series_equity_is_base_plus_running_profit() -> None:
+    days = _days([("01.07", "1"), ("02.07", "-0.5"), ("03.07", "2")])
+    labels, profits, equity, proj = pnl_series(
+        days, Decimal("100"), Decimal("0.3")
+    )
+    assert labels == ["01.07", "02.07", "03.07"]
+    assert profits == [Decimal("1"), Decimal("-0.5"), Decimal("2")]
+    assert equity == [Decimal("101"), Decimal("100.5"), Decimal("102.5")]
+    assert proj == Decimal("102.8")
 
 
-def test_pnl_curve_projection_rises_when_gains_positive() -> None:
-    cum, split = pnl_curve(_d(["0.5", "0.5"]), _d(["0.1", "0.2", "0.3"]))
-    proj = cum[split:]
-    assert all(b >= a for a, b in pairwise(proj))
+def test_pnl_series_projection_onto_base_when_no_days() -> None:
+    _, _, equity, proj = pnl_series([], Decimal("50"), Decimal("5"))
+    assert equity == []
+    assert proj == Decimal("55")
 
 
 def test_render_pnl_chart_returns_png_bytes() -> None:
-    png = render_pnl_chart(_d(["1", "0.5", "2.5", "3"]), 3)
+    days = _days([("01.07", "1"), ("02.07", "0.5"), ("03.07", "-0.2")])
+    png = render_pnl_chart(days, Decimal("340"), Decimal("0.4"))
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
     assert len(png) > 1000
+
+
+def test_render_pnl_chart_handles_single_day() -> None:
+    png = render_pnl_chart(
+        _days([("01.07", "1")]), Decimal("340"), Decimal("0")
+    )
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
