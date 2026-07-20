@@ -52,16 +52,17 @@ class Protector:
         market_floor = next_tick_above(
             current_price, self.instrument.tick_size
         )
+        qty = position.remaining_qty
         min_price = min_notional_price(
             self.instrument.min_order_amt,
-            position.qty,
+            qty,
             self.instrument.tick_size,
         )
         price = max(position.tp_price or Decimal(0), market_floor, min_price)
         order_id = await self.client.place_limit(
             str(self.config.symbol),
             Side.SELL,
-            position.qty,
+            qty,
             price,
             order_link_id=link_id("grid-tp-heal", position.level_index),
         )
@@ -106,8 +107,9 @@ def _close_at_price(
     """Mark a position sold in full at ``price`` (maker) and free its
     grid level."""
     with transaction.atomic():
-        sell_value = price * position.qty
-        fees_out = sell_value * maker_fee
+        remaining = position.remaining_qty
+        sell_value = position.sell_value + price * remaining
+        fees_out = position.fees_out + price * remaining * maker_fee
         realized = (
             sell_value
             - fees_out

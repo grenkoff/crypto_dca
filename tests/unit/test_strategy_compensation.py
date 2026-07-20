@@ -13,6 +13,7 @@ def _pos(
     qty: str = "200",
     fees_in: str = "0",
     credit: str = "0",
+    filled: str = "0",
 ) -> OpenPosition:
     return OpenPosition(
         id=pid,
@@ -21,6 +22,7 @@ def _pos(
         fees_in=Decimal(fees_in),
         current_tp_price=Decimal(tp),
         compensation_credit=Decimal(credit),
+        filled_qty=Decimal(filled),
     )
 
 
@@ -148,3 +150,26 @@ def test_occupied_slot_below_is_skipped_for_next_victim() -> None:
 def test_no_move_when_pool_nonpositive_or_empty() -> None:
     assert plan_compensation([_pos(1, "0.02810")], _ctx(pool="0")) is None
     assert plan_compensation([], _ctx()) is None
+
+
+def test_partially_filled_victim_is_skipped() -> None:
+    # 02810 would move into the empty 02805 slot, but it is mid-fill: a
+    # replacement sell on its full qty would oversell, so it is never chosen.
+    positions = [
+        _pos(1, "0.02795"),
+        _pos(2, "0.02800"),
+        _pos(3, "0.02810", filled="35"),
+    ]
+    assert plan_compensation(positions, _ctx()) is None
+
+
+def test_partial_fill_still_occupies_its_slot() -> None:
+    # 02810 is partially filled (never a victim), but its TP still blocks
+    # 02815 from descending onto the occupied 02810 slot.
+    positions = [
+        _pos(1, "0.02795"),
+        _pos(2, "0.02800"),
+        _pos(3, "0.02810", filled="35"),
+        _pos(4, "0.02815"),
+    ]
+    assert plan_compensation(positions, _ctx()) is None

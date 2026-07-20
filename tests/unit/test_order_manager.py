@@ -505,6 +505,24 @@ async def test_reprotect_places_maker_sell_above_market(
     assert pos.tp_order_id == order_id
 
 
+async def test_reprotect_covers_only_the_unsold_remainder(
+    protector: Protector, client: FakeBybitClient
+) -> None:
+    pos = await sync_to_async(Position.objects.create)(
+        level_index=6,
+        entry_price=Decimal("59000"),
+        qty=Decimal("0.005"),
+        filled_qty=Decimal("0.003"),
+        tp_price=Decimal("59500"),
+        status=PositionStatus.OPEN,
+        opened_at=datetime.now(tz=UTC),
+    )
+    await protector.reprotect(pos, current_price=Decimal("59000"))
+    placed = client.placed[-1]
+    # only the 0.002 still held is re-listed, never the full 0.005
+    assert placed["qty"] == Decimal("0.002")
+
+
 async def test_settle_phantom_closes_at_tp_and_frees_level(
     protector: Protector, config: StrategyConfig, bus: RecordingEventBus
 ) -> None:
