@@ -32,6 +32,7 @@ class BalanceSnapshot:
 class PnlSnapshot:
     """Realized PnL over several rolling windows for /pnl."""
 
+    today: Decimal
     last_24h: Decimal
     last_7d: Decimal
     last_30d: Decimal
@@ -114,6 +115,7 @@ def build_pnl(snap: PnlSnapshot) -> str:
     """Render the /pnl message."""
     return (
         "*Realized PnL, USDT*\n"
+        f"today `{_signed(snap.today)}`\n"
         f"last 24 hours `{_signed(snap.last_24h)}`\n"
         f"last 7 days `{_signed(snap.last_7d)}`\n"
         f"last 30 days `{_signed(snap.last_30d)}`\n"

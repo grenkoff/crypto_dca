@@ -57,6 +57,7 @@ def test_build_balance_sorted() -> None:
 def test_build_pnl() -> None:
     text = build_pnl(
         PnlSnapshot(
+            today=Decimal("0.75"),
             last_24h=Decimal("1.50"),
             last_7d=Decimal("8.00"),
             last_30d=Decimal("20.00"),
@@ -64,19 +65,21 @@ def test_build_pnl() -> None:
             all_time=Decimal("42"),
         )
     )
+    assert "today `+0.7500`" in text
     assert "last 24 hours `+1.5000`" in text
     assert "last 7 days `+8.0000`" in text
     assert "last 30 days `+20.0000`" in text
     assert "last 365 days `+40.0000`" in text
     assert "all time `+42.0000`" in text
     assert "💰" not in text
-    # title plus five window lines
-    assert text.count("\n") == 5
+    # title plus six window lines
+    assert text.count("\n") == 6
 
 
 def test_build_pnl_rounds_to_four_decimals() -> None:
     text = build_pnl(
         PnlSnapshot(
+            today=Decimal("0.212272180125"),
             last_24h=Decimal("0.212272180125"),
             last_7d=Decimal("1.038725796753"),
             last_30d=Decimal("1.038725796753"),
@@ -84,6 +87,7 @@ def test_build_pnl_rounds_to_four_decimals() -> None:
             all_time=Decimal("1.038725796753"),
         )
     )
+    assert "today `+0.2123`" in text
     assert "last 24 hours `+0.2123`" in text
     assert "last 7 days `+1.0387`" in text
     assert "all time `+1.0387`" in text
