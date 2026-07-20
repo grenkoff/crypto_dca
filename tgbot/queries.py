@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -69,33 +69,37 @@ def pnl_snapshot() -> PnlSnapshot:
 
 
 @sync_to_async
-def pnl_curve_data() -> tuple[list[Decimal], list[Decimal]]:
-    """Chart inputs: realized of closed trades (by time) and open TP gains.
+def pnl_curve_data() -> tuple[list[tuple[str, Decimal]], Decimal, Decimal]:
+    """Chart inputs: daily realized profit, capital base, and TP projection.
 
-    Closed trades are ordered by ``closed_at`` (their realized PnL); open
-    positions are ordered by ``tp_price`` (the gain each would book at its
-    take-profit), so the projection fills nearest-TP first.
+    Realized PnL of closed trades is bucketed by Astana day (label, sum);
+    ``base_capital`` is the cost basis of the open inventory; ``projection``
+    is the total gain every open position would book at its take-profit.
     """
-    closed = list(
+    daily: dict[date, Decimal] = {}
+    for closed_at, realized in (
         Position.objects.filter(status=PositionStatus.CLOSED)
-        .order_by("closed_at")
-        .values_list("realized_pnl", flat=True)
-    )
-    fee = StrategyConfig.load().maker_fee
-    open_gains: list[Decimal] = []
-    for p in (
-        Position.objects.filter(status=PositionStatus.OPEN)
-        .exclude(tp_price__isnull=True)
-        .order_by("tp_price")
+        .exclude(closed_at__isnull=True)
+        .values_list("closed_at", "realized_pnl")
     ):
-        if p.tp_price is None:
+        if closed_at is None:
             continue
-        open_gains.append(
-            p.tp_price * p.qty * (Decimal(1) - fee)
-            - p.entry_price * p.qty
-            - p.fees_in
-        )
-    return closed, open_gains
+        day = (closed_at + ASTANA_OFFSET).date()
+        daily[day] = daily.get(day, Decimal(0)) + realized
+    days = [(d.strftime("%d.%m"), v) for d, v in sorted(daily.items())]
+
+    fee = StrategyConfig.load().maker_fee
+    base_capital = Decimal(0)
+    projection = Decimal(0)
+    for p in Position.objects.filter(status=PositionStatus.OPEN):
+        base_capital += p.entry_price * p.qty + p.fees_in
+        if p.tp_price is not None:
+            projection += (
+                p.tp_price * p.qty * (Decimal(1) - fee)
+                - p.entry_price * p.qty
+                - p.fees_in
+            )
+    return days, base_capital, projection
 
 
 @sync_to_async
