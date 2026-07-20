@@ -27,9 +27,8 @@ from tgbot.formatters import (
 from tgbot.notify_settings import (
     TOGGLE_LABELS,
     load_settings,
-    set_digest_time_astana,
+    set_digest_time_utc,
     toggle_field,
-    utc_to_astana,
 )
 from tgbot.queries import (
     balance_snapshot,
@@ -68,10 +67,9 @@ def _notify_keyboard(s: NotificationSettings) -> InlineKeyboardMarkup:
 
 
 def _notify_text(s: NotificationSettings) -> str:
-    astana = utc_to_astana(s.digest_time_utc)
     return (
         "*Notifications* — tap to toggle\n"
-        f"Digest time: `{astana:%H:%M}` Astana  "
+        f"Digest time: `{s.digest_time_utc:%H:%M}` UTC  "
         "(change with /digesttime HH:MM)"
     )
 
@@ -104,19 +102,20 @@ async def cb_notify_toggle(call: CallbackQuery) -> None:
 
 @router.message(Command("digesttime"))
 async def cmd_digesttime(message: Message, command: CommandObject) -> None:
-    """Set the daily digest time (Astana local)."""
+    """Set the daily digest time (UTC)."""
     arg = (command.args or "").strip()
     try:
         hh, mm = (int(x) for x in arg.split(":", 1))
-        astana = time(hh, mm)
+        digest_time = time(hh, mm)
     except (ValueError, TypeError):
         await message.answer(
-            "Usage: `/digesttime HH:MM` (Astana time)", parse_mode="Markdown"
+            "Usage: `/digesttime HH:MM` (UTC)", parse_mode="Markdown"
         )
         return
-    await set_digest_time_astana(astana)
+    await set_digest_time_utc(digest_time)
     await message.answer(
-        f"📊 Digest time set to `{astana:%H:%M}` Astana", parse_mode="Markdown"
+        f"📊 Digest time set to `{digest_time:%H:%M}` UTC",
+        parse_mode="Markdown",
     )
 
 

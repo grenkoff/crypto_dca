@@ -1,18 +1,15 @@
 """Notification preferences: event toggles and the daily-digest schedule.
 
-The digest time lives in UTC in the DB; users see and set it in Astana local
-time (UTC+5, no DST), so conversion is a fixed offset.
+The digest time lives in UTC in the DB and is set and shown in UTC.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import time
 
 from asgiref.sync import sync_to_async
 
 from core.trading.models import NotificationSettings
-
-ASTANA_OFFSET = timedelta(hours=5)
 
 EVENT_TOGGLE: dict[str, str] = {
     "error": "notify_errors",
@@ -34,18 +31,6 @@ TOGGLE_LABELS: list[tuple[str, str]] = [
 ]
 
 _ALLOWED_FIELDS = {f for f, _ in TOGGLE_LABELS}
-
-
-def utc_to_astana(t: time) -> time:
-    """Render a stored UTC digest time as Astana local time."""
-    base = datetime(2000, 1, 1, t.hour, t.minute)
-    return (base + ASTANA_OFFSET).time()
-
-
-def astana_to_utc(t: time) -> time:
-    """Convert an Astana-local digest time to the UTC value we store."""
-    base = datetime(2000, 1, 1, t.hour, t.minute)
-    return (base - ASTANA_OFFSET).time()
 
 
 @sync_to_async
@@ -79,10 +64,9 @@ def toggle_field(field: str) -> bool:
 
 
 @sync_to_async
-def set_digest_time_astana(astana: time) -> time:
-    """Store a digest time given in Astana local; return the stored UTC
-    value."""
+def set_digest_time_utc(t: time) -> time:
+    """Store the daily-digest time (UTC); return the stored value."""
     obj = NotificationSettings.load()
-    obj.digest_time_utc = astana_to_utc(astana)
+    obj.digest_time_utc = t
     obj.save(update_fields=["digest_time_utc", "updated_at"])
     return obj.digest_time_utc

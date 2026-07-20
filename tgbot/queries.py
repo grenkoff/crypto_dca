@@ -26,7 +26,6 @@ from tgbot.formatters import (
     PnlSnapshot,
     StatusSnapshot,
 )
-from tgbot.notify_settings import ASTANA_OFFSET
 
 log = structlog.get_logger()
 
@@ -156,9 +155,9 @@ async def digest_snapshot() -> DigestSnapshot:
         price = await client.get_last_price(cfg)
     except Exception as exc:
         log.warning("digest.live_fetch_failed", error=str(exc)[:100])
-    when_astana = (datetime.now(tz=UTC) + ASTANA_OFFSET).replace(tzinfo=None)
+    when_utc = datetime.now(tz=UTC).replace(tzinfo=None)
     return DigestSnapshot(
-        when_astana=when_astana,
+        when_utc=when_utc,
         closed_24h=db["closed_24h"],
         pnl_24h=db["pnl_24h"],
         pnl_week=db["pnl_week"],
