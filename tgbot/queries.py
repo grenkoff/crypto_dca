@@ -50,20 +50,20 @@ def status_snapshot() -> StatusSnapshot:
 
 @sync_to_async
 def pnl_snapshot() -> PnlSnapshot:
-    """Build the /pnl snapshot from closed positions."""
+    """Build the /pnl snapshot from closed positions.
+
+    Windows are rolling from now: the last 24 hours, 7/30/365 days, and all
+    time.
+    """
     now = datetime.now(tz=UTC)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = today_start - timedelta(days=7)
-    month_start = today_start - timedelta(days=30)
-    year_start = today_start - timedelta(days=365)
     base = Position.objects.filter(status=PositionStatus.CLOSED)
 
     return PnlSnapshot(
-        today=_sum(base.filter(closed_at__gte=today_start)),
-        week=_sum(base.filter(closed_at__gte=week_start)),
-        month=_sum(base.filter(closed_at__gte=month_start)),
-        year=_sum(base.filter(closed_at__gte=year_start)),
-        total=_sum(base),
+        last_24h=_sum(base.filter(closed_at__gte=now - timedelta(hours=24))),
+        last_7d=_sum(base.filter(closed_at__gte=now - timedelta(days=7))),
+        last_30d=_sum(base.filter(closed_at__gte=now - timedelta(days=30))),
+        last_365d=_sum(base.filter(closed_at__gte=now - timedelta(days=365))),
+        all_time=_sum(base),
     )
 
 
