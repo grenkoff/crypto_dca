@@ -207,6 +207,22 @@ def test_format_event_compensation() -> None:
             "payload": {
                 "target_position": 179,
                 "source_position": 3,
+                "old_tp": "0.0295",
+                "new_tp": "0.0294",
+                "profit": "0.0108603075",
+            },
+        }
+    )
+    assert text == "💊 TP `0.02950` ↓ `0.02940`"
+
+
+def test_format_event_compensation_without_old_tp() -> None:
+    text = format_event(
+        {
+            "type": "compensation.applied",
+            "payload": {
+                "target_position": 179,
+                "source_position": 3,
                 "new_tp": "0.0294",
                 "profit": "0.0108603075",
             },

@@ -85,6 +85,7 @@ class Compensator:
         """Do the exchange move and persist it; return True if applied."""
         symbol = str(self.config.symbol)
         target = await Position.objects.aget(id=decision.target_position_id)
+        old_tp = target.tp_price
         if not target.tp_order_id:
             log.warning("compensation.target_has_no_tp", id=target.id)
             return False
@@ -133,6 +134,7 @@ class Compensator:
             {
                 "target_position": target.id,
                 "source_position": source_position_id,
+                "old_tp": str(old_tp) if old_tp is not None else "",
                 "new_tp": str(decision.new_tp_price),
                 "profit": str(decision.credit_drawn),
             },
