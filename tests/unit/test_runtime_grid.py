@@ -84,6 +84,35 @@ def test_resting_levels_contiguous_when_nothing_held() -> None:
     )  # a full step of clearance
 
 
+def test_resting_levels_ceiling_keeps_buys_clear_of_tp_wall() -> None:
+    # lowest TP 0.02825, tp_step 0.0001, grid_step 0.00005 -> ceiling 0.02810.
+    # Market 0.02822 would otherwise top the band at 0.02815 (0.00010 below
+    # the TP); the ceiling drops the top buy to 0.02810 (0.00015 clearance).
+    levels = resting_buy_levels(
+        Decimal("0.02822"),
+        Decimal("0.00005"),
+        3,
+        set(),
+        ceiling=Decimal("0.02810"),
+    )
+    prices = [p for _, p in levels]
+    assert prices == [
+        Decimal("0.02810"),
+        Decimal("0.02805"),
+        Decimal("0.02800"),
+    ]
+
+
+def test_buys_to_prune_cancels_buys_above_the_ceiling() -> None:
+    # a resting buy at 0.02815 now crowds the TP wall (ceiling 0.02810) and
+    # must be pruned even though it sits inside/above the band.
+    targets = {Decimal("0.02810"), Decimal("0.02805"), Decimal("0.02800")}
+    resting = [Decimal("0.02815"), Decimal("0.02810"), Decimal("0.02805")]
+    assert buys_to_prune(resting, targets, ceiling=Decimal("0.02810")) == [
+        Decimal("0.02815")
+    ]
+
+
 def test_buys_to_prune_keeps_buys_the_falling_market_will_fill() -> None:
     # band (targets) is 0.02945..0.02925; the market has dropped and old
     # near-market buys 0.02965/60/55 sit ABOVE the band — they must be KEPT to

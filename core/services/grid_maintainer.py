@@ -59,12 +59,27 @@ class GridMaintainer:
         n = min(int((free + locked) / per_order), int(cfg.max_open_orders))
 
         resting, held = await sync_to_async(repository.grid_state)(step)
-        targets = resting_buy_levels(price, step, n, held)
+        ceiling = await sync_to_async(self._buy_ceiling)()
+        targets = resting_buy_levels(price, step, n, held, ceiling=ceiling)
         target_prices = {p for _, p in targets}
-        prune = set(buys_to_prune(resting.keys(), target_prices))
+        prune = set(
+            buys_to_prune(resting.keys(), target_prices, ceiling=ceiling)
+        )
         freed = await self._prune_out_of_band(resting, prune)
         budget = free + freed * per_order
         await self._place_missing(targets, set(resting) | held, budget)
+
+    def _buy_ceiling(self) -> Decimal | None:
+        """Highest price a resting buy may take, or None if unconstrained.
+
+        Keeps the buy band at least ``tp_step + grid_step`` below the bottom
+        of the take-profit wall, so a rising grid never crowds a resting TP.
+        """
+        lowest_tp = repository.lowest_resting_tp()
+        if lowest_tp is None:
+            return None
+        cfg = self._om.config
+        return lowest_tp - cfg.tp_step - cfg.grid_step
 
     async def _prune_out_of_band(
         self,
