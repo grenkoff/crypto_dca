@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 
 from tgbot.charts import _moving_average, pnl_series, render_pnl_chart
@@ -9,13 +10,13 @@ def _days(pairs: list[tuple[str, str]]) -> list[tuple[str, Decimal]]:
     return [(label, Decimal(v)) for label, v in pairs]
 
 
-def test_moving_average_uses_partial_window_then_full() -> None:
+def test_moving_average_is_nan_until_window_full() -> None:
     ma = _moving_average([Decimal(v) for v in ("2", "4", "6", "9")], 3)
-    # 2; (2+4)/2=3; (2+4+6)/3=4; (4+6+9)/3=6.33..
-    assert ma[0] == 2.0
-    assert ma[1] == 3.0
-    assert ma[2] == 4.0
-    assert round(ma[3], 2) == 6.33
+    # first two lack a full 3-day window -> NaN; then real averages
+    assert math.isnan(ma[0])
+    assert math.isnan(ma[1])
+    assert ma[2] == 4.0  # (2+4+6)/3
+    assert round(ma[3], 2) == 6.33  # (4+6+9)/3
 
 
 def test_pnl_series_empty() -> None:

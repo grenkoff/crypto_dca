@@ -56,11 +56,14 @@ _MA_WINDOW = 10
 
 
 def _moving_average(values: list[Decimal], window: int) -> list[float]:
-    """Trailing simple moving average (partial window at the start)."""
+    """Trailing simple moving average; NaN until a full window accrues."""
     out: list[float] = []
     for i in range(len(values)):
-        chunk = values[max(0, i - window + 1) : i + 1]
-        out.append(float(sum(chunk, Decimal(0)) / len(chunk)))
+        if i + 1 < window:
+            out.append(float("nan"))
+            continue
+        chunk = values[i - window + 1 : i + 1]
+        out.append(float(sum(chunk, Decimal(0)) / window))
     return out
 
 
