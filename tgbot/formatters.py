@@ -124,19 +124,13 @@ def build_pnl(snap: PnlSnapshot) -> str:
     )
 
 
-def build_unlock(
-    locked_now: Decimal, days: Decimal | None, comps_per_day: Decimal
-) -> str:
-    """Render the locked-USDT line and the days-to-unlock estimate."""
+def build_unlock(locked_now: Decimal, days: Decimal | None) -> str:
+    """Render the locked-USDT amount and days-to-unlock on one line."""
     locked = _q(locked_now, "0.01")
     if days is None:
-        return f"Locked in open trades: `{locked}` USDT\nUnlock all: `n/a`"
+        return f"Locked `{locked}` USDT · unlock `n/a`"
     d = days.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    rate = comps_per_day.quantize(Decimal("0.1"))
-    return (
-        f"Locked in open trades: `{locked}` USDT\n"
-        f"Unlock all: ~`{d}` days (flat, `{rate}`/day)"
-    )
+    return f"Locked `{locked}` USDT · unlock ~`{d}` days"
 
 
 def build_orders(snap: OrdersSnapshot) -> str:

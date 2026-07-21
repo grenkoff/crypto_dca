@@ -77,17 +77,15 @@ def test_build_pnl() -> None:
     assert text.count("\n") == 6
 
 
-def test_build_unlock_shows_locked_and_days() -> None:
-    text = build_unlock(Decimal("410.905"), Decimal("136.7"), Decimal("2.345"))
-    assert "Locked in open trades: `410.90` USDT" in text
-    assert "~`137` days" in text
-    assert "(flat, `2.3`/day)" in text
+def test_build_unlock_shows_locked_and_days_on_one_line() -> None:
+    text = build_unlock(Decimal("410.905"), Decimal("136.7"))
+    assert text == "Locked `410.90` USDT · unlock ~`137` days"
+    assert "\n" not in text
 
 
 def test_build_unlock_na_when_days_unknown() -> None:
-    text = build_unlock(Decimal("100"), None, Decimal("0"))
-    assert "Locked in open trades: `100.00` USDT" in text
-    assert "Unlock all: `n/a`" in text
+    text = build_unlock(Decimal("100"), None)
+    assert text == "Locked `100.00` USDT · unlock `n/a`"
 
 
 def test_build_pnl_rounds_to_four_decimals() -> None:

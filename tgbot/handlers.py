@@ -140,11 +140,9 @@ async def cmd_pnl(message: Message) -> None:
     """Reply with realized PnL and a funds-and-profit chart."""
     snap = await pnl_snapshot()
     days, base_capital, projection, locked = await pnl_curve_data()
-    unlock_days, comps_per_day = await unlock_estimate()
+    unlock_days, _ = await unlock_estimate()
     caption = (
-        build_pnl(snap)
-        + "\n\n"
-        + build_unlock(base_capital, unlock_days, comps_per_day)
+        build_pnl(snap) + "\n\n" + build_unlock(base_capital, unlock_days)
     )
     if not days:
         await message.answer(caption, parse_mode="Markdown")
