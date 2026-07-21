@@ -11,7 +11,6 @@ from asgiref.sync import sync_to_async
 from django.db.models import F, QuerySet, Sum
 
 from core.exchange.bybit import BybitClient
-from core.services.consolidate import _MANUAL_BAG_MAX, _MANUAL_BAG_MIN
 from core.trading.models import (
     BotStatus,
     CompensationLink,
@@ -156,10 +155,6 @@ def _unlock_from_db(price: Decimal | None) -> tuple[Decimal | None, Decimal]:
     for tp in (
         Position.objects.filter(status=PositionStatus.OPEN)
         .exclude(tp_price__isnull=True)
-        .exclude(
-            level_index__gte=_MANUAL_BAG_MIN,
-            level_index__lt=_MANUAL_BAG_MAX,
-        )
         .values_list("tp_price", flat=True)
     ):
         if tp is not None and tp > price:
