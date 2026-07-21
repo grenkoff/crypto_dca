@@ -38,6 +38,22 @@ def _apply_xticks(ax: Any, labels: list[str], proj_x: int) -> None:
     ax.set_xticklabels(names[::step], fontsize=7, rotation=45)
 
 
+def _style_yaxis(
+    axis: Any, label: str, color: str, outward: float | None = None
+) -> None:
+    """Label and colour a y-axis, optionally pushing its spine outward."""
+    axis.set_ylabel(label, fontsize=8, color=color)
+    axis.tick_params(axis="y", labelcolor=color, labelsize=8)
+    if outward is not None:
+        axis.spines["right"].set_position(("outward", outward))
+
+
+_GREEN = "#16a34a"
+_AMBER = "#f59e0b"
+_BAR = "#86efac"
+_BLUE = "#2563eb"
+
+
 def render_pnl_chart(
     days: list[tuple[str, Decimal]],
     base_capital: Decimal,
@@ -46,10 +62,10 @@ def render_pnl_chart(
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
-    A green equity line over days with a dashed projection segment to the
-    take-profit total, an amber line of USDT locked in open trades, plus
-    daily realized profit as bars on a second axis. ``matplotlib`` is
-    imported lazily to keep start-up and other commands fast.
+    Locked USDT (amber) sits on the left axis; funds (green) with its dashed
+    take-profit projection sit on their own right axis so their small drift
+    is visible; daily realized profit (bars) sit on a second, outer right
+    axis. ``matplotlib`` is imported lazily to keep start-up fast.
     """
     from matplotlib.figure import Figure
 
@@ -59,45 +75,44 @@ def render_pnl_chart(
     last_eq = float(equity[-1]) if equity else float(base_capital)
     proj_x = last_x + 1
 
-    fig = Figure(figsize=(7.5, 3.6), dpi=110)
+    fig = Figure(figsize=(8.0, 3.6), dpi=110)
     ax = fig.subplots()
+    funds_ax = ax.twinx()
     bar_ax = ax.twinx()
+
     bar_ax.bar(
         xs,
         [float(v) for v in profits],
-        color="#86efac",
+        color=_BAR,
         width=0.7,
         label="profit/day",
     )
-    bar_ax.set_ylabel("profit/day, USDT", fontsize=8)
-
-    ax.plot(xs, [float(v) for v in equity], color="#16a34a", label="funds")
-    ax.plot(xs, [float(v) for v in locked], color="#f59e0b", label="locked")
-    ax.plot(
+    ax.plot(xs, [float(v) for v in locked], color=_AMBER, label="locked")
+    funds_ax.plot(xs, [float(v) for v in equity], color=_GREEN, label="funds")
+    funds_ax.plot(
         [last_x, proj_x],
         [last_eq, float(proj)],
-        color="#2563eb",
+        color=_BLUE,
         linestyle="--",
         label="projection (at TP)",
     )
     ax.axvline(last_x, color="#9ca3af", linestyle=":", linewidth=1)
-    ax.set_zorder(bar_ax.get_zorder() + 1)
-    ax.patch.set_visible(False)
+    for line_ax in (ax, funds_ax):
+        line_ax.set_zorder(bar_ax.get_zorder() + 1)
+        line_ax.patch.set_visible(False)
 
     ax.set_title("Funds & profit, USDT")
     ax.set_xlabel("days")
-    ax.set_ylabel("funds, USDT")
+    _style_yaxis(ax, "locked, USDT", _AMBER)
+    _style_yaxis(funds_ax, "funds, USDT", _GREEN)
+    _style_yaxis(bar_ax, "profit/day, USDT", "#4b5563", outward=46)
     ax.grid(visible=True, alpha=0.3)
     _apply_xticks(ax, labels, proj_x)
 
-    handles = ax.get_legend_handles_labels()
-    bars = bar_ax.get_legend_handles_labels()
-    ax.legend(
-        handles[0] + bars[0],
-        handles[1] + bars[1],
-        loc="upper left",
-        fontsize=8,
-    )
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = funds_ax.get_legend_handles_labels()
+    h3, l3 = bar_ax.get_legend_handles_labels()
+    ax.legend(h1 + h2 + h3, l1 + l2 + l3, loc="upper left", fontsize=8)
     fig.tight_layout()
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
