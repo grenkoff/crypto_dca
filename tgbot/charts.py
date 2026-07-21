@@ -118,7 +118,7 @@ def render_pnl_chart(
         line_ax.set_zorder(bar_ax.get_zorder() + 1)
         line_ax.patch.set_visible(False)
 
-    ax.set_title("Funds & profit, USDT")
+    fig.suptitle("Funds & profit, USDT", y=0.99, fontsize=11)
     ax.set_xlabel("days")
     _style_yaxis(ax, "locked, USDT", _AMBER)
     _style_yaxis(funds_ax, "funds, USDT", _GREEN)
@@ -129,8 +129,16 @@ def render_pnl_chart(
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = funds_ax.get_legend_handles_labels()
     h3, l3 = bar_ax.get_legend_handles_labels()
-    ax.legend(h1 + h2 + h3, l1 + l2 + l3, loc="upper left", fontsize=8)
-    fig.tight_layout()
+    fig.legend(
+        h1 + h2 + h3,
+        l1 + l2 + l3,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.94),
+        ncol=len(l1 + l2 + l3),
+        fontsize=8,
+        frameon=False,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.88))
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     return buf.getvalue()
