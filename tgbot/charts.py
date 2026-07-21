@@ -50,8 +50,18 @@ def _style_yaxis(
 
 _GREEN = "#16a34a"
 _AMBER = "#f59e0b"
-_BAR = "#86efac"
-_BLUE = "#2563eb"
+_BAR = "#7dd3fc"
+_MA = "#2563eb"
+_MA_WINDOW = 10
+
+
+def _moving_average(values: list[Decimal], window: int) -> list[float]:
+    """Trailing simple moving average (partial window at the start)."""
+    out: list[float] = []
+    for i in range(len(values)):
+        chunk = values[max(0, i - window + 1) : i + 1]
+        out.append(float(sum(chunk, Decimal(0)) / len(chunk)))
+    return out
 
 
 def render_pnl_chart(
@@ -87,12 +97,19 @@ def render_pnl_chart(
         width=0.7,
         label="profit/day",
     )
+    bar_ax.plot(
+        xs,
+        _moving_average(profits, _MA_WINDOW),
+        color=_MA,
+        linewidth=1.5,
+        label=f"profit MA({_MA_WINDOW}d)",
+    )
     ax.plot(xs, [float(v) for v in locked], color=_AMBER, label="locked")
     funds_ax.plot(xs, [float(v) for v in equity], color=_GREEN, label="funds")
     funds_ax.plot(
         [last_x, proj_x],
         [last_eq, float(proj)],
-        color=_BLUE,
+        color=_GREEN,
         linestyle="--",
         label="projection (at TP)",
     )
