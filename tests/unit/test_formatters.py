@@ -81,7 +81,7 @@ def test_build_unlock_shows_locked_and_days() -> None:
     text = build_unlock(Decimal("410.905"), Decimal("136.7"), Decimal("2.345"))
     assert "Locked in open trades: `410.90` USDT" in text
     assert "~`137` days" in text
-    assert "`2.34`/day comp" in text
+    assert "(flat, `2.3`/day)" in text
 
 
 def test_build_unlock_na_when_days_unknown() -> None:

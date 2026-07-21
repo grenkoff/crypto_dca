@@ -132,10 +132,10 @@ def build_unlock(
     if days is None:
         return f"Locked in open trades: `{locked}` USDT\nUnlock all: `n/a`"
     d = days.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    rate = comps_per_day.quantize(Decimal("0.01"))
+    rate = comps_per_day.quantize(Decimal("0.1"))
     return (
         f"Locked in open trades: `{locked}` USDT\n"
-        f"Unlock all: ~`{d}` days (flat price, `{rate}`/day comp)"
+        f"Unlock all: ~`{d}` days (flat, `{rate}`/day)"
     )
 
 
