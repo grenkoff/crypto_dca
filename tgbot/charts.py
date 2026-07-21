@@ -42,12 +42,14 @@ def render_pnl_chart(
     days: list[tuple[str, Decimal]],
     base_capital: Decimal,
     projection: Decimal,
+    locked: list[Decimal],
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
     A green equity line over days with a dashed projection segment to the
-    take-profit total, plus daily realized profit as bars on a second axis.
-    ``matplotlib`` is imported lazily to keep start-up and other commands fast.
+    take-profit total, an amber line of USDT locked in open trades, plus
+    daily realized profit as bars on a second axis. ``matplotlib`` is
+    imported lazily to keep start-up and other commands fast.
     """
     from matplotlib.figure import Figure
 
@@ -70,6 +72,7 @@ def render_pnl_chart(
     bar_ax.set_ylabel("profit/day, USDT", fontsize=8)
 
     ax.plot(xs, [float(v) for v in equity], color="#16a34a", label="funds")
+    ax.plot(xs, [float(v) for v in locked], color="#f59e0b", label="locked")
     ax.plot(
         [last_x, proj_x],
         [last_eq, float(proj)],

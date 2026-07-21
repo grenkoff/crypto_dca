@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 import structlog
@@ -11,6 +11,7 @@ from asgiref.sync import sync_to_async
 from django.db.models import F, QuerySet, Sum
 
 from core.exchange.bybit import BybitClient
+from core.services.consolidate import _MANUAL_BAG_MAX, _MANUAL_BAG_MIN
 from core.trading.models import (
     BotStatus,
     CompensationLink,
@@ -69,13 +70,39 @@ def pnl_snapshot() -> PnlSnapshot:
     )
 
 
+def _locked_by_day(dates: list[date]) -> list[Decimal]:
+    """USDT cost basis of positions open at the end of each given UTC day."""
+    rows = list(
+        Position.objects.values_list(
+            "opened_at", "closed_at", "entry_price", "qty", "fees_in"
+        )
+    )
+    out: list[Decimal] = []
+    for d in dates:
+        eod = datetime(d.year, d.month, d.day, tzinfo=UTC) + timedelta(days=1)
+        out.append(
+            sum(
+                (
+                    entry * qty + fees
+                    for opened, closed, entry, qty, fees in rows
+                    if opened <= eod and (closed is None or closed > eod)
+                ),
+                Decimal(0),
+            )
+        )
+    return out
+
+
 @sync_to_async
-def pnl_curve_data() -> tuple[list[tuple[str, Decimal]], Decimal, Decimal]:
-    """Chart inputs: daily realized profit, capital base, and TP projection.
+def pnl_curve_data() -> tuple[
+    list[tuple[str, Decimal]], Decimal, Decimal, list[Decimal]
+]:
+    """Chart inputs: daily realized profit, base, projection, locked USDT.
 
     Realized PnL of closed trades is bucketed by UTC day (label, sum) to
     match the /pnl caption; ``base_capital`` is the cost basis of the open
-    inventory; ``projection`` is the gain every open lot books at its TP.
+    inventory; ``projection`` is the gain every open lot books at its TP;
+    ``locked`` is the open-inventory cost basis at the end of each day.
     """
     daily: dict[date, Decimal] = {}
     for closed_at, realized in (
@@ -87,7 +114,8 @@ def pnl_curve_data() -> tuple[list[tuple[str, Decimal]], Decimal, Decimal]:
             continue
         day = closed_at.date()
         daily[day] = daily.get(day, Decimal(0)) + realized
-    days = [(d.strftime("%d.%m"), v) for d, v in sorted(daily.items())]
+    sorted_dates = sorted(daily)
+    days = [(d.strftime("%d.%m"), daily[d]) for d in sorted_dates]
 
     fee = StrategyConfig.load().maker_fee
     base_capital = Decimal(0)
@@ -100,7 +128,56 @@ def pnl_curve_data() -> tuple[list[tuple[str, Decimal]], Decimal, Decimal]:
                 - p.entry_price * p.qty
                 - p.fees_in
             )
-    return days, base_capital, projection
+    return days, base_capital, projection, _locked_by_day(sorted_dates)
+
+
+def _unlock_from_db(price: Decimal | None) -> tuple[Decimal | None, Decimal]:
+    """Days to unlock all open USDT at a flat ``price``, and avg comps/day.
+
+    Each compensation walks one TP down one ``grid_step``; a lot unlocks once
+    its TP reaches market. Days = total steps to market / avg comps per day.
+    """
+    comps = CompensationLink.objects.count()
+    first = (
+        CompensationLink.objects.order_by("created_at")
+        .values_list("created_at", flat=True)
+        .first()
+    )
+    if comps == 0 or first is None:
+        return None, Decimal(0)
+    now = datetime.now(tz=UTC)
+    span_days = Decimal(str(max((now - first).total_seconds() / 86400, 1.0)))
+    comps_per_day = Decimal(comps) / span_days
+
+    step = StrategyConfig.load().grid_step
+    if price is None or step <= 0 or comps_per_day <= 0:
+        return None, comps_per_day
+    total_steps = Decimal(0)
+    for tp in (
+        Position.objects.filter(status=PositionStatus.OPEN)
+        .exclude(tp_price__isnull=True)
+        .exclude(
+            level_index__gte=_MANUAL_BAG_MIN,
+            level_index__lt=_MANUAL_BAG_MAX,
+        )
+        .values_list("tp_price", flat=True)
+    ):
+        if tp is not None and tp > price:
+            total_steps += ((tp - price) / step).to_integral_value(
+                rounding=ROUND_HALF_UP
+            )
+    return total_steps / comps_per_day, comps_per_day
+
+
+async def unlock_estimate() -> tuple[Decimal | None, Decimal]:
+    """Days to unlock all open USDT (flat price) and the avg comps/day rate."""
+    price: Decimal | None = None
+    try:
+        client = BybitClient.from_settings()
+        price = await client.get_last_price(await _symbol())
+    except Exception as exc:
+        log.warning("pnl.price_fetch_failed", error=str(exc)[:100])
+    return await sync_to_async(_unlock_from_db)(price)
 
 
 @sync_to_async
