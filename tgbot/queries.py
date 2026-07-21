@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from typing import Any
 
 import structlog
@@ -131,41 +131,42 @@ def pnl_curve_data() -> tuple[
 
 
 def _unlock_from_db(price: Decimal | None) -> tuple[Decimal | None, Decimal]:
-    """Days to unlock all open USDT at a flat ``price``, and avg comps/day.
+    """Days to bank enough profit to absorb the loss locked in open lots.
 
-    Each compensation walks one TP down one ``grid_step``; a lot unlocks once
-    its TP reaches market. Days = total steps to market / avg comps per day.
+    An underwater lot only unlocks once banked profit funds its loss at
+    ``price``. Days = total locked loss at market / avg realized profit per
+    day. Returns (days or None, profit per day).
     """
-    comps = CompensationLink.objects.count()
+    closed = Position.objects.filter(status=PositionStatus.CLOSED).exclude(
+        closed_at__isnull=True
+    )
+    realized = closed.aggregate(s=Sum("realized_pnl"))["s"] or Decimal(0)
     first = (
-        CompensationLink.objects.order_by("created_at")
-        .values_list("created_at", flat=True)
+        closed.order_by("closed_at")
+        .values_list("closed_at", flat=True)
         .first()
     )
-    if comps == 0 or first is None:
+    if first is None or realized <= 0:
         return None, Decimal(0)
     now = datetime.now(tz=UTC)
     span_days = Decimal(str(max((now - first).total_seconds() / 86400, 1.0)))
-    comps_per_day = Decimal(comps) / span_days
+    profit_per_day = realized / span_days
 
-    step = StrategyConfig.load().grid_step
-    if price is None or step <= 0 or comps_per_day <= 0:
-        return None, comps_per_day
-    total_steps = Decimal(0)
-    for tp in (
-        Position.objects.filter(status=PositionStatus.OPEN)
-        .exclude(tp_price__isnull=True)
-        .values_list("tp_price", flat=True)
-    ):
-        if tp is not None and tp > price:
-            total_steps += ((tp - price) / step).to_integral_value(
-                rounding=ROUND_HALF_UP
-            )
-    return total_steps / comps_per_day, comps_per_day
+    fee = StrategyConfig.load().maker_fee
+    if price is None or profit_per_day <= 0:
+        return None, profit_per_day
+    total_loss = Decimal(0)
+    for entry, qty, fees_in in Position.objects.filter(
+        status=PositionStatus.OPEN
+    ).values_list("entry_price", "qty", "fees_in"):
+        loss = entry * qty + fees_in - price * qty * (Decimal(1) - fee)
+        if loss > 0:
+            total_loss += loss
+    return total_loss / profit_per_day, profit_per_day
 
 
 async def unlock_estimate() -> tuple[Decimal | None, Decimal]:
-    """Days to unlock all open USDT (flat price) and the avg comps/day rate."""
+    """Days to unlock the locked loss and the avg realized profit per day."""
     price: Decimal | None = None
     try:
         client = BybitClient.from_settings()
