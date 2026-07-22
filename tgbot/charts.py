@@ -129,7 +129,7 @@ def render_pnl_chart(
     ax.set_xlabel("days")
     _style_yaxis(ax, "locked, USDT", _AMBER)
     _style_yaxis(funds_ax, "funds, USDT", _GREEN)
-    _style_yaxis(bar_ax, "profit/day, USDT", "#4b5563", outward=46)
+    _style_yaxis(bar_ax, "profit/day, USDT", _MA, outward=46)
     _style_yaxis(price_ax, "KAS price", _PRICE, outward=100)
     ax.grid(visible=True, alpha=0.3)
     _apply_xticks(ax, labels, proj_x)
