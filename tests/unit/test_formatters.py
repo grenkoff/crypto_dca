@@ -13,6 +13,7 @@ from tgbot.formatters import (
     build_orders,
     build_pnl,
     build_status,
+    build_unlock,
     format_event,
 )
 
@@ -74,6 +75,17 @@ def test_build_pnl() -> None:
     assert "💰" not in text
     # title plus six window lines
     assert text.count("\n") == 6
+
+
+def test_build_unlock_shows_locked_and_days_on_one_line() -> None:
+    text = build_unlock(Decimal("410.905"), Decimal("136.7"))
+    assert text == "Locked `410.90` USDT · unlock ~`137` days"
+    assert "\n" not in text
+
+
+def test_build_unlock_na_when_days_unknown() -> None:
+    text = build_unlock(Decimal("100"), None)
+    assert text == "Locked `100.00` USDT · unlock `n/a`"
 
 
 def test_build_pnl_rounds_to_four_decimals() -> None:

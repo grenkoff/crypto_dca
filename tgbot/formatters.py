@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 
@@ -122,6 +122,15 @@ def build_pnl(snap: PnlSnapshot) -> str:
         f"last 365 days `{_signed(snap.last_365d)}`\n"
         f"all time `{_signed(snap.all_time)}`"
     )
+
+
+def build_unlock(locked_now: Decimal, days: Decimal | None) -> str:
+    """Render the locked-USDT amount and days-to-unlock on one line."""
+    locked = _q(locked_now, "0.01")
+    if days is None:
+        return f"Locked `{locked}` USDT · unlock `n/a`"
+    d = days.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return f"Locked `{locked}` USDT · unlock ~`{d}` days"
 
 
 def build_orders(snap: OrdersSnapshot) -> str:

@@ -23,6 +23,7 @@ from tgbot.formatters import (
     build_orders,
     build_pnl,
     build_status,
+    build_unlock,
 )
 from tgbot.notify_settings import (
     TOGGLE_LABELS,
@@ -32,10 +33,12 @@ from tgbot.notify_settings import (
 )
 from tgbot.queries import (
     balance_snapshot,
+    daily_close_line,
     orders_snapshot,
     pnl_curve_data,
     pnl_snapshot,
     status_snapshot,
+    unlock_estimate,
 )
 
 router = Router(name="tgbot.commands")
@@ -137,13 +140,17 @@ async def cmd_balance(message: Message) -> None:
 async def cmd_pnl(message: Message) -> None:
     """Reply with realized PnL and a funds-and-profit chart."""
     snap = await pnl_snapshot()
-    caption = build_pnl(snap)
-    days, base_capital, projection = await pnl_curve_data()
+    days, base_capital, locked, dates = await pnl_curve_data()
+    unlock_days, _ = await unlock_estimate()
+    caption = (
+        build_pnl(snap) + "\n\n" + build_unlock(base_capital, unlock_days)
+    )
     if not days:
         await message.answer(caption, parse_mode="Markdown")
         return
+    price = await daily_close_line(dates)
     png = await asyncio.to_thread(
-        render_pnl_chart, days, base_capital, projection
+        render_pnl_chart, days, base_capital, locked, price
     )
     await message.answer_photo(
         BufferedInputFile(png, filename="pnl.png"),
