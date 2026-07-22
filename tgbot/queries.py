@@ -94,15 +94,14 @@ def _locked_by_day(dates: list[date]) -> list[Decimal]:
 
 @sync_to_async
 def pnl_curve_data() -> tuple[
-    list[tuple[str, Decimal]], Decimal, Decimal, list[Decimal], list[date]
+    list[tuple[str, Decimal]], Decimal, list[Decimal], list[date]
 ]:
-    """Chart inputs: daily realized profit, base, projection, locked, dates.
+    """Chart inputs: daily realized profit, base, locked USDT, and dates.
 
     Realized PnL of closed trades is bucketed by UTC day (label, sum) to
     match the /pnl caption; ``base_capital`` is the cost basis of the open
-    inventory; ``projection`` is the gain every open lot books at its TP;
-    ``locked`` is the open-inventory cost basis at the end of each day;
-    ``dates`` are the UTC days (aligned to the others) for the price line.
+    inventory; ``locked`` is the open-inventory cost basis at the end of each
+    day; ``dates`` are the UTC days (aligned to the others) for the price line.
     """
     daily: dict[date, Decimal] = {}
     for closed_at, realized in (
@@ -117,19 +116,11 @@ def pnl_curve_data() -> tuple[
     sorted_dates = sorted(daily)
     days = [(d.strftime("%d.%m"), daily[d]) for d in sorted_dates]
 
-    fee = StrategyConfig.load().maker_fee
     base_capital = Decimal(0)
-    projection = Decimal(0)
     for p in Position.objects.filter(status=PositionStatus.OPEN):
         base_capital += p.entry_price * p.qty + p.fees_in
-        if p.tp_price is not None:
-            projection += (
-                p.tp_price * p.qty * (Decimal(1) - fee)
-                - p.entry_price * p.qty
-                - p.fees_in
-            )
     locked = _locked_by_day(sorted_dates)
-    return days, base_capital, projection, locked, sorted_dates
+    return days, base_capital, locked, sorted_dates
 
 
 async def daily_close_line(dates: list[date]) -> list[float]:

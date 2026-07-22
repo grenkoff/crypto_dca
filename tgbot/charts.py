@@ -8,15 +8,12 @@ from typing import Any
 
 
 def pnl_series(
-    days: list[tuple[str, Decimal]],
-    base_capital: Decimal,
-    projection: Decimal,
-) -> tuple[list[str], list[Decimal], list[Decimal], Decimal]:
-    """Daily labels, daily profits, the equity line, and the projected total.
+    days: list[tuple[str, Decimal]], base_capital: Decimal
+) -> tuple[list[str], list[Decimal], list[Decimal]]:
+    """Daily labels, daily profits, and the equity line.
 
     Equity each day is ``base_capital`` plus the running sum of daily realized
-    profit; the projection adds every open lot's take-profit gain onto the
-    last day's equity as a single point.
+    profit.
     """
     labels = [label for label, _ in days]
     profits = [profit for _, profit in days]
@@ -25,17 +22,15 @@ def pnl_series(
     for profit in profits:
         total += profit
         equity.append(total)
-    last = equity[-1] if equity else base_capital
-    return labels, profits, equity, last + projection
+    return labels, profits, equity
 
 
-def _apply_xticks(ax: Any, labels: list[str], proj_x: int) -> None:
-    """Thin the day labels (plus the projection tick) to avoid crowding."""
-    ticks = [*range(len(labels)), proj_x]
-    names = [*labels, "proj."]
+def _apply_xticks(ax: Any, labels: list[str]) -> None:
+    """Thin the day labels to avoid crowding."""
+    ticks = list(range(len(labels)))
     step = max(1, len(ticks) // 10)
     ax.set_xticks(ticks[::step])
-    ax.set_xticklabels(names[::step], fontsize=7, rotation=45)
+    ax.set_xticklabels(labels[::step], fontsize=7, rotation=45)
 
 
 def _style_yaxis(
@@ -77,24 +72,19 @@ def _moving_average(values: list[Decimal], window: int) -> list[float]:
 def render_pnl_chart(
     days: list[tuple[str, Decimal]],
     base_capital: Decimal,
-    projection: Decimal,
     locked: list[Decimal],
     price: list[float],
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
-    Locked USDT (amber) sits on the left axis; funds (green) with its dashed
-    projection, daily realized profit (bars + MA), and the KAS close price
-    each get their own right axis. ``matplotlib`` is imported lazily to keep
-    start-up fast.
+    Locked USDT (amber) sits on the left axis; funds (green), daily realized
+    profit (bars + MA), and the KAS close price each get their own right
+    axis. ``matplotlib`` is imported lazily to keep start-up fast.
     """
     from matplotlib.figure import Figure
 
-    labels, profits, equity, proj = pnl_series(days, base_capital, projection)
+    labels, profits, equity = pnl_series(days, base_capital)
     xs = list(range(len(equity)))
-    last_x = xs[-1] if xs else 0
-    last_eq = float(equity[-1]) if equity else float(base_capital)
-    proj_x = last_x + 1
 
     fig = Figure(figsize=(8.4, 3.6), dpi=110)
     ax = fig.subplots()
@@ -118,15 +108,7 @@ def render_pnl_chart(
     )
     ax.plot(xs, [float(v) for v in locked], color=_AMBER, label="locked")
     funds_ax.plot(xs, [float(v) for v in equity], color=_GREEN, label="funds")
-    funds_ax.plot(
-        [last_x, proj_x],
-        [last_eq, float(proj)],
-        color=_GREEN,
-        linestyle="--",
-        label="projection (at TP)",
-    )
     price_ax.plot(xs, price, color=_PRICE, linewidth=1.2, label="KAS price")
-    ax.axvline(last_x, color="#9ca3af", linestyle=":", linewidth=1)
     for line_ax in (ax, funds_ax, price_ax):
         line_ax.set_zorder(bar_ax.get_zorder() + 1)
         line_ax.patch.set_visible(False)
@@ -138,7 +120,7 @@ def render_pnl_chart(
     _style_right(bar_ax, _MA, outward=34)
     _style_right(price_ax, _PRICE, outward=68)
     ax.grid(visible=True, alpha=0.3)
-    _apply_xticks(ax, labels, proj_x)
+    _apply_xticks(ax, labels)
 
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = funds_ax.get_legend_handles_labels()
