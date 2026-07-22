@@ -48,6 +48,12 @@ def _style_yaxis(
         axis.spines["right"].set_position(("outward", outward))
 
 
+def _style_right(axis: Any, color: str, outward: float) -> None:
+    """Colour a right y-axis and offset its spine, with no vertical title."""
+    axis.tick_params(axis="y", labelcolor=color, labelsize=8)
+    axis.spines["right"].set_position(("outward", outward))
+
+
 _GREEN = "#16a34a"
 _AMBER = "#f59e0b"
 _BAR = "#7dd3fc"
@@ -90,7 +96,7 @@ def render_pnl_chart(
     last_eq = float(equity[-1]) if equity else float(base_capital)
     proj_x = last_x + 1
 
-    fig = Figure(figsize=(9.0, 3.6), dpi=110)
+    fig = Figure(figsize=(8.4, 3.6), dpi=110)
     ax = fig.subplots()
     funds_ax = ax.twinx()
     bar_ax = ax.twinx()
@@ -128,9 +134,9 @@ def render_pnl_chart(
     fig.suptitle("Funds & profit, USDT", y=0.965, fontsize=11)
     ax.set_xlabel("days")
     _style_yaxis(ax, "locked, USDT", _AMBER)
-    _style_yaxis(funds_ax, "funds, USDT", _GREEN)
-    _style_yaxis(bar_ax, "profit/day, USDT", _MA, outward=46)
-    _style_yaxis(price_ax, "KAS price", _PRICE, outward=100)
+    _style_right(funds_ax, _GREEN, outward=0)
+    _style_right(bar_ax, _MA, outward=34)
+    _style_right(price_ax, _PRICE, outward=68)
     ax.grid(visible=True, alpha=0.3)
     _apply_xticks(ax, labels, proj_x)
 
