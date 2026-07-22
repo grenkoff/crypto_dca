@@ -47,13 +47,18 @@ def test_pnl_series_projection_onto_base_when_no_days() -> None:
 def test_render_pnl_chart_returns_png_bytes() -> None:
     days = _days([("01.07", "1"), ("02.07", "0.5"), ("03.07", "-0.2")])
     locked = [Decimal("300"), Decimal("320"), Decimal("310")]
-    png = render_pnl_chart(days, Decimal("340"), Decimal("0.4"), locked)
+    price = [0.028, 0.0285, 0.0282]
+    png = render_pnl_chart(days, Decimal("340"), Decimal("0.4"), locked, price)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
     assert len(png) > 1000
 
 
 def test_render_pnl_chart_handles_single_day() -> None:
     png = render_pnl_chart(
-        _days([("01.07", "1")]), Decimal("340"), Decimal("0"), [Decimal("50")]
+        _days([("01.07", "1")]),
+        Decimal("340"),
+        Decimal("0"),
+        [Decimal("50")],
+        [0.028],
     )
     assert png[:8] == b"\x89PNG\r\n\x1a\n"

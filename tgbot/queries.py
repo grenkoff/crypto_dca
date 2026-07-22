@@ -94,14 +94,15 @@ def _locked_by_day(dates: list[date]) -> list[Decimal]:
 
 @sync_to_async
 def pnl_curve_data() -> tuple[
-    list[tuple[str, Decimal]], Decimal, Decimal, list[Decimal]
+    list[tuple[str, Decimal]], Decimal, Decimal, list[Decimal], list[date]
 ]:
-    """Chart inputs: daily realized profit, base, projection, locked USDT.
+    """Chart inputs: daily realized profit, base, projection, locked, dates.
 
     Realized PnL of closed trades is bucketed by UTC day (label, sum) to
     match the /pnl caption; ``base_capital`` is the cost basis of the open
     inventory; ``projection`` is the gain every open lot books at its TP;
-    ``locked`` is the open-inventory cost basis at the end of each day.
+    ``locked`` is the open-inventory cost basis at the end of each day;
+    ``dates`` are the UTC days (aligned to the others) for the price line.
     """
     daily: dict[date, Decimal] = {}
     for closed_at, realized in (
@@ -127,7 +128,27 @@ def pnl_curve_data() -> tuple[
                 - p.entry_price * p.qty
                 - p.fees_in
             )
-    return days, base_capital, projection, _locked_by_day(sorted_dates)
+    locked = _locked_by_day(sorted_dates)
+    return days, base_capital, projection, locked, sorted_dates
+
+
+async def daily_close_line(dates: list[date]) -> list[float]:
+    """Close price of the traded symbol for each UTC day (NaN if missing)."""
+    if not dates:
+        return []
+    closes: dict[date, Decimal] = {}
+    try:
+        client = BybitClient.from_settings()
+        symbol = str(await _symbol())
+        start = datetime(
+            dates[0].year, dates[0].month, dates[0].day, tzinfo=UTC
+        )
+        closes = await client.get_daily_closes(
+            symbol, int(start.timestamp() * 1000)
+        )
+    except Exception as exc:
+        log.warning("pnl.price_line_failed", error=str(exc)[:100])
+    return [float(closes[d]) if d in closes else float("nan") for d in dates]
 
 
 def _unlock_from_db(price: Decimal | None) -> tuple[Decimal | None, Decimal]:

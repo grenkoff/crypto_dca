@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Protocol, cast
 
@@ -29,6 +29,7 @@ CATEGORY = "spot"
 class _HTTP(Protocol):
     def get_instruments_info(self, **kwargs: Any) -> dict[str, Any]: ...
     def get_tickers(self, **kwargs: Any) -> dict[str, Any]: ...
+    def get_kline(self, **kwargs: Any) -> dict[str, Any]: ...
     def get_wallet_balance(self, **kwargs: Any) -> dict[str, Any]: ...
     def place_order(self, **kwargs: Any) -> dict[str, Any]: ...
     def cancel_order(self, **kwargs: Any) -> dict[str, Any]: ...
@@ -127,6 +128,24 @@ class BybitClient:
         if not items:
             raise BybitError(0, f"no ticker for {symbol}")
         return Decimal(str(items[0]["lastPrice"]))
+
+    async def get_daily_closes(
+        self, symbol: str, start_ms: int
+    ) -> dict[date, Decimal]:
+        """Daily close prices keyed by UTC date, from ``start_ms`` to now."""
+        resp = await asyncio.to_thread(
+            self._http.get_kline,
+            category=CATEGORY,
+            symbol=symbol,
+            interval="D",
+            start=start_ms,
+            limit=1000,
+        )
+        result = _raise_for_ret(resp)
+        return {
+            _ts(row[0]).date(): Decimal(str(row[4]))
+            for row in result.get("list") or []
+        }
 
     async def get_balances(self) -> dict[str, Balance]:
         """Fetch unified-account balances keyed by coin."""

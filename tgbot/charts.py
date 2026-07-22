@@ -52,6 +52,7 @@ _GREEN = "#16a34a"
 _AMBER = "#f59e0b"
 _BAR = "#7dd3fc"
 _MA = "#2563eb"
+_PRICE = "#db2777"
 _MA_WINDOW = 10
 
 
@@ -72,13 +73,14 @@ def render_pnl_chart(
     base_capital: Decimal,
     projection: Decimal,
     locked: list[Decimal],
+    price: list[float],
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
     Locked USDT (amber) sits on the left axis; funds (green) with its dashed
-    take-profit projection sit on their own right axis so their small drift
-    is visible; daily realized profit (bars) sit on a second, outer right
-    axis. ``matplotlib`` is imported lazily to keep start-up fast.
+    projection, daily realized profit (bars + MA), and the KAS close price
+    each get their own right axis. ``matplotlib`` is imported lazily to keep
+    start-up fast.
     """
     from matplotlib.figure import Figure
 
@@ -88,10 +90,11 @@ def render_pnl_chart(
     last_eq = float(equity[-1]) if equity else float(base_capital)
     proj_x = last_x + 1
 
-    fig = Figure(figsize=(8.0, 3.6), dpi=110)
+    fig = Figure(figsize=(9.0, 3.6), dpi=110)
     ax = fig.subplots()
     funds_ax = ax.twinx()
     bar_ax = ax.twinx()
+    price_ax = ax.twinx()
 
     bar_ax.bar(
         xs,
@@ -116,8 +119,9 @@ def render_pnl_chart(
         linestyle="--",
         label="projection (at TP)",
     )
+    price_ax.plot(xs, price, color=_PRICE, linewidth=1.2, label="KAS price")
     ax.axvline(last_x, color="#9ca3af", linestyle=":", linewidth=1)
-    for line_ax in (ax, funds_ax):
+    for line_ax in (ax, funds_ax, price_ax):
         line_ax.set_zorder(bar_ax.get_zorder() + 1)
         line_ax.patch.set_visible(False)
 
@@ -126,22 +130,25 @@ def render_pnl_chart(
     _style_yaxis(ax, "locked, USDT", _AMBER)
     _style_yaxis(funds_ax, "funds, USDT", _GREEN)
     _style_yaxis(bar_ax, "profit/day, USDT", "#4b5563", outward=46)
+    _style_yaxis(price_ax, "KAS price", _PRICE, outward=100)
     ax.grid(visible=True, alpha=0.3)
     _apply_xticks(ax, labels, proj_x)
 
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = funds_ax.get_legend_handles_labels()
     h3, l3 = bar_ax.get_legend_handles_labels()
+    h4, l4 = price_ax.get_legend_handles_labels()
+    labels_all = l1 + l2 + l3 + l4
     fig.legend(
-        h1 + h2 + h3,
-        l1 + l2 + l3,
+        h1 + h2 + h3 + h4,
+        labels_all,
         loc="upper center",
         bbox_to_anchor=(0.5, 0.94),
-        ncol=len(l1 + l2 + l3),
+        ncol=len(labels_all),
         fontsize=8,
         frameon=False,
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.88))
+    fig.tight_layout(rect=(0, 0, 0.99, 0.88))
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     return buf.getvalue()

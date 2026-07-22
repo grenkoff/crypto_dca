@@ -33,6 +33,7 @@ from tgbot.notify_settings import (
 )
 from tgbot.queries import (
     balance_snapshot,
+    daily_close_line,
     orders_snapshot,
     pnl_curve_data,
     pnl_snapshot,
@@ -139,7 +140,7 @@ async def cmd_balance(message: Message) -> None:
 async def cmd_pnl(message: Message) -> None:
     """Reply with realized PnL and a funds-and-profit chart."""
     snap = await pnl_snapshot()
-    days, base_capital, projection, locked = await pnl_curve_data()
+    days, base_capital, projection, locked, dates = await pnl_curve_data()
     unlock_days, _ = await unlock_estimate()
     caption = (
         build_pnl(snap) + "\n\n" + build_unlock(base_capital, unlock_days)
@@ -147,8 +148,9 @@ async def cmd_pnl(message: Message) -> None:
     if not days:
         await message.answer(caption, parse_mode="Markdown")
         return
+    price = await daily_close_line(dates)
     png = await asyncio.to_thread(
-        render_pnl_chart, days, base_capital, projection, locked
+        render_pnl_chart, days, base_capital, projection, locked, price
     )
     await message.answer_photo(
         BufferedInputFile(png, filename="pnl.png"),

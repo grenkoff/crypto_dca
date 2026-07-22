@@ -36,6 +36,9 @@ class FakeHTTP:
     def get_tickers(self, **kwargs: Any) -> dict[str, Any]:
         return self._respond("get_tickers", kwargs)
 
+    def get_kline(self, **kwargs: Any) -> dict[str, Any]:
+        return self._respond("get_kline", kwargs)
+
     def get_wallet_balance(self, **kwargs: Any) -> dict[str, Any]:
         return self._respond("get_wallet_balance", kwargs)
 
