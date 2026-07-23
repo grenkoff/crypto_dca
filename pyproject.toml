@@ -26,11 +26,11 @@ dev = [
     "ruff>=0.15.22",
     "mypy>=2.3.0",
     "django-stubs>=6.0.7",
-    "pre-commit>=4.6.0",
+    "pre-commit>=4.6.1",
     "fakeredis>=2.36.2",
     "vulture>=2.16",
     "pylint>=4.0.6",
-    "hypothesis>=6.156.7",
+    "hypothesis>=6.161.0",
     "import-linter>=2.13",
 ]
 
