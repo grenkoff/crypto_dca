@@ -4,7 +4,41 @@ from __future__ import annotations
 
 import io
 from decimal import Decimal
+from math import isnan
 from typing import Any
+
+
+def _catmull(t: float, p0: float, p1: float, p2: float, p3: float) -> float:
+    """One Catmull-Rom interpolation between p1 and p2 at parameter t."""
+    t2 = t * t
+    t3 = t2 * t
+    return 0.5 * (
+        2 * p1
+        + (-p0 + p2) * t
+        + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2
+        + (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+    )
+
+
+def _smooth(
+    xs: list[float], ys: list[float], samples: int = 18
+) -> tuple[list[float], list[float]]:
+    """Catmull-Rom spline through the points (NaN skipped) for a soft curve."""
+    pts = [(x, y) for x, y in zip(xs, ys, strict=False) if not isnan(y)]
+    if len(pts) < 3:
+        return [p[0] for p in pts], [p[1] for p in pts]
+    ext = [pts[0], *pts, pts[-1]]
+    ox: list[float] = []
+    oy: list[float] = []
+    for i in range(1, len(ext) - 2):
+        seg = (ext[i - 1], ext[i], ext[i + 1], ext[i + 2])
+        for s in range(samples):
+            t = s / samples
+            ox.append(_catmull(t, *(p[0] for p in seg)))
+            oy.append(_catmull(t, *(p[1] for p in seg)))
+    ox.append(pts[-1][0])
+    oy.append(pts[-1][1])
+    return ox, oy
 
 
 def pnl_series(
@@ -99,16 +133,17 @@ def render_pnl_chart(
         width=0.7,
         label="profit/day",
     )
+    fxs = [float(x) for x in xs]
+    ma_x, ma_y = _smooth(fxs, _moving_average(profits, _MA_WINDOW))
     bar_ax.plot(
-        xs,
-        _moving_average(profits, _MA_WINDOW),
-        color=_MA,
-        linewidth=1.5,
-        label=f"profit MA({_MA_WINDOW}d)",
+        ma_x, ma_y, color=_MA, linewidth=1.5, label=f"profit MA({_MA_WINDOW}d)"
     )
-    ax.plot(xs, [float(v) for v in locked], color=_AMBER, label="locked")
-    funds_ax.plot(xs, [float(v) for v in equity], color=_GREEN, label="funds")
-    price_ax.plot(xs, price, color=_PRICE, linewidth=1.2, label="KAS price")
+    lk_x, lk_y = _smooth(fxs, [float(v) for v in locked])
+    ax.plot(lk_x, lk_y, color=_AMBER, label="locked")
+    fn_x, fn_y = _smooth(fxs, [float(v) for v in equity])
+    funds_ax.plot(fn_x, fn_y, color=_GREEN, label="funds")
+    pr_x, pr_y = _smooth(fxs, price)
+    price_ax.plot(pr_x, pr_y, color=_PRICE, linewidth=1.2, label="KAS price")
     for line_ax in (ax, funds_ax, price_ax):
         line_ax.set_zorder(bar_ax.get_zorder() + 1)
         line_ax.patch.set_visible(False)
