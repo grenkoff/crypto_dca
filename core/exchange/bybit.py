@@ -129,10 +129,10 @@ class BybitClient:
             raise BybitError(0, f"no ticker for {symbol}")
         return Decimal(str(items[0]["lastPrice"]))
 
-    async def get_daily_closes(
+    async def get_daily_ohlc(
         self, symbol: str, start_ms: int
-    ) -> dict[date, Decimal]:
-        """Daily close prices keyed by UTC date, from ``start_ms`` to now."""
+    ) -> dict[date, tuple[Decimal, Decimal, Decimal, Decimal]]:
+        """Daily OHLC tuples keyed by UTC date, from ``start_ms`` to now."""
         resp = await asyncio.to_thread(
             self._http.get_kline,
             category=CATEGORY,
@@ -143,7 +143,12 @@ class BybitClient:
         )
         result = _raise_for_ret(resp)
         return {
-            _ts(row[0]).date(): Decimal(str(row[4]))
+            _ts(row[0]).date(): (
+                Decimal(str(row[1])),
+                Decimal(str(row[2])),
+                Decimal(str(row[3])),
+                Decimal(str(row[4])),
+            )
             for row in result.get("list") or []
         }
 

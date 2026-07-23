@@ -88,7 +88,36 @@ _AMBER = "#f59e0b"
 _BAR = "#7dd3fc"
 _MA = "#2563eb"
 _PRICE = "#db2777"
+_UP = "#26a69a"
+_DOWN = "#ef5350"
 _MA_WINDOW = 10
+
+
+def _draw_candles(
+    axis: Any, ohlc: list[tuple[float, float, float, float] | None]
+) -> None:
+    """Draw daily OHLC candlesticks: teal up, red down, with thin wicks."""
+    from matplotlib.patches import Rectangle
+
+    width = 0.3
+    for i, bar in enumerate(ohlc):
+        if bar is None:
+            continue
+        op, hi, lo, cl = bar
+        color = _UP if cl >= op else _DOWN
+        axis.plot([i, i], [lo, hi], color=color, linewidth=0.8, zorder=3)
+        height = abs(cl - op) or (hi - lo) * 0.02
+        axis.add_patch(
+            Rectangle(
+                (i - width / 2, min(op, cl)),
+                width,
+                height,
+                facecolor=color,
+                edgecolor=color,
+                linewidth=0.5,
+                zorder=3,
+            )
+        )
 
 
 def _moving_average(values: list[Decimal], window: int) -> list[float]:
@@ -107,15 +136,16 @@ def render_pnl_chart(
     days: list[tuple[str, Decimal]],
     base_capital: Decimal,
     locked: list[Decimal],
-    price: list[float],
+    ohlc: list[tuple[float, float, float, float] | None],
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
     Locked USDT (amber) sits on the left axis; funds (green), daily realized
-    profit (bars + MA), and the KAS close price each get their own right
-    axis. ``matplotlib`` is imported lazily to keep start-up fast.
+    profit (bars + MA), and the KAS price (daily candlesticks) each get their
+    own right axis. ``matplotlib`` is imported lazily to keep start-up fast.
     """
     from matplotlib.figure import Figure
+    from matplotlib.patches import Patch
 
     labels, profits, equity = pnl_series(days, base_capital)
     xs = list(range(len(equity)))
@@ -142,8 +172,7 @@ def render_pnl_chart(
     ax.plot(lk_x, lk_y, color=_AMBER, label="locked")
     fn_x, fn_y = _smooth(fxs, [float(v) for v in equity])
     funds_ax.plot(fn_x, fn_y, color=_GREEN, label="funds")
-    pr_x, pr_y = _smooth(fxs, price)
-    price_ax.plot(pr_x, pr_y, color=_PRICE, linewidth=1.2, label="KAS price")
+    _draw_candles(price_ax, ohlc)
     for line_ax in (ax, funds_ax, price_ax):
         line_ax.set_zorder(bar_ax.get_zorder() + 1)
         line_ax.patch.set_visible(False)
@@ -160,10 +189,11 @@ def render_pnl_chart(
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = funds_ax.get_legend_handles_labels()
     h3, l3 = bar_ax.get_legend_handles_labels()
-    h4, l4 = price_ax.get_legend_handles_labels()
-    labels_all = l1 + l2 + l3 + l4
+    kas = Patch(facecolor=_PRICE, edgecolor=_PRICE, label="KAS price")
+    handles = [*h1, *h2, *h3, kas]
+    labels_all = [*l1, *l2, *l3, "KAS price"]
     fig.legend(
-        h1 + h2 + h3 + h4,
+        handles,
         labels_all,
         loc="upper center",
         bbox_to_anchor=(0.5, 0.90),
