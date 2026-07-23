@@ -83,20 +83,15 @@ def _style_right(axis: Any, color: str, outward: float) -> None:
     axis.spines["right"].set_position(("outward", outward))
 
 
-_GREEN = "#16a34a"
-_AMBER = "#f59e0b"
-_BAR = "#7dd3fc"
-_MA = "#2563eb"
-_PRICE = "#db2777"
-_UP = "#26a69a"
-_DOWN = "#ef5350"
+_INK = "black"
+_BAR = "#cccccc"
 _MA_WINDOW = 10
 
 
 def _draw_candles(
     axis: Any, ohlc: list[tuple[float, float, float, float] | None]
 ) -> None:
-    """Draw daily OHLC candlesticks: teal up, red down, with thin wicks."""
+    """Draw daily OHLC candlesticks: hollow up, filled down, black wicks."""
     from matplotlib.patches import Rectangle
 
     width = 0.3
@@ -104,17 +99,17 @@ def _draw_candles(
         if bar is None:
             continue
         op, hi, lo, cl = bar
-        color = _UP if cl >= op else _DOWN
-        axis.plot([i, i], [lo, hi], color=color, linewidth=0.8, zorder=3)
+        face = "white" if cl >= op else _INK
+        axis.plot([i, i], [lo, hi], color=_INK, linewidth=0.7, zorder=3)
         height = abs(cl - op) or (hi - lo) * 0.02
         axis.add_patch(
             Rectangle(
                 (i - width / 2, min(op, cl)),
                 width,
                 height,
-                facecolor=color,
-                edgecolor=color,
-                linewidth=0.5,
+                facecolor=face,
+                edgecolor=_INK,
+                linewidth=0.6,
                 zorder=3,
             )
         )
@@ -166,12 +161,19 @@ def render_pnl_chart(
     fxs = [float(x) for x in xs]
     ma_x, ma_y = _smooth(fxs, _moving_average(profits, _MA_WINDOW))
     bar_ax.plot(
-        ma_x, ma_y, color=_MA, linewidth=1.5, label=f"profit MA({_MA_WINDOW}d)"
+        ma_x,
+        ma_y,
+        color=_INK,
+        linestyle=":",
+        linewidth=1.3,
+        label=f"profit MA({_MA_WINDOW}d)",
     )
     lk_x, lk_y = _smooth(fxs, [float(v) for v in locked])
-    ax.plot(lk_x, lk_y, color=_AMBER, label="locked")
+    ax.plot(lk_x, lk_y, color=_INK, linewidth=1.2, label="locked")
     fn_x, fn_y = _smooth(fxs, [float(v) for v in equity])
-    funds_ax.plot(fn_x, fn_y, color=_GREEN, label="funds")
+    funds_ax.plot(
+        fn_x, fn_y, color=_INK, linestyle="--", linewidth=1.2, label="funds"
+    )
     _draw_candles(price_ax, ohlc)
     for line_ax in (ax, funds_ax, price_ax):
         line_ax.set_zorder(bar_ax.get_zorder() + 1)
@@ -179,17 +181,17 @@ def render_pnl_chart(
 
     fig.suptitle("Funds & profit, USDT", y=0.965, fontsize=11)
     ax.set_xlabel("days")
-    _style_yaxis(ax, "locked, USDT", _AMBER)
-    _style_right(funds_ax, _GREEN, outward=0)
-    _style_right(bar_ax, _MA, outward=34)
-    _style_right(price_ax, _PRICE, outward=68)
+    _style_yaxis(ax, "locked, USDT", _INK)
+    _style_right(funds_ax, _INK, outward=0)
+    _style_right(bar_ax, _INK, outward=34)
+    _style_right(price_ax, _INK, outward=68)
     ax.grid(visible=True, alpha=0.3)
     _apply_xticks(ax, labels)
 
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = funds_ax.get_legend_handles_labels()
     h3, l3 = bar_ax.get_legend_handles_labels()
-    kas = Patch(facecolor=_PRICE, edgecolor=_PRICE, label="KAS price")
+    kas = Patch(facecolor="white", edgecolor=_INK, label="KAS price")
     handles = [*h1, *h2, *h3, kas]
     labels_all = [*l1, *l2, *l3, "KAS price"]
     fig.legend(
