@@ -40,6 +40,14 @@ class RedisSettings(BaseSettings):
     redis_url: str = Field(default="")
 
 
+class DatabaseSettings(BaseSettings):
+    """Database connection settings (``DATABASE_URL``)."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    database_url: str = Field(default="")
+
+
 class TelegramSettings(BaseSettings):
     """Telegram bot settings (``TELEGRAM_*``)."""
 
@@ -66,6 +74,12 @@ def trader_settings() -> TraderSettings:
 def redis_settings() -> RedisSettings:
     """Return the cached Redis settings."""
     return RedisSettings()
+
+
+@lru_cache(maxsize=1)
+def database_settings() -> DatabaseSettings:
+    """Return the cached database settings."""
+    return DatabaseSettings()
 
 
 @lru_cache(maxsize=1)
