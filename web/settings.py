@@ -8,6 +8,7 @@ from pathlib import Path
 import dj_database_url
 
 from core.config.logging import configure_logging
+from core.config.settings import database_settings
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -52,9 +53,11 @@ TEMPLATES = [
     },
 ]
 
+_database_url = database_settings().database_url
+_sqlite_fallback = f"sqlite:///{BASE_DIR / 'db.sqlite3'}"
 DATABASES = {
-    "default": dj_database_url.config(
-        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+    "default": dj_database_url.parse(
+        _database_url or _sqlite_fallback,
         conn_max_age=600,
     ),
 }
