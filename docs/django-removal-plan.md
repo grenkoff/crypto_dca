@@ -112,10 +112,15 @@ no double-book on redelivered `exec_id`).
   connects; fixtures work. Django untouched and still authoritative.
 
 ### Phase 1 — SQLAlchemy models mirroring existing tables
-- Declare SA models for every table (`Position`, `GridLevel`, `ExecutionLog`,
-  `CompensationLink`, `BotStatus`, `StrategyConfig`, `NotificationSettings`,
-  `TelegramUser`, plus `auth_user`/`sessions` as needed) matching current
-  columns/constraints exactly (`__tablename__`, types, nullability, indexes).
+- Declare SA models for every domain table (`Position`, `GridLevel`,
+  `ExecutionLog`, `CompensationLink`, `BotStatus`, `StrategyConfig`,
+  `NotificationSettings`, `TelegramUser`) matching current columns/constraints
+  exactly (`__tablename__`, types, nullability, indexes). **Skip** Django's
+  `auth_user` / `django_session` — auth moves to token/`TelegramUser`-only, so
+  those tables are not mirrored (they are dropped in Phase 4).
+- Approach: hand-write the models; bootstrap a throwaway draft with
+  `sqlacodegen` to avoid transcription errors, then curate by hand — especially
+  `Decimal` precision on prices/qty, constraints, and the `BotStatus` singleton.
 - Parity tests: read the same rows via Django and via SQLAlchemy → assert
   identical values on a copy of prod data.
 - Alembic **autogenerate diff must be empty** vs the live schema (proof the SA
@@ -146,6 +151,9 @@ no double-book on redelivered `exec_id`).
   `add_tg_admin`).
 - Delete `web/` (settings/urls/wsgi), `manage.py`, `core/trading/apps.py`,
   Django migrations, `core/config/bootstrap.py` Django bits.
+- Drop Django auth: remove the `auth_user`, `auth_*`, `django_session`,
+  `django_content_type`, `django_migrations` tables via a final Alembic
+  migration (web auth is token/`TelegramUser`-only, so nothing depends on them).
 - Remove deps: `django`, `django-stubs`, `pytest-django`, `dj-database-url`.
 - Update `pyproject.toml`: drop django mypy plugin, django-stubs config,
   `DJANGO_SETTINGS_MODULE`; fix ruff `DJ`/pydocstyle scope; update import-linter
@@ -160,6 +168,9 @@ no double-book on redelivered `exec_id`).
 - Read API + WebSocket live feed (subscribe existing Redis channel), then
   control endpoints (pause/resume/config) with SQLAlchemy `begin()` + auth +
   audit log. Built per the earlier dashboard plan, now on the clean data layer.
+- **Auth: token / `TelegramUser`-only** (no Django auth). A control action is
+  gated by a token tied to an allow-listed `TelegramUser`; issuance/rotation via
+  the tgbot. No `auth_user`, no Django sessions.
 
 ### Cutover (before Phase 4 teardown goes live)
 - Long `TRADER_DRY_RUN=1` soak on a copy of the prod DB.
@@ -188,10 +199,14 @@ no double-book on redelivered `exec_id`).
 | Recovery/idempotency regressions on WS redelivery | dedicated `exec_id` idempotency tests before cutover |
 | Rollback | Django branch kept; DB never changes, so redeploy = instant rollback |
 
-## 9. Open questions
+## 9. Decisions
 
-- SA models: hand-write (chosen) vs `sqlacodegen` bootstrap then curate?
-- Keep `auth_user`/`sessions` tables, or drop Django auth entirely and move to a
-  token/TelegramUser-only auth for the web UI?
-- Typer vs plain `argparse` for the 3 CLIs (Typer chosen unless objection).
+- **SA models:** hand-written, bootstrapped from a throwaway `sqlacodegen` draft
+  then curated (Decimal precision, constraints, singleton). Alembic
+  empty-autogenerate proves parity with the live schema.
+- **Auth:** no Django auth — token / `TelegramUser`-only for the web UI. Django
+  `auth_user` / `django_session` are not mirrored and are dropped in Phase 4.
+- **CLIs:** Typer for `preflight`, `consolidate_positions`, `add_tg_admin`.
+
+### Still open
 - Web UI frontend: light SPA vs server-rendered + htmx (deferred to Phase 5).
