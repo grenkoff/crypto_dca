@@ -1,3 +1,5 @@
+Base  # unused class (core/db/base.py:8)
+session_factory  # unused function (core/db/session.py:40)
 model_config  # unused variable (core/config/logging.py:23)
 model_config  # unused variable (core/config/settings.py:14)
 model_config  # unused variable (core/config/settings.py:27)
