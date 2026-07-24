@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator, Iterator
 import psycopg
 import pytest
 import pytest_asyncio
-from sqlalchemy import make_url
+from sqlalchemy import Engine, create_engine, make_url
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -49,3 +49,19 @@ async def db_session(sa_test_db: str) -> AsyncIterator[AsyncSession]:
             await session.rollback()
     finally:
         await engine.dispose()
+
+
+@pytest.fixture
+def sa_sync_engine() -> Iterator[Engine]:
+    from django.db import connection
+
+    base = make_url(database_settings().database_url)
+    url = base.set(
+        drivername="postgresql+psycopg",
+        database=connection.settings_dict["NAME"],
+    )
+    engine = create_engine(url.render_as_string(hide_password=False))
+    try:
+        yield engine
+    finally:
+        engine.dispose()
