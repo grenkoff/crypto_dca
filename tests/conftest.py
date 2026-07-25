@@ -11,10 +11,45 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 from core.config.settings import database_settings
+from core.db.session import configure_engine
 
 _TEST_DB = "crypto_dca_test_sa"
+
+
+@pytest.fixture(autouse=True)
+def _dao_on_django_test_db(
+    request: pytest.FixtureRequest,
+) -> Iterator[None]:
+    """Point the DAO's async engine at Django's per-test database.
+
+    The DAO (``core.services.repository``) now runs on SQLAlchemy, while
+    tests still build fixtures via the Django ORM. Both must hit the same
+    Postgres test DB. ``NullPool`` closes each connection on session exit,
+    so nothing lingers across pytest-asyncio's per-test event loops.
+    """
+    marker = request.node.get_closest_marker("django_db")
+    if marker is None:
+        yield
+        return
+    request.getfixturevalue(
+        "transactional_db" if marker.kwargs.get("transaction") else "db"
+    )
+    from django.db import connection
+
+    url = make_url(database_settings().database_url).set(
+        drivername="postgresql+asyncpg",
+        database=connection.settings_dict["NAME"],
+    )
+    configure_engine(
+        url.render_as_string(hide_password=False), poolclass=NullPool
+    )
+    try:
+        yield
+    finally:
+        configure_engine(None)
 
 
 def _admin_and_test_urls() -> tuple[str, str]:

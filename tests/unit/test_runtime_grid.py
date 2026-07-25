@@ -273,63 +273,71 @@ pytestmark_db = pytest.mark.django_db(transaction=True)
 
 
 @pytestmark_db
-def test_grid_params_first_run_adopts_without_change() -> None:
-    bot = BotStatus.load()
-    bot.applied_grid_step = None
-    bot.applied_order_qty = None
-    bot.save()
+async def test_grid_params_first_run_adopts_without_change() -> None:
+    def _reset() -> BotStatus:
+        bot = BotStatus.load()
+        bot.applied_grid_step = None
+        bot.applied_order_qty = None
+        bot.save()
+        return bot
+
+    bot = await sync_to_async(_reset)()
     # first sight: adopt current geometry, report "no change" (no spurious
     # rebuild)
     assert (
-        repository._grid_params_changed(Decimal("0.0001"), Decimal("5"))
+        await repository.grid_params_changed(Decimal("0.0001"), Decimal("5"))
         is False
     )
-    bot.refresh_from_db()
+    await sync_to_async(bot.refresh_from_db)()
     assert bot.applied_grid_step == Decimal("0.0001")
     assert bot.applied_order_qty == Decimal("5")
 
 
 @pytestmark_db
-def test_grid_params_detects_step_and_qty_change() -> None:
-    repository._record_applied_grid_params(Decimal("0.0001"), Decimal("5"))
+async def test_grid_params_detects_step_and_qty_change() -> None:
+    await repository.record_applied_grid_params(
+        Decimal("0.0001"), Decimal("5")
+    )
     assert (
-        repository._grid_params_changed(Decimal("0.0001"), Decimal("5"))
+        await repository.grid_params_changed(Decimal("0.0001"), Decimal("5"))
         is False
     )
     assert (
-        repository._grid_params_changed(Decimal("0.00005"), Decimal("5"))
+        await repository.grid_params_changed(Decimal("0.00005"), Decimal("5"))
         is True
     )  # step changed
     assert (
-        repository._grid_params_changed(Decimal("0.0001"), Decimal("10"))
+        await repository.grid_params_changed(Decimal("0.0001"), Decimal("10"))
         is True
     )  # qty changed
 
 
 @pytestmark_db
-def test_reset_all_grid_levels_idles_awaiting() -> None:
-    GridLevel.objects.create(
+async def test_reset_all_grid_levels_idles_awaiting() -> None:
+    await GridLevel.objects.acreate(
         level_index=291,
         target_buy_price=Decimal("0.0291"),
         status=LevelStatus.AWAITING_FILL,
         current_buy_order_id="ord-1",
     )
-    GridLevel.objects.create(
+    await GridLevel.objects.acreate(
         level_index=292,
         target_buy_price=Decimal("0.0292"),
         status=LevelStatus.FILLED,
         current_buy_order_id="",
     )
-    repository._reset_all_grid_levels()
-    g = GridLevel.objects.get(level_index=291)
+    await repository.reset_all_grid_levels()
+    g = await GridLevel.objects.aget(level_index=291)
     assert g.status == LevelStatus.IDLE
     assert g.current_buy_order_id == ""
     # a FILLED level (holds a position) is untouched
-    assert GridLevel.objects.get(level_index=292).status == LevelStatus.FILLED
+    assert (
+        await GridLevel.objects.aget(level_index=292)
+    ).status == LevelStatus.FILLED
 
 
-def _open_position(level_index: int, entry: str) -> None:
-    Position.objects.create(
+async def _open_position(level_index: int, entry: str) -> None:
+    await Position.objects.acreate(
         level_index=level_index,
         entry_price=Decimal(entry),
         qty=Decimal("175"),
@@ -342,26 +350,26 @@ def _open_position(level_index: int, entry: str) -> None:
 
 
 @pytestmark_db
-def test_grid_state_held_covers_every_open_position() -> None:
+async def test_grid_state_held_covers_every_open_position() -> None:
     step = Decimal("0.00005")
-    _open_position(569, "0.02845")  # grid buy
-    _open_position(
+    await _open_position(569, "0.02845")  # grid buy
+    await _open_position(
         3020, "0.02945"
     )  # re-adopted lot (>=2000) must block its level too
-    _open_position(
+    await _open_position(
         1000, "0.052"
     )  # manual bag (>=1000) must block its level too
-    _resting, held = repository._grid_state(step)
+    _resting, held = await repository.grid_state(step)
     # every held price blocks a fresh buy there — one buy per level, no
     # stacking
     assert held == {Decimal("0.02845"), Decimal("0.02945"), Decimal("0.052")}
 
 
 @pytestmark_db
-def test_grid_state_held_ignores_closed_positions() -> None:
+async def test_grid_state_held_ignores_closed_positions() -> None:
     step = Decimal("0.00005")
-    _open_position(569, "0.02845")
-    Position.objects.create(
+    await _open_position(569, "0.02845")
+    await Position.objects.acreate(
         level_index=570,
         entry_price=Decimal("0.0285"),
         qty=Decimal("175"),
@@ -371,7 +379,7 @@ def test_grid_state_held_ignores_closed_positions() -> None:
         status=PositionStatus.CLOSED,
         opened_at=datetime(2026, 7, 8, tzinfo=UTC),
     )
-    _resting, held = repository._grid_state(step)
+    _resting, held = await repository.grid_state(step)
     # a closed position frees its level for the grid again
     assert held == {Decimal("0.02845")}
 

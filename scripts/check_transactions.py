@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Static ACID/transaction checks for working code (AST, no runtime).
 
-Two checks:
+The DAO writes on SQLAlchemy ``AsyncSession``; the atomic unit is
+``async with session.begin():``. Two checks:
 
-  A. No ``await`` inside a ``transaction.atomic()`` scope. Holding a DB
-     transaction open across network I/O (e.g. a Bybit call) keeps row
-     locks for the round-trip and mixes non-atomic external side effects
-     into the unit of work. Atomic blocks must be synchronous.
+  A. No non-database ``await`` inside a ``session.begin()`` scope. The
+     transaction holds row locks; awaiting a Bybit round-trip (or any
+     non-DB coroutine) inside it keeps locks open across network I/O and
+     mixes a non-atomic external side effect into the unit of work. Only
+     awaits on the session (``execute``/``flush``/``get``/``scalar``/...)
+     and on local DAO helpers are allowed.
 
-  B. A function that performs two or more ORM writes (save/create/update/
-     delete/... ) must wrap them in ``transaction.atomic()`` (or be
-     ``@transaction.atomic``), so a mid-way failure cannot leave a
-     half-applied state. Genuinely independent multi-writes can be
+  B. A function performing two or more SQLAlchemy writes (``session.add``,
+     ``session.delete``, ``session.execute(insert()/update()/delete())``)
+     must wrap them in ``session.begin()``, so a mid-way failure cannot
+     leave a half-applied state. Genuinely independent multi-writes can be
      exempted in ``whitelist_transactions.txt`` (``path.py:function``).
 
 Exit status is non-zero if any non-whitelisted violation is found.
@@ -23,55 +26,87 @@ import ast
 import sys
 from pathlib import Path
 
-MUTATIONS = frozenset(
+SESSION_ASYNC = frozenset(
     {
-        "save",
+        "execute",
+        "flush",
+        "get",
+        "get_one",
+        "scalar",
+        "scalars",
+        "merge",
+        "refresh",
         "delete",
-        "asave",
-        "adelete",
-        "create",
-        "acreate",
-        "update",
-        "aupdate",
-        "update_or_create",
-        "aupdate_or_create",
-        "get_or_create",
-        "aget_or_create",
-        "bulk_create",
-        "bulk_update",
-        "abulk_create",
-        "abulk_update",
+        "connection",
+        "stream",
+        "stream_scalars",
+        "commit",
+        "rollback",
+        "close",
     }
 )
+
+WRITE_CONSTRUCTS = frozenset({"insert", "update", "delete"})
 
 DEFAULT_PATHS = ("core", "tgbot", "web", "trader", "manage.py")
 WHITELIST_FILE = "whitelist_transactions.txt"
 
 
-def _is_atomic_expr(expr: ast.expr) -> bool:
+def _is_begin_expr(expr: ast.expr) -> bool:
     return (
         isinstance(expr, ast.Call)
         and isinstance(expr.func, ast.Attribute)
-        and expr.func.attr == "atomic"
+        and expr.func.attr == "begin"
     )
 
 
-def _is_atomic_with(node: ast.With | ast.AsyncWith) -> bool:
-    return any(_is_atomic_expr(item.context_expr) for item in node.items)
+def _is_begin_with(node: ast.With | ast.AsyncWith) -> bool:
+    return any(_is_begin_expr(item.context_expr) for item in node.items)
 
 
-def _has_atomic_decorator(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    for dec in fn.decorator_list:
-        target = dec.func if isinstance(dec, ast.Call) else dec
-        if isinstance(target, ast.Attribute) and target.attr == "atomic":
-            return True
-        if isinstance(target, ast.Name) and target.id == "atomic":
-            return True
+def _local_func_names(tree: ast.AST) -> set[str]:
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _is_write_call(node: ast.AST) -> bool:
+    """Whether ``node`` is a SQLAlchemy write on a session."""
+    if not (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    ):
+        return False
+    attr = node.func.attr
+    if attr in ("add", "add_all", "delete"):
+        return True
+    if attr == "execute" and node.args:
+        arg = node.args[0]
+        return (
+            isinstance(arg, ast.Call)
+            and isinstance(arg.func, ast.Name)
+            and arg.func.id in WRITE_CONSTRUCTS
+        )
     return False
 
 
-def _awaits_in_scope(body: list[ast.stmt]) -> list[ast.Await]:
-    """Await nodes lexically inside ``body``, not within nested functions."""
+def _is_db_safe_await(await_node: ast.Await, local_funcs: set[str]) -> bool:
+    value = await_node.value
+    if not isinstance(value, ast.Call):
+        return False
+    func = value.func
+    if isinstance(func, ast.Attribute):
+        return func.attr in SESSION_ASYNC
+    if isinstance(func, ast.Name):
+        return func.id in local_funcs
+    return False
+
+
+def _bad_awaits_in_scope(
+    body: list[ast.stmt], local_funcs: set[str]
+) -> list[ast.Await]:
+    """Non-DB awaits inside ``body``, not within nested functions."""
     found: list[ast.Await] = []
 
     def visit(node: ast.AST) -> None:
@@ -81,7 +116,9 @@ def _awaits_in_scope(body: list[ast.stmt]) -> list[ast.Await]:
                 (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
             ):
                 continue
-            if isinstance(child, ast.Await):
+            if isinstance(child, ast.Await) and not _is_db_safe_await(
+                child, local_funcs
+            ):
                 found.append(child)
             visit(child)
 
@@ -90,29 +127,26 @@ def _awaits_in_scope(body: list[ast.stmt]) -> list[ast.Await]:
     return found
 
 
-def _unguarded_mutations(
-    body: list[ast.stmt], start_atomic: bool
-) -> list[ast.Call]:
-    """Mutation calls in ``body`` not under atomic, skipping nested funcs."""
+def _unguarded_writes(body: list[ast.stmt]) -> list[ast.Call]:
+    """SQLAlchemy writes in ``body`` not under begin(), skipping nested."""
     found: list[ast.Call] = []
 
     def visit(node: ast.AST, atomic: bool) -> None:
         if isinstance(node, (ast.With, ast.AsyncWith)):
-            atomic = atomic or _is_atomic_with(node)
+            atomic = atomic or _is_begin_with(node)
         for child in ast.iter_child_nodes(node):
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if (
                 isinstance(child, ast.Call)
-                and isinstance(child.func, ast.Attribute)
-                and child.func.attr in MUTATIONS
+                and _is_write_call(child)
                 and not atomic
             ):
                 found.append(child)
             visit(child, atomic)
 
     for stmt in body:
-        visit(stmt, start_atomic)
+        visit(stmt, False)
     return found
 
 
@@ -126,12 +160,11 @@ def _iter_functions(
     ]
 
 
-def _iter_atomic_withs(tree: ast.AST) -> list[ast.With | ast.AsyncWith]:
+def _iter_begin_withs(tree: ast.AST) -> list[ast.With | ast.AsyncWith]:
     return [
         node
         for node in ast.walk(tree)
-        if isinstance(node, (ast.With, ast.AsyncWith))
-        and _is_atomic_with(node)
+        if isinstance(node, (ast.With, ast.AsyncWith)) and _is_begin_with(node)
     ]
 
 
@@ -163,35 +196,27 @@ def _load_whitelist() -> set[str]:
 def check_file(path: Path, whitelist: set[str]) -> list[str]:
     """Return transaction-check violations for one Python file."""
     tree = ast.parse(path.read_text(), filename=str(path))
+    local_funcs = _local_func_names(tree)
     violations: list[str] = []
 
-    for node in _iter_atomic_withs(tree):
+    for node in _iter_begin_withs(tree):
         violations.extend(
-            f"{path}:{await_node.lineno}: [A] await inside "
-            "transaction.atomic() — atomic blocks must be synchronous"
-            for await_node in _awaits_in_scope(node.body)
-        )
-    for fn in _iter_functions(tree):
-        if not _has_atomic_decorator(fn):
-            continue
-        violations.extend(
-            f"{path}:{await_node.lineno}: [A] await inside "
-            "@transaction.atomic function — must be synchronous"
-            for await_node in _awaits_in_scope(fn.body)
+            f"{path}:{bad.lineno}: [A] non-DB await inside "
+            "session.begin() — no exchange/network I/O in a transaction"
+            for bad in _bad_awaits_in_scope(node.body, local_funcs)
         )
 
     for fn in _iter_functions(tree):
-        start_atomic = _has_atomic_decorator(fn)
-        muts = _unguarded_mutations(fn.body, start_atomic)
-        if len(muts) >= 2:
+        writes = _unguarded_writes(fn.body)
+        if len(writes) >= 2:
             key = f"{path}:{fn.name}"
             if key in whitelist:
                 continue
-            lines = ", ".join(str(m.lineno) for m in muts)
+            lines = ", ".join(str(w.lineno) for w in writes)
             violations.append(
-                f"{path}:{fn.lineno}: [B] {len(muts)} unguarded ORM writes "
-                f"in '{fn.name}' (lines {lines}) — wrap in "
-                "transaction.atomic() or whitelist"
+                f"{path}:{fn.lineno}: [B] {len(writes)} unguarded SQLAlchemy "
+                f"writes in '{fn.name}' (lines {lines}) — wrap in "
+                "session.begin() or whitelist"
             )
     return violations
 
