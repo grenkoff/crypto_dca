@@ -21,21 +21,22 @@ from core.db.models import (
     CompensationLink,
     ExecutionLog,
     GridLevel,
+    LevelStatus,
     NotificationSettings,
     Position,
+    PositionStatus,
     StrategyConfig,
     TelegramUser,
 )
 from core.db.session import new_session
 from core.exchange.types import Execution as BybitExecution
 from core.services.order_common import SellFillResult
-from core.trading.models import LevelStatus, PositionStatus
 
-_OPEN = PositionStatus.OPEN.value
-_CLOSED = PositionStatus.CLOSED.value
-_AWAITING = LevelStatus.AWAITING_FILL.value
-_IDLE = LevelStatus.IDLE.value
-_FILLED = LevelStatus.FILLED.value
+_OPEN = str(PositionStatus.OPEN)
+_CLOSED = str(PositionStatus.CLOSED)
+_AWAITING = str(LevelStatus.AWAITING_FILL)
+_IDLE = str(LevelStatus.IDLE)
+_FILLED = str(LevelStatus.FILLED)
 
 _BOT_DEFAULTS: dict[str, Any] = {
     "paused": False,
@@ -455,6 +456,26 @@ async def symbol() -> str:
     """The configured trading symbol."""
     async with new_session() as session:
         return str((await _get_config(session)).symbol)
+
+
+async def get_config() -> StrategyConfig:
+    """Load the singleton strategy config (detached); raise if absent."""
+    async with new_session() as session:
+        return await _get_config(session)
+
+
+async def last_heartbeat() -> datetime | None:
+    """The bot's last-heartbeat time (None if never stamped)."""
+    async with new_session() as session, session.begin():
+        return (await _load_bot(session)).last_heartbeat
+
+
+async def mark_started() -> None:
+    """Stamp the start time and clear the last error (atomic)."""
+    async with new_session() as session, session.begin():
+        bot = await _load_bot(session)
+        bot.started_at = _now()
+        bot.last_error = ""
 
 
 async def is_admin(chat_id: int) -> bool:

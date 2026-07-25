@@ -1,8 +1,8 @@
 """OrderManager: orchestrates exchange operations and corresponding DB state.
 
-All exchange-touching methods are async (delegating to BybitClient). Django ORM
-access uses the async API where possible, with multi-statement atomic blocks
-wrapped in `sync_to_async`.
+All exchange-touching methods are async (delegating to BybitClient); all
+persistence goes through the async DAO (``core.services.repository``), which
+keeps multi-statement writes inside a single transaction.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from typing import cast
 
 import structlog
 
+from core.db.models import StrategyConfig
 from core.exchange.bybit import BybitClient
 from core.exchange.types import Execution as BybitExecution
 from core.exchange.types import Instrument, Side
@@ -24,9 +25,6 @@ from core.strategy.rounding import (
     round_down_to_tick,
 )
 from core.strategy.types import GridMode
-from core.trading.models import (
-    StrategyConfig,
-)
 
 log = structlog.get_logger()
 

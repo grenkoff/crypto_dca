@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import structlog
 
-from core.db.models import Position
+from core.db.models import Position, StrategyConfig
 from core.exchange.bybit import BybitClient
 from core.exchange.types import Instrument, Side
 from core.services import repository
@@ -19,7 +19,6 @@ from core.strategy.types import (
     CompensationDecision,
     OpenPosition,
 )
-from core.trading.models import StrategyConfig
 
 log = structlog.get_logger()
 

@@ -11,22 +11,18 @@ from decimal import Decimal
 from typing import cast
 
 import structlog
-from asgiref.sync import sync_to_async
 
 from core.config.settings import bybit_settings, trader_settings
 from core.exchange.bybit import BybitClient
 from core.exchange.dry_run import DryRunBybitClient
 from core.exchange.types import Side
 from core.exchange.ws import BybitPrivateStream, StreamEvent
+from core.services import repository
 from core.services.events import EventBus, NoOpEventBus
 from core.services.grid_maintainer import GridMaintainer
 from core.services.healer import Healer
 from core.services.order_manager import OrderManager
 from core.services.reconciliation import reconcile_once
-from core.trading.models import (
-    BotStatus,
-    StrategyConfig,
-)
 
 log = structlog.get_logger()
 
@@ -69,7 +65,7 @@ class TraderRuntime:
             self._client = cast(BybitClient, DryRunBybitClient(real_client))
         else:
             self._client = real_client
-        config = await sync_to_async(StrategyConfig.load)()
+        config = await repository.get_config()
         instrument = await self._client.get_instrument(str(config.symbol))
         self._current_price = await self._client.get_last_price(
             str(config.symbol)
@@ -191,7 +187,7 @@ class TraderRuntime:
         """
         if trader_settings().skip_instance_guard:
             return
-        last = await sync_to_async(lambda: BotStatus.load().last_heartbeat)()
+        last = await repository.last_heartbeat()
         if another_instance_alive(
             last, datetime.now(tz=UTC), _INSTANCE_LEASE_S
         ):
@@ -206,10 +202,4 @@ class TraderRuntime:
             )
 
     async def _mark_started(self) -> None:
-        def _persist() -> None:
-            status = BotStatus.load()
-            status.started_at = datetime.now(tz=UTC)
-            status.last_error = ""
-            status.save()
-
-        await sync_to_async(_persist)()
+        await repository.mark_started()
