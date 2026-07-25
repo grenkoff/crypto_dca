@@ -4,53 +4,49 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from asgiref.sync import sync_to_async
 
-from core.services import repository
-from core.trading.models import (
+from core.db.models import (
     BotStatus,
     Position,
     PositionStatus,
     StrategyConfig,
 )
+from core.services import repository
+from tests.conftest import add_rows
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.db
 
 
 async def _closed(entry: str, pnl: str, closed_at: datetime) -> None:
-    await Position.objects.acreate(
-        level_index=1,
-        entry_price=Decimal(entry),
-        qty=Decimal("100"),
-        fees_in=Decimal("0"),
-        tp_order_id="",
-        status=PositionStatus.CLOSED,
-        realized_pnl=Decimal(pnl),
-        opened_at=closed_at - timedelta(days=1),
-        closed_at=closed_at,
+    await add_rows(
+        Position(
+            level_index=1,
+            entry_price=Decimal(entry),
+            qty=Decimal("100"),
+            status=PositionStatus.CLOSED,
+            realized_pnl=Decimal(pnl),
+            opened_at=closed_at - timedelta(days=1),
+            closed_at=closed_at,
+        )
     )
 
 
 async def _open(level: int, entry: str, qty: str, tp: str | None) -> None:
-    await Position.objects.acreate(
-        level_index=level,
-        entry_price=Decimal(entry),
-        qty=Decimal(qty),
-        fees_in=Decimal("0"),
-        tp_order_id=f"tp-{level}",
-        tp_price=Decimal(tp) if tp is not None else None,
-        status=PositionStatus.OPEN,
-        opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+    await add_rows(
+        Position(
+            level_index=level,
+            entry_price=Decimal(entry),
+            qty=Decimal(qty),
+            tp_order_id=f"tp-{level}",
+            tp_price=Decimal(tp) if tp is not None else None,
+            status=PositionStatus.OPEN,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+        )
     )
 
 
 async def test_status_data_reports_pause_and_open_count() -> None:
-    def _pause() -> None:
-        bot = BotStatus.load()
-        bot.paused = True
-        bot.save()
-
-    await sync_to_async(_pause)()
+    await add_rows(BotStatus(id=1, paused=True))
     await _open(1, "0.02", "100", "0.03")
     await _open(2, "0.025", "100", "0.035")
     paused, open_count, _started, _hb = await repository.status_data()
@@ -108,17 +104,12 @@ async def test_digest_metrics_counts_and_deployed() -> None:
 
 
 async def test_unlock_from_db_no_profit_returns_none() -> None:
-    await sync_to_async(StrategyConfig.load)()
+    await add_rows(StrategyConfig(id=1))
     days, per_day = await repository.unlock_from_db(Decimal("0.02"))
     assert days is None
     assert per_day == Decimal(0)
 
 
 async def test_symbol_reads_config() -> None:
-    def _set() -> None:
-        cfg = StrategyConfig.load()
-        cfg.symbol = "KASUSDT"
-        cfg.save()
-
-    await sync_to_async(_set)()
+    await add_rows(StrategyConfig(id=1, symbol="KASUSDT"))
     assert await repository.symbol() == "KASUSDT"
