@@ -7,21 +7,28 @@ sync bodies for native async SQLAlchemy behind this same interface.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import cast
+from typing import Any, cast
 
 from asgiref.sync import sync_to_async
-from django.db.models import Max, Min
+from django.db.models import F, Max, Min, QuerySet, Sum
 
 from core.trading.models import (
     BotStatus,
+    CompensationLink,
     ExecutionLog,
     GridLevel,
     LevelStatus,
     Position,
     PositionStatus,
+    StrategyConfig,
 )
+
+
+def _sum(qs: QuerySet[Position], field: str = "realized_pnl") -> Decimal:
+    """Sum ``field`` over the queryset, treating an empty result as 0."""
+    return qs.aggregate(s=Sum(field))["s"] or Decimal(0)
 
 
 def _existing_active_levels() -> set[int]:
@@ -228,3 +235,164 @@ def _lowest_resting_tp() -> Decimal | None:
 async def lowest_resting_tp() -> Decimal | None:
     """Lowest resting take-profit price (bottom of the wall), or None."""
     return await sync_to_async(_lowest_resting_tp)()
+
+
+def _status_data() -> tuple[bool, int, datetime | None, datetime | None]:
+    bot = BotStatus.load()
+    open_count = Position.objects.filter(status=PositionStatus.OPEN).count()
+    return bot.paused, open_count, bot.started_at, bot.last_heartbeat
+
+
+async def status_data() -> tuple[bool, int, datetime | None, datetime | None]:
+    """(paused, open_position_count, started_at, last_heartbeat)."""
+    return await sync_to_async(_status_data)()
+
+
+def _realized_pnl_since(cutoff: datetime | None) -> Decimal:
+    qs = Position.objects.filter(status=PositionStatus.CLOSED)
+    if cutoff is not None:
+        qs = qs.filter(closed_at__gte=cutoff)
+    return _sum(qs)
+
+
+async def realized_pnl_since(cutoff: datetime | None) -> Decimal:
+    """Realized PnL of closed positions since ``cutoff`` (None = all time)."""
+    return await sync_to_async(_realized_pnl_since)(cutoff)
+
+
+def _locked_by_day(dates: list[date]) -> list[Decimal]:
+    rows = list(
+        Position.objects.values_list(
+            "opened_at", "closed_at", "entry_price", "qty", "fees_in"
+        )
+    )
+    out: list[Decimal] = []
+    for d in dates:
+        eod = datetime(d.year, d.month, d.day, tzinfo=UTC) + timedelta(days=1)
+        out.append(
+            sum(
+                (
+                    entry * qty + fees
+                    for opened, closed, entry, qty, fees in rows
+                    if opened <= eod and (closed is None or closed > eod)
+                ),
+                Decimal(0),
+            )
+        )
+    return out
+
+
+def _pnl_curve_data() -> tuple[
+    list[tuple[str, Decimal]], Decimal, list[Decimal], list[date]
+]:
+    daily: dict[date, Decimal] = {}
+    for closed_at, realized in (
+        Position.objects.filter(status=PositionStatus.CLOSED)
+        .exclude(closed_at__isnull=True)
+        .values_list("closed_at", "realized_pnl")
+    ):
+        if closed_at is None:
+            continue
+        day = closed_at.date()
+        daily[day] = daily.get(day, Decimal(0)) + realized
+    sorted_dates = sorted(daily)
+    days = [(d.strftime("%d.%m"), daily[d]) for d in sorted_dates]
+
+    base_capital = Decimal(0)
+    for p in Position.objects.filter(status=PositionStatus.OPEN):
+        base_capital += p.entry_price * p.qty + p.fees_in
+    locked = _locked_by_day(sorted_dates)
+    return days, base_capital, locked, sorted_dates
+
+
+async def pnl_curve_data() -> tuple[
+    list[tuple[str, Decimal]], Decimal, list[Decimal], list[date]
+]:
+    """Chart inputs: daily realized profit, base, locked USDT, and dates."""
+    return await sync_to_async(_pnl_curve_data)()
+
+
+def _unlock_from_db(
+    price: Decimal | None,
+) -> tuple[Decimal | None, Decimal]:
+    closed = Position.objects.filter(status=PositionStatus.CLOSED).exclude(
+        closed_at__isnull=True
+    )
+    realized = closed.aggregate(s=Sum("realized_pnl"))["s"] or Decimal(0)
+    first = (
+        closed.order_by("closed_at")
+        .values_list("closed_at", flat=True)
+        .first()
+    )
+    if first is None or realized <= 0:
+        return None, Decimal(0)
+    now = datetime.now(tz=UTC)
+    span_days = Decimal(str(max((now - first).total_seconds() / 86400, 1.0)))
+    profit_per_day = realized / span_days
+
+    fee = StrategyConfig.load().maker_fee
+    if price is None or profit_per_day <= 0:
+        return None, profit_per_day
+    total_loss = Decimal(0)
+    for entry, qty, fees_in in Position.objects.filter(
+        status=PositionStatus.OPEN
+    ).values_list("entry_price", "qty", "fees_in"):
+        loss = entry * qty + fees_in - price * qty * (Decimal(1) - fee)
+        if loss > 0:
+            total_loss += loss
+    return total_loss / profit_per_day, profit_per_day
+
+
+async def unlock_from_db(
+    price: Decimal | None,
+) -> tuple[Decimal | None, Decimal]:
+    """Days to unlock the locked loss and avg realized profit per day."""
+    return await sync_to_async(_unlock_from_db)(price)
+
+
+def _orders_data() -> list[tuple[int, Decimal, Decimal, Decimal | None]]:
+    return [
+        (p.level_index, p.entry_price, p.qty, p.tp_price)
+        for p in Position.objects.filter(status=PositionStatus.OPEN).order_by(
+            "level_index"
+        )
+    ]
+
+
+async def orders_data() -> list[tuple[int, Decimal, Decimal, Decimal | None]]:
+    """(level_index, entry_price, qty, tp_price) for open positions."""
+    return await sync_to_async(_orders_data)()
+
+
+def _digest_metrics() -> dict[str, Any]:
+    now = datetime.now(tz=UTC)
+    d24 = now - timedelta(hours=24)
+    week = now - timedelta(days=7)
+    closed = Position.objects.filter(status=PositionStatus.CLOSED)
+    open_qs = Position.objects.filter(status=PositionStatus.OPEN)
+    return {
+        "closed_24h": closed.filter(closed_at__gte=d24).count(),
+        "pnl_24h": _sum(closed.filter(closed_at__gte=d24)),
+        "pnl_week": _sum(closed.filter(closed_at__gte=week)),
+        "pnl_total": _sum(closed),
+        "compensations_24h": CompensationLink.objects.filter(
+            created_at__gte=d24
+        ).count(),
+        "open_positions": open_qs.count(),
+        "deployed": open_qs.aggregate(s=Sum(F("entry_price") * F("qty")))["s"]
+        or Decimal(0),
+    }
+
+
+async def digest_metrics() -> dict[str, Any]:
+    """DB metrics for the daily digest (counts, PnL windows, deployed)."""
+    return await sync_to_async(_digest_metrics)()
+
+
+def _symbol() -> str:
+    return str(StrategyConfig.objects.get(pk=1).symbol)
+
+
+async def symbol() -> str:
+    """The configured trading symbol."""
+    return await sync_to_async(_symbol)()
