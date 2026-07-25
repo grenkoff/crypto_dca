@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
 from core.trading.models import Position
+
+
+@dataclass
+class SellFillResult:
+    """Outcome of applying a sell fill to a position."""
+
+    closed: bool
+    realized: Decimal
+    filled_qty: Decimal
+    remaining: Decimal
 
 
 def link_id(prefix: str, level: int) -> str:
