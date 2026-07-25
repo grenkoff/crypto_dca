@@ -1,21 +1,19 @@
-"""Validate everything that must be right before the trader starts.
+"""Preflight checks: validate everything before the trader starts.
 
-Run on the trader/web shell before the first live deploy. Exits non-zero
-on any hard failure; soft warnings only print.
+Pure check logic (no printing); the CLI renders the results. Exits are
+the caller's job. Runs Django-free on the async DAO.
 """
 
 from __future__ import annotations
 
-import asyncio
 from decimal import Decimal
 from typing import Any, cast
 
 import redis.asyncio as redis_async
-from django.core.management.base import BaseCommand
 
 from core.config.settings import bybit_settings, redis_settings
 from core.exchange.bybit import BybitClient
-from core.trading.models import StrategyConfig
+from core.services import repository
 
 OK = "✓"
 WARN = "⚠"
@@ -46,43 +44,8 @@ class Check:
         self.detail = detail
 
 
-class Command(BaseCommand):
-    """Validate credentials, balances, instrument, Redis, and config."""
-
-    help = (
-        "Validate Bybit credentials, balance, instrument, Redis, and "
-        "StrategyConfig sanity."
-    )
-
-    def handle(self, *args: Any, **options: Any) -> None:
-        """Run all checks and print the results."""
-        checks = asyncio.run(_run_all_checks())
-        for c in checks:
-            line = f"{c.status} {c.name}"
-            if c.detail:
-                line += f": {c.detail}"
-            self.stdout.write(line)
-        hard_failures = [c for c in checks if c.status == FAIL]
-        if hard_failures:
-            self.stdout.write("")
-            self.stdout.write(
-                self.style.ERROR(f"{len(hard_failures)} hard failure(s)")
-            )
-            raise SystemExit(1)
-        warnings = [c for c in checks if c.status == WARN]
-        if warnings:
-            self.stdout.write("")
-            self.stdout.write(
-                self.style.WARNING(
-                    f"{len(warnings)} warning(s) — review before trading"
-                )
-            )
-        else:
-            self.stdout.write("")
-            self.stdout.write(self.style.SUCCESS("All checks passed."))
-
-
-async def _run_all_checks() -> list[Check]:
+async def run_checks() -> list[Check]:
+    """Run every preflight check and return the results in order."""
     return [
         await _check_strategy_config(),
         *(await _check_bybit_and_balance()),
@@ -92,7 +55,7 @@ async def _run_all_checks() -> list[Check]:
 
 async def _check_strategy_config() -> Check:
     c = Check("strategy config")
-    cfg = await asyncio.to_thread(StrategyConfig.load)
+    cfg = await repository.load_config()
     issues: list[str] = []
     if cfg.grid_step <= 0:
         issues.append("grid_step ≤ 0")
@@ -116,7 +79,7 @@ async def _check_strategy_config() -> Check:
 
 async def _check_bybit_and_balance() -> list[Check]:
     creds = bybit_settings()
-    cfg = await asyncio.to_thread(StrategyConfig.load)
+    cfg = await repository.load_config()
 
     creds_check = Check("bybit credentials")
     inst_check = Check("instrument fetch")

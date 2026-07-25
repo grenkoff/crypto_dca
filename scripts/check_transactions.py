@@ -48,7 +48,7 @@ SESSION_ASYNC = frozenset(
 
 WRITE_CONSTRUCTS = frozenset({"insert", "update", "delete"})
 
-DEFAULT_PATHS = ("core", "tgbot", "web", "trader", "manage.py")
+DEFAULT_PATHS = ("core", "tgbot", "web", "trader", "cli", "manage.py")
 WHITELIST_FILE = "whitelist_transactions.txt"
 
 

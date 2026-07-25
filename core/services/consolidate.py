@@ -13,12 +13,12 @@ from decimal import ROUND_HALF_UP, Decimal
 
 import structlog
 
+from core.db.models import StrategyConfig
 from core.exchange.bybit import BybitClient
 from core.exchange.types import Side
 from core.services import repository
 from core.strategy.pricing import compute_tp_price
 from core.strategy.rounding import next_tick_above, round_down_to_tick
-from core.trading.models import StrategyConfig
 
 log = structlog.get_logger()
 

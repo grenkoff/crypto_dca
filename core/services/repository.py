@@ -48,6 +48,19 @@ _BOT_DEFAULTS: dict[str, Any] = {
     "pending_credit": Decimal(0),
 }
 
+_CONFIG_DEFAULTS: dict[str, Any] = {
+    "symbol": "BTCUSDT",
+    "grid_mode": "percent",
+    "grid_step": Decimal("0.005"),
+    "tp_step": Decimal("0.00005"),
+    "order_qty_quote": Decimal("10"),
+    "top_anchor": None,
+    "min_profit_quote": Decimal("0.01"),
+    "maker_fee": Decimal("0.001"),
+    "taker_fee": Decimal("0.00075"),
+    "max_open_orders": 20,
+}
+
 _NOTIF_DEFAULTS: dict[str, Any] = {
     "notify_errors": True,
     "notify_closed": True,
@@ -462,6 +475,21 @@ async def get_config() -> StrategyConfig:
     """Load the singleton strategy config (detached); raise if absent."""
     async with new_session() as session:
         return await _get_config(session)
+
+
+async def load_config() -> StrategyConfig:
+    """Get-or-create the singleton strategy config with sane defaults.
+
+    Used by the manual CLIs (preflight/consolidate); the live trader uses
+    the strict :func:`get_config`, which refuses to run unconfigured.
+    """
+    async with new_session() as session, session.begin():
+        cfg = await session.get(StrategyConfig, 1)
+        if cfg is None:
+            cfg = StrategyConfig(id=1, updated_at=_now(), **_CONFIG_DEFAULTS)
+            session.add(cfg)
+            await session.flush()
+        return cfg
 
 
 async def last_heartbeat() -> datetime | None:

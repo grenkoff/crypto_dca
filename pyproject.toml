@@ -112,12 +112,13 @@ paths = [
     "core",
     "tgbot",
     "trader",
+    "cli",
     "web",
     "manage.py",
     "whitelist_vulture.py",
 ]
 exclude = ["*/migrations/*"]
-ignore_decorators = ["@router.*"]
+ignore_decorators = ["@router.*", "@app.*"]
 min_confidence = 60
 
 [tool.pylint.main]
@@ -155,7 +156,7 @@ show_missing = true
 
 [tool.importlinter]
 # Enforces the separation-of-concerns layering documented in CLAUDE.md.
-root_packages = ["core", "tgbot", "trader", "web"]
+root_packages = ["core", "tgbot", "trader", "cli", "web"]
 
 [[tool.importlinter.contracts]]
 name = "core layers: services > exchange > strategy"
@@ -175,7 +176,7 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "core does not import the entrypoints (tgbot / trader / web)"
+name = "core does not import the entrypoints (tgbot / trader / cli / web)"
 type = "forbidden"
 source_modules = ["core"]
-forbidden_modules = ["tgbot", "trader", "web"]
+forbidden_modules = ["tgbot", "trader", "cli", "web"]

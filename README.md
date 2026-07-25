@@ -40,7 +40,7 @@ uv run pytest --ignore=tests/integration  # unit only (what CI runs)
 ## Bootstrap a Telegram admin
 
 ```bash
-uv run python manage.py add_tg_admin <chat_id> --label "Owner"
+uv run python -m cli add-admin <chat_id> --label "Owner"
 ```
 
 Send `/start` to the bot from that chat — only admins listed in `TelegramUser` can use commands.
@@ -60,7 +60,7 @@ with `BYBIT_API_KEY=... BYBIT_API_SECRET=... BYBIT_TESTNET=1 uv run pytest -m in
 Before placing real orders, run the validator (checks Bybit creds, balance, instrument, Redis):
 
 ```bash
-uv run python manage.py preflight
+uv run python -m cli preflight
 ```
 
 Set `TRADER_DRY_RUN=1` to have the trader log intended orders without placing them:
@@ -91,7 +91,7 @@ For each service in the Railway dashboard, set "Config Path" to the matching fil
 
 First-run after deploy:
 1. Open `web` service shell (or `railway run` locally with prod env): `python manage.py createsuperuser`
-2. `python manage.py add_tg_admin <your_chat_id> --label "Owner"`
+2. `python -m cli add-admin <your_chat_id> --label "Owner"`
 3. Log in at `<web-domain>/admin/`, set up `StrategyConfig` via the dashboard config UI
 4. Ensure `BotStatus.paused = False`
 5. Restart `trader` service to pick up config
