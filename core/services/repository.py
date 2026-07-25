@@ -7,7 +7,7 @@ sync bodies for native async SQLAlchemy behind this same interface.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, cast
 
@@ -20,9 +20,11 @@ from core.trading.models import (
     ExecutionLog,
     GridLevel,
     LevelStatus,
+    NotificationSettings,
     Position,
     PositionStatus,
     StrategyConfig,
+    TelegramUser,
 )
 
 
@@ -396,3 +398,99 @@ def _symbol() -> str:
 async def symbol() -> str:
     """The configured trading symbol."""
     return await sync_to_async(_symbol)()
+
+
+def _is_admin(chat_id: int) -> bool:
+    return TelegramUser.objects.filter(chat_id=chat_id, is_admin=True).exists()
+
+
+async def is_admin(chat_id: int) -> bool:
+    """Whether ``chat_id`` is an allow-listed bot admin."""
+    return await sync_to_async(_is_admin)(chat_id)
+
+
+def _admin_chat_ids() -> list[int]:
+    return list(
+        TelegramUser.objects.filter(is_admin=True).values_list(
+            "chat_id", flat=True
+        )
+    )
+
+
+async def admin_chat_ids() -> list[int]:
+    """Chat ids of all admin Telegram users."""
+    return await sync_to_async(_admin_chat_ids)()
+
+
+def _upsert_admin(chat_id: int, label: str) -> bool:
+    _user, created = TelegramUser.objects.update_or_create(
+        chat_id=chat_id,
+        defaults={"is_admin": True, "label": label},
+    )
+    return created
+
+
+async def upsert_admin(chat_id: int, label: str) -> bool:
+    """Grant admin to ``chat_id``; return True if newly created."""
+    return await sync_to_async(_upsert_admin)(chat_id, label)
+
+
+def _load_notification_settings() -> NotificationSettings:
+    return NotificationSettings.load()
+
+
+async def load_notification_settings() -> NotificationSettings:
+    """Load the singleton notification-settings row."""
+    return await sync_to_async(_load_notification_settings)()
+
+
+def _notify_flag(field: str) -> bool:
+    return bool(getattr(NotificationSettings.load(), field))
+
+
+async def notify_flag(field: str) -> bool:
+    """Current value of a boolean notification toggle."""
+    return await sync_to_async(_notify_flag)(field)
+
+
+def _toggle_notify_flag(field: str) -> bool:
+    obj = NotificationSettings.load()
+    new_value = not bool(getattr(obj, field))
+    setattr(obj, field, new_value)
+    obj.save(update_fields=[field, "updated_at"])
+    return new_value
+
+
+async def toggle_notify_flag(field: str) -> bool:
+    """Flip a boolean notification toggle and return its new value."""
+    return await sync_to_async(_toggle_notify_flag)(field)
+
+
+def _set_digest_time(t: time) -> time:
+    obj = NotificationSettings.load()
+    obj.digest_time_utc = t
+    obj.save(update_fields=["digest_time_utc", "updated_at"])
+    return obj.digest_time_utc
+
+
+async def set_digest_time(t: time) -> time:
+    """Store the daily-digest time (UTC); return the stored value."""
+    return await sync_to_async(_set_digest_time)(t)
+
+
+def _claim_digest_due() -> bool:
+    s = NotificationSettings.load()
+    if not s.digest_enabled:
+        return False
+    now = datetime.now(tz=UTC)
+    scheduled = datetime.combine(now.date(), s.digest_time_utc, tzinfo=UTC)
+    if now < scheduled or s.digest_last_sent == now.date():
+        return False
+    s.digest_last_sent = now.date()
+    s.save(update_fields=["digest_last_sent", "updated_at"])
+    return True
+
+
+async def claim_digest_due() -> bool:
+    """Return True and stamp ``digest_last_sent`` iff the digest is due."""
+    return await sync_to_async(_claim_digest_due)()

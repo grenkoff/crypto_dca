@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import UTC, datetime
 
 import structlog
 from aiogram import Bot
-from asgiref.sync import sync_to_async
 
-from core.trading.models import NotificationSettings, TelegramUser
+from core.services import repository
 from tgbot.formatters import build_digest
 from tgbot.queries import digest_snapshot
 
@@ -24,34 +22,10 @@ log = structlog.get_logger()
 _POLL_SECONDS = 30
 
 
-@sync_to_async
-def _admin_chat_ids() -> list[int]:
-    return list(
-        TelegramUser.objects.filter(is_admin=True).values_list(
-            "chat_id", flat=True
-        )
-    )
-
-
-@sync_to_async
-def _claim_due() -> bool:
-    """Return True and stamp ``digest_last_sent`` iff the digest is due now."""
-    s = NotificationSettings.load()
-    if not s.digest_enabled:
-        return False
-    now = datetime.now(tz=UTC)
-    scheduled = datetime.combine(now.date(), s.digest_time_utc, tzinfo=UTC)
-    if now < scheduled or s.digest_last_sent == now.date():
-        return False
-    s.digest_last_sent = now.date()
-    s.save(update_fields=["digest_last_sent", "updated_at"])
-    return True
-
-
 async def _send_digest(bot: Bot) -> None:
     snap = await digest_snapshot()
     text = build_digest(snap)
-    for chat_id in await _admin_chat_ids():
+    for chat_id in await repository.admin_chat_ids():
         try:
             await bot.send_message(chat_id, text, parse_mode="Markdown")
         except Exception as exc:
@@ -65,7 +39,7 @@ async def run_digest_scheduler(bot: Bot, stop: asyncio.Event) -> None:
     log.info("tgbot.digest_scheduler_started")
     while not stop.is_set():
         try:
-            if await _claim_due():
+            if await repository.claim_digest_due():
                 await _send_digest(bot)
         except Exception as exc:
             log.exception("tgbot.digest_failed", error=str(exc))

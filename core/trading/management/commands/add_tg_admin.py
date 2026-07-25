@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from asgiref.sync import async_to_sync
 from django.core.management.base import BaseCommand, CommandParser
 
-from core.trading.models import TelegramUser
+from core.services import repository
 
 
 class Command(BaseCommand):
@@ -28,9 +29,7 @@ class Command(BaseCommand):
         """Create or update the admin user."""
         chat_id: int = options["chat_id"]
         label: str = options["label"]
-        user, created = TelegramUser.objects.update_or_create(
-            chat_id=chat_id,
-            defaults={"is_admin": True, "label": label},
-        )
+        created = async_to_sync(repository.upsert_admin)(chat_id, label)
         verb = "Created" if created else "Updated"
-        self.stdout.write(self.style.SUCCESS(f"{verb} admin: {user}"))
+        who = f"{label or chat_id} (admin)"
+        self.stdout.write(self.style.SUCCESS(f"{verb} admin: {who}"))
