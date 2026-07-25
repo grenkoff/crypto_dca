@@ -5,24 +5,16 @@ from decimal import Decimal
 
 import pytest
 
+from core.db.models import NotificationSettings
 from core.services import repository
-from core.trading.models import NotificationSettings
+from tests.conftest import add_rows
 from tgbot.formatters import DigestSnapshot, build_digest
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.db
 
 
 async def _set(**kwargs: object) -> None:
-    from asgiref.sync import sync_to_async
-
-    @sync_to_async
-    def _save() -> None:
-        s = NotificationSettings.load()
-        for k, v in kwargs.items():
-            setattr(s, k, v)
-        s.save()
-
-    await _save()
+    await add_rows(NotificationSettings(id=1, **kwargs))
 
 
 async def test_claim_due_fires_once_per_day() -> None:

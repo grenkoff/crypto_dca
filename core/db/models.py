@@ -8,7 +8,7 @@ Django until the Phase 3 cutover; these only read/write the same tables.
 from __future__ import annotations
 
 import enum
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -36,6 +36,11 @@ from core.db.base import Base
 _AMOUNT = Numeric(28, 12)
 _FEE = Numeric(10, 8)
 _TS = DateTime(timezone=True)
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware now (default for auto-timestamp columns)."""
+    return datetime.now(tz=UTC)
 
 
 class GridMode(enum.StrEnum):
@@ -81,17 +86,29 @@ class StrategyConfig(Base):
     id: Mapped[int] = mapped_column(
         SmallInteger, primary_key=True, autoincrement=False
     )
-    symbol: Mapped[str] = mapped_column(String(32))
-    grid_mode: Mapped[str] = mapped_column(String(16))
-    grid_step: Mapped[Decimal] = mapped_column(_AMOUNT)
-    order_qty_quote: Mapped[Decimal] = mapped_column(_AMOUNT)
+    symbol: Mapped[str] = mapped_column(String(32), default="BTCUSDT")
+    grid_mode: Mapped[str] = mapped_column(
+        String(16), default=GridMode.PERCENT
+    )
+    grid_step: Mapped[Decimal] = mapped_column(
+        _AMOUNT, default=Decimal("0.005")
+    )
+    order_qty_quote: Mapped[Decimal] = mapped_column(
+        _AMOUNT, default=Decimal("10")
+    )
     top_anchor: Mapped[Decimal | None] = mapped_column(_AMOUNT)
-    min_profit_quote: Mapped[Decimal] = mapped_column(_AMOUNT)
-    maker_fee: Mapped[Decimal] = mapped_column(_FEE)
-    max_open_orders: Mapped[int] = mapped_column(Integer)
-    updated_at: Mapped[datetime] = mapped_column(_TS)
-    tp_step: Mapped[Decimal] = mapped_column(_AMOUNT)
-    taker_fee: Mapped[Decimal] = mapped_column(_FEE)
+    min_profit_quote: Mapped[Decimal] = mapped_column(
+        _AMOUNT, default=Decimal("0.01")
+    )
+    maker_fee: Mapped[Decimal] = mapped_column(_FEE, default=Decimal("0.001"))
+    max_open_orders: Mapped[int] = mapped_column(Integer, default=20)
+    updated_at: Mapped[datetime] = mapped_column(_TS, default=_utcnow)
+    tp_step: Mapped[Decimal] = mapped_column(
+        _AMOUNT, default=Decimal("0.00005")
+    )
+    taker_fee: Mapped[Decimal] = mapped_column(
+        _FEE, default=Decimal("0.00075")
+    )
 
 
 class BotStatus(Base):
@@ -102,13 +119,15 @@ class BotStatus(Base):
     id: Mapped[int] = mapped_column(
         SmallInteger, primary_key=True, autoincrement=False
     )
-    paused: Mapped[bool] = mapped_column(Boolean)
+    paused: Mapped[bool] = mapped_column(Boolean, default=False)
     last_heartbeat: Mapped[datetime | None] = mapped_column(_TS)
-    last_error: Mapped[str] = mapped_column(Text)
+    last_error: Mapped[str] = mapped_column(Text, default="")
     started_at: Mapped[datetime | None] = mapped_column(_TS)
     applied_grid_step: Mapped[Decimal | None] = mapped_column(_AMOUNT)
     applied_order_qty: Mapped[Decimal | None] = mapped_column(_AMOUNT)
-    pending_credit: Mapped[Decimal] = mapped_column(_AMOUNT)
+    pending_credit: Mapped[Decimal] = mapped_column(
+        _AMOUNT, default=Decimal(0)
+    )
 
 
 class NotificationSettings(Base):
@@ -119,16 +138,16 @@ class NotificationSettings(Base):
     id: Mapped[int] = mapped_column(
         SmallInteger, primary_key=True, autoincrement=False
     )
-    notify_errors: Mapped[bool] = mapped_column(Boolean)
-    notify_closed: Mapped[bool] = mapped_column(Boolean)
-    notify_compensation: Mapped[bool] = mapped_column(Boolean)
-    notify_opened: Mapped[bool] = mapped_column(Boolean)
-    notify_order_placed: Mapped[bool] = mapped_column(Boolean)
-    digest_enabled: Mapped[bool] = mapped_column(Boolean)
-    digest_time_utc: Mapped[time] = mapped_column(Time)
+    notify_errors: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_closed: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_compensation: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_opened: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_order_placed: Mapped[bool] = mapped_column(Boolean, default=True)
+    digest_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    digest_time_utc: Mapped[time] = mapped_column(Time, default=time(19, 0))
     digest_last_sent: Mapped[date | None] = mapped_column(Date)
-    updated_at: Mapped[datetime] = mapped_column(_TS)
-    notify_order_cancelled: Mapped[bool] = mapped_column(Boolean)
+    updated_at: Mapped[datetime] = mapped_column(_TS, default=_utcnow)
+    notify_order_cancelled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class GridLevel(Base):
@@ -144,9 +163,9 @@ class GridLevel(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     level_index: Mapped[int] = mapped_column(Integer)
     target_buy_price: Mapped[Decimal] = mapped_column(_AMOUNT)
-    current_buy_order_id: Mapped[str] = mapped_column(String(64))
-    status: Mapped[str] = mapped_column(String(16))
-    updated_at: Mapped[datetime] = mapped_column(_TS)
+    current_buy_order_id: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(16), default=LevelStatus.IDLE)
+    updated_at: Mapped[datetime] = mapped_column(_TS, default=_utcnow)
 
 
 class Position(Base):
@@ -162,17 +181,21 @@ class Position(Base):
     level_index: Mapped[int] = mapped_column(Integer)
     entry_price: Mapped[Decimal] = mapped_column(_AMOUNT)
     qty: Mapped[Decimal] = mapped_column(_AMOUNT)
-    fees_in: Mapped[Decimal] = mapped_column(_AMOUNT)
-    fees_out: Mapped[Decimal] = mapped_column(_AMOUNT)
-    tp_order_id: Mapped[str] = mapped_column(String(64))
+    fees_in: Mapped[Decimal] = mapped_column(_AMOUNT, default=Decimal(0))
+    fees_out: Mapped[Decimal] = mapped_column(_AMOUNT, default=Decimal(0))
+    tp_order_id: Mapped[str] = mapped_column(String(64), default="")
     tp_price: Mapped[Decimal | None] = mapped_column(_AMOUNT)
-    status: Mapped[str] = mapped_column(String(16))
-    realized_pnl: Mapped[Decimal] = mapped_column(_AMOUNT)
+    status: Mapped[str] = mapped_column(
+        String(16), default=PositionStatus.OPEN
+    )
+    realized_pnl: Mapped[Decimal] = mapped_column(_AMOUNT, default=Decimal(0))
     opened_at: Mapped[datetime] = mapped_column(_TS)
     closed_at: Mapped[datetime | None] = mapped_column(_TS)
-    compensation_credit: Mapped[Decimal] = mapped_column(_AMOUNT)
-    filled_qty: Mapped[Decimal] = mapped_column(_AMOUNT)
-    sell_value: Mapped[Decimal] = mapped_column(_AMOUNT)
+    compensation_credit: Mapped[Decimal] = mapped_column(
+        _AMOUNT, default=Decimal(0)
+    )
+    filled_qty: Mapped[Decimal] = mapped_column(_AMOUNT, default=Decimal(0))
+    sell_value: Mapped[Decimal] = mapped_column(_AMOUNT, default=Decimal(0))
 
     @property
     def remaining_qty(self) -> Decimal:
@@ -208,9 +231,9 @@ class ExecutionLog(Base):
     price: Mapped[Decimal] = mapped_column(_AMOUNT)
     qty: Mapped[Decimal] = mapped_column(_AMOUNT)
     fee: Mapped[Decimal] = mapped_column(_AMOUNT)
-    fee_coin: Mapped[str] = mapped_column(String(16))
+    fee_coin: Mapped[str] = mapped_column(String(16), default="")
     executed_at: Mapped[datetime] = mapped_column(_TS)
-    received_at: Mapped[datetime] = mapped_column(_TS)
+    received_at: Mapped[datetime] = mapped_column(_TS, default=_utcnow)
 
 
 class CompensationLink(Base):
@@ -231,7 +254,7 @@ class CompensationLink(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     profit_applied: Mapped[Decimal] = mapped_column(_AMOUNT)
     new_tp_price: Mapped[Decimal] = mapped_column(_AMOUNT)
-    created_at: Mapped[datetime] = mapped_column(_TS)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_utcnow)
     compensated_position_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey(
@@ -262,6 +285,6 @@ class TelegramUser(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     chat_id: Mapped[int] = mapped_column(BigInteger)
-    label: Mapped[str] = mapped_column(String(64))
-    is_admin: Mapped[bool] = mapped_column(Boolean)
-    created_at: Mapped[datetime] = mapped_column(_TS)
+    label: Mapped[str] = mapped_column(String(64), default="")
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_utcnow)

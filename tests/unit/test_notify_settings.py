@@ -19,7 +19,7 @@ def test_every_event_toggle_field_is_a_real_toggle() -> None:
         assert field in fields
 
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.db
 
 
 async def test_toggle_field_flips_and_persists() -> None:

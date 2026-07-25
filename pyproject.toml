@@ -24,7 +24,6 @@ dependencies = [
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
-    "pytest-django>=4.12.0",
     "pytest-cov>=7.1.0",
     "respx>=0.23.1",
     "ruff>=0.15.22",
@@ -135,12 +134,12 @@ ignore_missing_imports = true
 django_settings_module = "web.settings"
 
 [tool.pytest.ini_options]
-DJANGO_SETTINGS_MODULE = "web.settings"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
     "integration: tests that hit real Bybit testnet (skipped by default)",
+    "db: tests that need the Postgres test database",
 ]
 
 [tool.coverage.run]

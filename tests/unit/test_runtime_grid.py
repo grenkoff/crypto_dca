@@ -4,8 +4,16 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from asgiref.sync import sync_to_async
+from sqlalchemy import select
 
+from core.db.models import (
+    BotStatus,
+    GridLevel,
+    LevelStatus,
+    Position,
+    PositionStatus,
+)
+from core.db.session import new_session
 from core.exchange.types import Execution, Side
 from core.services import repository
 from core.services.healer import naked_positions, plan_level_heal
@@ -15,13 +23,7 @@ from core.strategy.grid import (
     fundable_targets,
     resting_buy_levels,
 )
-from core.trading.models import (
-    BotStatus,
-    GridLevel,
-    LevelStatus,
-    Position,
-    PositionStatus,
-)
+from tests.conftest import add_rows
 
 
 def _exec(order_id: str) -> Execution:
@@ -269,26 +271,20 @@ def test_resting_levels_empty_on_invalid_input() -> None:
     )
 
 
-pytestmark_db = pytest.mark.django_db(transaction=True)
+pytestmark_db = pytest.mark.db
 
 
 @pytestmark_db
 async def test_grid_params_first_run_adopts_without_change() -> None:
-    def _reset() -> BotStatus:
-        bot = BotStatus.load()
-        bot.applied_grid_step = None
-        bot.applied_order_qty = None
-        bot.save()
-        return bot
-
-    bot = await sync_to_async(_reset)()
-    # first sight: adopt current geometry, report "no change" (no spurious
-    # rebuild)
+    # fresh DB: applied params unset -> first sight adopts current geometry
+    # and reports "no change" (no spurious rebuild)
     assert (
         await repository.grid_params_changed(Decimal("0.0001"), Decimal("5"))
         is False
     )
-    await sync_to_async(bot.refresh_from_db)()
+    async with new_session() as session:
+        bot = await session.get(BotStatus, 1)
+    assert bot is not None
     assert bot.applied_grid_step == Decimal("0.0001")
     assert bot.applied_order_qty == Decimal("5")
 
@@ -314,38 +310,41 @@ async def test_grid_params_detects_step_and_qty_change() -> None:
 
 @pytestmark_db
 async def test_reset_all_grid_levels_idles_awaiting() -> None:
-    await GridLevel.objects.acreate(
-        level_index=291,
-        target_buy_price=Decimal("0.0291"),
-        status=LevelStatus.AWAITING_FILL,
-        current_buy_order_id="ord-1",
-    )
-    await GridLevel.objects.acreate(
-        level_index=292,
-        target_buy_price=Decimal("0.0292"),
-        status=LevelStatus.FILLED,
-        current_buy_order_id="",
+    await add_rows(
+        GridLevel(
+            level_index=291,
+            target_buy_price=Decimal("0.0291"),
+            status=LevelStatus.AWAITING_FILL,
+            current_buy_order_id="ord-1",
+        ),
+        GridLevel(
+            level_index=292,
+            target_buy_price=Decimal("0.0292"),
+            status=LevelStatus.FILLED,
+            current_buy_order_id="",
+        ),
     )
     await repository.reset_all_grid_levels()
-    g = await GridLevel.objects.aget(level_index=291)
-    assert g.status == LevelStatus.IDLE
-    assert g.current_buy_order_id == ""
+    async with new_session() as session:
+        levels = (await session.scalars(select(GridLevel))).all()
+    by_index = {level.level_index: level for level in levels}
+    assert by_index[291].status == LevelStatus.IDLE
+    assert by_index[291].current_buy_order_id == ""
     # a FILLED level (holds a position) is untouched
-    assert (
-        await GridLevel.objects.aget(level_index=292)
-    ).status == LevelStatus.FILLED
+    assert by_index[292].status == LevelStatus.FILLED
 
 
 async def _open_position(level_index: int, entry: str) -> None:
-    await Position.objects.acreate(
-        level_index=level_index,
-        entry_price=Decimal(entry),
-        qty=Decimal("175"),
-        fees_in=Decimal("0"),
-        tp_order_id=f"tp-{level_index}",
-        tp_price=Decimal(entry) + Decimal("0.0001"),
-        status=PositionStatus.OPEN,
-        opened_at=datetime(2026, 7, 8, tzinfo=UTC),
+    await add_rows(
+        Position(
+            level_index=level_index,
+            entry_price=Decimal(entry),
+            qty=Decimal("175"),
+            tp_order_id=f"tp-{level_index}",
+            tp_price=Decimal(entry) + Decimal("0.0001"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime(2026, 7, 8, tzinfo=UTC),
+        )
     )
 
 
@@ -369,15 +368,16 @@ async def test_grid_state_held_covers_every_open_position() -> None:
 async def test_grid_state_held_ignores_closed_positions() -> None:
     step = Decimal("0.00005")
     await _open_position(569, "0.02845")
-    await Position.objects.acreate(
-        level_index=570,
-        entry_price=Decimal("0.0285"),
-        qty=Decimal("175"),
-        fees_in=Decimal("0"),
-        tp_order_id="tp-closed",
-        tp_price=Decimal("0.0286"),
-        status=PositionStatus.CLOSED,
-        opened_at=datetime(2026, 7, 8, tzinfo=UTC),
+    await add_rows(
+        Position(
+            level_index=570,
+            entry_price=Decimal("0.0285"),
+            qty=Decimal("175"),
+            tp_order_id="tp-closed",
+            tp_price=Decimal("0.0286"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 8, tzinfo=UTC),
+        )
     )
     _resting, held = await repository.grid_state(step)
     # a closed position frees its level for the grid again
@@ -394,11 +394,13 @@ async def test_heal_stale_buy_replay_failure_idles_level_no_loop() -> None:
     from core.services.healer import Healer
     from core.services.order_manager import OrderManager
 
-    await GridLevel.objects.acreate(
-        level_index=590,
-        target_buy_price=Decimal("0.0295"),
-        status=LevelStatus.AWAITING_FILL,
-        current_buy_order_id="OID",
+    await add_rows(
+        GridLevel(
+            level_index=590,
+            target_buy_price=Decimal("0.0295"),
+            status=LevelStatus.AWAITING_FILL,
+            current_buy_order_id="OID",
+        )
     )
     cfg = StrategyConfig(
         symbol="KASUSDT",
@@ -455,14 +457,13 @@ async def test_heal_stale_buy_replay_failure_idles_level_no_loop() -> None:
 
     await healer.heal_stale_buy_levels(Decimal("0.0295"))  # must not raise
 
-    level = await sync_to_async(GridLevel.objects.get)(level_index=590)
+    async with new_session() as session:
+        level = await session.scalar(
+            select(GridLevel).where(GridLevel.level_index == 590)
+        )
+    assert level is not None
     assert level.status == LevelStatus.IDLE
     assert level.current_buy_order_id == ""
-
-
-test_heal_stale_buy_replay_failure_idles_level_no_loop = pytest.mark.django_db(
-    transaction=True
-)(test_heal_stale_buy_replay_failure_idles_level_no_loop)
 
 
 @pytestmark_db
@@ -477,11 +478,13 @@ async def test_heal_stale_buy_replay_submin_fill_idles_level_no_loop() -> None:
     from core.services.healer import Healer
     from core.services.order_manager import OrderManager
 
-    await GridLevel.objects.acreate(
-        level_index=573,
-        target_buy_price=Decimal("0.02865"),
-        status=LevelStatus.AWAITING_FILL,
-        current_buy_order_id="OID",
+    await add_rows(
+        GridLevel(
+            level_index=573,
+            target_buy_price=Decimal("0.02865"),
+            status=LevelStatus.AWAITING_FILL,
+            current_buy_order_id="OID",
+        )
     )
     cfg = StrategyConfig(
         symbol="KASUSDT",
@@ -535,13 +538,10 @@ async def test_heal_stale_buy_replay_submin_fill_idles_level_no_loop() -> None:
 
     await healer.heal_stale_buy_levels(Decimal("0.0286"))  # must not raise
 
-    level = await sync_to_async(GridLevel.objects.get)(level_index=573)
+    async with new_session() as session:
+        level = await session.scalar(
+            select(GridLevel).where(GridLevel.level_index == 573)
+        )
+    assert level is not None
     assert level.status == LevelStatus.IDLE
     assert level.current_buy_order_id == ""
-
-
-test_heal_stale_buy_replay_submin_fill_idles_level_no_loop = (
-    pytest.mark.django_db(transaction=True)(
-        test_heal_stale_buy_replay_submin_fill_idles_level_no_loop
-    )
-)

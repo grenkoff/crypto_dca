@@ -1,4 +1,4 @@
-"""Tests for OrderManager. Uses a fake BybitClient and the real ORM."""
+"""Tests for OrderManager. Uses a fake BybitClient and the real DAO."""
 
 from __future__ import annotations
 
@@ -7,24 +7,58 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from asgiref.sync import sync_to_async
+from sqlalchemy import func, select
 
-from core.db.models import StrategyConfig
-from core.exchange.types import Execution, Instrument, Side
-from core.services import repository
-from core.services.events import RecordingEventBus
-from core.services.order_manager import OrderManager
-from core.services.protector import Protector
-from core.trading.models import (
+from core.db.models import (
     CompensationLink,
     ExecutionLog,
     GridLevel,
     LevelStatus,
     Position,
     PositionStatus,
+    StrategyConfig,
 )
+from core.db.session import new_session
+from core.exchange.types import Execution, Instrument, Side
+from core.services import repository
+from core.services.events import RecordingEventBus
+from core.services.order_manager import OrderManager
+from core.services.protector import Protector
+from tests.conftest import add_one
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.db
+
+
+async def _get_level(level_index: int) -> GridLevel:
+    async with new_session() as session:
+        level = await session.scalar(
+            select(GridLevel).where(GridLevel.level_index == level_index)
+        )
+    assert level is not None
+    return level
+
+
+async def _position_at(level_index: int) -> Position:
+    async with new_session() as session:
+        pos = await session.scalar(
+            select(Position).where(Position.level_index == level_index)
+        )
+    assert pos is not None
+    return pos
+
+
+async def _exec_exists(exec_id: str) -> bool:
+    async with new_session() as session:
+        found = await session.scalar(
+            select(ExecutionLog.id).where(ExecutionLog.exec_id == exec_id)
+        )
+    return found is not None
+
+
+async def _count(model: type[Any]) -> int:
+    async with new_session() as session:
+        n = await session.scalar(select(func.count()).select_from(model))
+    return int(n or 0)
 
 
 class FakeBybitClient:
@@ -143,7 +177,7 @@ async def test_place_buy_at_level_persists_and_calls_client(
     assert placed["side"] == Side.BUY
     # qty = 20 / 60000 floored to lot_size (0.000001) → 0.000333
     assert placed["qty"] == Decimal("0.000333")
-    level = await GridLevel.objects.aget(level_index=0)
+    level = await _get_level(0)
     assert level.status == LevelStatus.AWAITING_FILL
     assert level.current_buy_order_id == "ord-1"
     assert bus.events[0][0] == "order.placed"
@@ -178,7 +212,7 @@ async def test_handle_buy_fill_creates_position_and_places_tp(
     level_index = await om.handle_buy_fill(execution)
     assert level_index == 0
     # Position created
-    position = await Position.objects.aget(level_index=0)
+    position = await _position_at(0)
     assert position.status == PositionStatus.OPEN
     assert position.tp_order_id == "tp-1"
     assert position.tp_price is not None and position.tp_price > Decimal(
@@ -190,10 +224,10 @@ async def test_handle_buy_fill_creates_position_and_places_tp(
         for p in client.placed
     )
     # Grid level marked filled
-    level = await GridLevel.objects.aget(level_index=0)
+    level = await _get_level(0)
     assert level.status == LevelStatus.FILLED
     # Execution logged
-    assert await ExecutionLog.objects.filter(exec_id="e1").aexists()
+    assert await _exec_exists("e1")
     # Event published
     assert any(e[0] == "position.opened" for e in bus.events)
 
@@ -215,7 +249,7 @@ async def test_handle_buy_fill_too_small_leaves_coin_free(
         fee_coin="BTC",
     )
     assert await om.handle_buy_fill(execution) is None
-    assert not await Position.objects.filter(level_index=0).aexists()
+    assert await _count(Position) == 0
     # no take-profit sell was placed
     assert not any(p["side"] == Side.SELL for p in client.placed)
 
@@ -239,25 +273,29 @@ async def test_handle_sell_fill_closes_position_and_runs_compensation(
     om: OrderManager, client: FakeBybitClient, bus: RecordingEventBus
 ) -> None:
     # Open two positions: one underwater, one about to close in profit
-    underwater = await Position.objects.acreate(
-        level_index=1,
-        entry_price=Decimal("60000"),
-        qty=Decimal("0.001"),
-        fees_in=Decimal("0.06"),
-        tp_order_id="tp-old",
-        tp_price=Decimal("60600"),
-        status=PositionStatus.OPEN,
-        opened_at=datetime.now(tz=UTC),
+    underwater = await add_one(
+        Position(
+            level_index=1,
+            entry_price=Decimal("60000"),
+            qty=Decimal("0.001"),
+            fees_in=Decimal("0.06"),
+            tp_order_id="tp-old",
+            tp_price=Decimal("60600"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
     )
-    winner = await Position.objects.acreate(
-        level_index=0,
-        entry_price=Decimal("58000"),
-        qty=Decimal("0.001"),
-        fees_in=Decimal("0.058"),
-        tp_order_id="tp-win",
-        tp_price=Decimal("58580"),
-        status=PositionStatus.OPEN,
-        opened_at=datetime.now(tz=UTC),
+    winner = await add_one(
+        Position(
+            level_index=0,
+            entry_price=Decimal("58000"),
+            qty=Decimal("0.001"),
+            fees_in=Decimal("0.058"),
+            tp_order_id="tp-win",
+            tp_price=Decimal("58580"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
     )
     client.next_id = "tp-new"
     execution = _exec(
@@ -274,11 +312,11 @@ async def test_handle_sell_fill_closes_position_and_runs_compensation(
     )
     assert level_index == 0
     # Winner closed
-    await winner.arefresh_from_db()
+    winner = await repository.get_position(winner.id)
     assert winner.status == PositionStatus.CLOSED
     assert winner.realized_pnl > 0
     # Underwater position got a new TP
-    await underwater.arefresh_from_db()
+    underwater = await repository.get_position(underwater.id)
     assert underwater.tp_order_id == "tp-new"
     assert underwater.tp_price is not None and underwater.tp_price < Decimal(
         "60600"
@@ -286,9 +324,13 @@ async def test_handle_sell_fill_closes_position_and_runs_compensation(
     # Old TP cancelled, new TP placed
     assert ("BTCUSDT", "tp-old") in client.cancelled
     # CompensationLink recorded
-    link = await CompensationLink.objects.aget(
-        compensated_position=underwater.id
-    )
+    async with new_session() as session:
+        link = await session.scalar(
+            select(CompensationLink).where(
+                CompensationLink.compensated_position_id == underwater.id
+            )
+        )
+    assert link is not None
     assert link.profitable_position_id == winner.id
     # Events
     kinds = [e[0] for e in bus.events]
@@ -300,15 +342,17 @@ async def test_handle_sell_fill_closes_position_and_runs_compensation(
 
 
 async def _open_pos() -> Position:
-    return await Position.objects.acreate(
-        level_index=5,
-        entry_price=Decimal("60000"),
-        qty=Decimal("0.001"),
-        fees_in=Decimal("0.06"),
-        tp_order_id="tp-partial",
-        tp_price=Decimal("60600"),
-        status=PositionStatus.OPEN,
-        opened_at=datetime.now(tz=UTC),
+    return await add_one(
+        Position(
+            level_index=5,
+            entry_price=Decimal("60000"),
+            qty=Decimal("0.001"),
+            fees_in=Decimal("0.06"),
+            tp_order_id="tp-partial",
+            tp_price=Decimal("60600"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
     )
 
 
@@ -329,10 +373,10 @@ async def test_sell_partial_fill_keeps_position_open(
         execution, current_price=Decimal("60000")
     )
     assert result is None  # not fully closed
-    await pos.arefresh_from_db()
+    pos = await repository.get_position(pos.id)
     assert pos.status == PositionStatus.OPEN
     assert pos.filled_qty == Decimal("0.0004")
-    assert await CompensationLink.objects.acount() == 0
+    assert await _count(CompensationLink) == 0
     assert "position.closed" not in [e[0] for e in bus.events]
 
 
@@ -353,7 +397,7 @@ async def test_sell_completing_fill_closes_with_correct_pnl(
             ),
             current_price=Decimal("60000"),
         )
-    await pos.arefresh_from_db()
+    pos = await repository.get_position(pos.id)
     assert pos.status == PositionStatus.CLOSED
     assert pos.filled_qty == Decimal("0.001")
     # PnL from full proceeds and full cost, not a partial-vs-full mismatch.
@@ -383,7 +427,7 @@ async def test_sell_fill_idempotent_on_exec_id(om: OrderManager) -> None:
     await om.handle_sell_fill(
         ex, current_price=Decimal("60000")
     )  # redelivered
-    await pos.arefresh_from_db()
+    pos = await repository.get_position(pos.id)
     assert pos.filled_qty == Decimal("0.0004")  # not doubled
 
 
@@ -393,25 +437,28 @@ async def test_compensation_skips_below_min_notional_without_cancelling(
     # Underwater position so small that a re-priced sell would fall below the
     # $5 exchange minimum — compensation must SKIP and leave the old order
     # untouched.
-    underwater = await Position.objects.acreate(
-        level_index=1,
-        entry_price=Decimal("60000"),
-        qty=Decimal("0.00005"),  # notional ~$3 — below min_order_amt
-        fees_in=Decimal("0"),
-        tp_order_id="tp-under",
-        tp_price=Decimal("61000"),
-        status=PositionStatus.OPEN,
-        opened_at=datetime.now(tz=UTC),
+    underwater = await add_one(
+        Position(
+            level_index=1,
+            entry_price=Decimal("60000"),
+            qty=Decimal("0.00005"),  # notional ~$3 — below min_order_amt
+            tp_order_id="tp-under",
+            tp_price=Decimal("61000"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
     )
-    await Position.objects.acreate(
-        level_index=0,
-        entry_price=Decimal("58000"),
-        qty=Decimal("0.001"),
-        fees_in=Decimal("0.058"),
-        tp_order_id="tp-win",
-        tp_price=Decimal("58580"),
-        status=PositionStatus.OPEN,
-        opened_at=datetime.now(tz=UTC),
+    await add_one(
+        Position(
+            level_index=0,
+            entry_price=Decimal("58000"),
+            qty=Decimal("0.001"),
+            fees_in=Decimal("0.058"),
+            tp_order_id="tp-win",
+            tp_price=Decimal("58580"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
     )
     execution = _exec(
         exec_id="es3",
@@ -424,10 +471,10 @@ async def test_compensation_skips_below_min_notional_without_cancelling(
     )
     await om.handle_sell_fill(execution, current_price=Decimal("57000"))
     # Old order left in place, nothing cancelled, no compensation recorded.
-    await underwater.arefresh_from_db()
+    underwater = await repository.get_position(underwater.id)
     assert underwater.tp_order_id == "tp-under"
     assert ("BTCUSDT", "tp-under") not in client.cancelled
-    assert await CompensationLink.objects.acount() == 0
+    assert await _count(CompensationLink) == 0
 
 
 async def test_handle_sell_fill_no_compensation_when_all_profitable(
@@ -435,15 +482,17 @@ async def test_handle_sell_fill_no_compensation_when_all_profitable(
 ) -> None:
     # Only one position, the one being closed — no other open ones to
     # compensate
-    pos = await Position.objects.acreate(
-        level_index=0,
-        entry_price=Decimal("58000"),
-        qty=Decimal("0.001"),
-        fees_in=Decimal("0.058"),
-        tp_order_id="tp-win",
-        tp_price=Decimal("58580"),
-        status=PositionStatus.OPEN,
-        opened_at=datetime.now(tz=UTC),
+    pos = await add_one(
+        Position(
+            level_index=0,
+            entry_price=Decimal("58000"),
+            qty=Decimal("0.001"),
+            fees_in=Decimal("0.058"),
+            tp_order_id="tp-win",
+            tp_price=Decimal("58580"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
     )
     execution = _exec(
         exec_id="es2",
@@ -455,7 +504,7 @@ async def test_handle_sell_fill_no_compensation_when_all_profitable(
         fee_coin="USDT",
     )
     await om.handle_sell_fill(execution, current_price=Decimal("58600"))
-    await pos.arefresh_from_db()
+    pos = await repository.get_position(pos.id)
     assert pos.status == PositionStatus.CLOSED
     # No cancellations / new TPs
     assert client.cancelled == []
@@ -487,26 +536,25 @@ def _exec(
 async def test_reprotect_places_maker_sell_above_market(
     protector: Protector, client: FakeBybitClient
 ) -> None:
-    pos = await sync_to_async(Position.objects.create)(
-        level_index=5,
-        entry_price=Decimal("59000"),
-        qty=Decimal("0.001"),
-        tp_price=Decimal("59500"),
-        status=PositionStatus.OPEN,
-        opened_at=datetime.now(tz=UTC),
+    pos = await add_one(
+        Position(
+            level_index=5,
+            entry_price=Decimal("59000"),
+            qty=Decimal("0.001"),
+            tp_price=Decimal("59500"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
     )
     # market ran up to 60000: the original TP (59500) now sits below market, so
     # the reprotected sell is floored one tick above market instead of
     # crossing.
-    sa_pos = await repository.get_position(pos.id)
-    order_id = await protector.reprotect(
-        sa_pos, current_price=Decimal("60000")
-    )
+    order_id = await protector.reprotect(pos, current_price=Decimal("60000"))
     placed = client.placed[-1]
     assert placed["side"] == Side.SELL
     assert placed["qty"] == Decimal("0.001")
     assert placed["price"] == Decimal("60000.01")  # one tick above market
-    await sync_to_async(pos.refresh_from_db)()
+    pos = await repository.get_position(pos.id)
     assert pos.tp_price == Decimal("60000.01")
     assert pos.tp_order_id == order_id
 
@@ -514,17 +562,18 @@ async def test_reprotect_places_maker_sell_above_market(
 async def test_reprotect_covers_only_the_unsold_remainder(
     protector: Protector, client: FakeBybitClient
 ) -> None:
-    pos = await sync_to_async(Position.objects.create)(
-        level_index=6,
-        entry_price=Decimal("59000"),
-        qty=Decimal("0.005"),
-        filled_qty=Decimal("0.003"),
-        tp_price=Decimal("59500"),
-        status=PositionStatus.OPEN,
-        opened_at=datetime.now(tz=UTC),
+    pos = await add_one(
+        Position(
+            level_index=6,
+            entry_price=Decimal("59000"),
+            qty=Decimal("0.005"),
+            filled_qty=Decimal("0.003"),
+            tp_price=Decimal("59500"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
     )
-    sa_pos = await repository.get_position(pos.id)
-    await protector.reprotect(sa_pos, current_price=Decimal("59000"))
+    await protector.reprotect(pos, current_price=Decimal("59000"))
     placed = client.placed[-1]
     # only the 0.002 still held is re-listed, never the full 0.005
     assert placed["qty"] == Decimal("0.002")
@@ -533,24 +582,26 @@ async def test_reprotect_covers_only_the_unsold_remainder(
 async def test_settle_phantom_closes_at_tp_and_frees_level(
     protector: Protector, config: StrategyConfig, bus: RecordingEventBus
 ) -> None:
-    await sync_to_async(GridLevel.objects.create)(
-        level_index=7,
-        target_buy_price=Decimal("59000"),
-        status=LevelStatus.FILLED,
+    await add_one(
+        GridLevel(
+            level_index=7,
+            target_buy_price=Decimal("59000"),
+            status=LevelStatus.FILLED,
+        )
     )
-    pos = await sync_to_async(Position.objects.create)(
-        level_index=7,
-        entry_price=Decimal("59000"),
-        qty=Decimal("0.001"),
-        fees_in=Decimal("0"),
-        tp_price=Decimal("59100"),
-        status=PositionStatus.OPEN,
-        opened_at=datetime.now(tz=UTC),
+    pos = await add_one(
+        Position(
+            level_index=7,
+            entry_price=Decimal("59000"),
+            qty=Decimal("0.001"),
+            tp_price=Decimal("59100"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
     )
-    sa_pos = await repository.get_position(pos.id)
-    realized = await protector.settle_phantom(sa_pos)
+    realized = await protector.settle_phantom(pos)
 
-    await sync_to_async(pos.refresh_from_db)()
+    pos = await repository.get_position(pos.id)
     assert pos.status == PositionStatus.CLOSED
     assert pos.filled_qty == Decimal("0.001")
     # booked at the recorded TP price, net of the maker sell fee
@@ -560,7 +611,7 @@ async def test_settle_phantom_closes_at_tp_and_frees_level(
     assert pos.realized_pnl == expected
     assert realized == expected
     # its grid level is freed for re-use
-    level = await sync_to_async(GridLevel.objects.get)(level_index=7)
+    level = await _get_level(7)
     assert level.status == LevelStatus.IDLE
     # and a position.closed event is emitted
     assert any(t == "position.closed" for t, _ in bus.events)

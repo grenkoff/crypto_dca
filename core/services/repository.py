@@ -38,41 +38,6 @@ _AWAITING = str(LevelStatus.AWAITING_FILL)
 _IDLE = str(LevelStatus.IDLE)
 _FILLED = str(LevelStatus.FILLED)
 
-_BOT_DEFAULTS: dict[str, Any] = {
-    "paused": False,
-    "last_heartbeat": None,
-    "last_error": "",
-    "started_at": None,
-    "applied_grid_step": None,
-    "applied_order_qty": None,
-    "pending_credit": Decimal(0),
-}
-
-_CONFIG_DEFAULTS: dict[str, Any] = {
-    "symbol": "BTCUSDT",
-    "grid_mode": "percent",
-    "grid_step": Decimal("0.005"),
-    "tp_step": Decimal("0.00005"),
-    "order_qty_quote": Decimal("10"),
-    "top_anchor": None,
-    "min_profit_quote": Decimal("0.01"),
-    "maker_fee": Decimal("0.001"),
-    "taker_fee": Decimal("0.00075"),
-    "max_open_orders": 20,
-}
-
-_NOTIF_DEFAULTS: dict[str, Any] = {
-    "notify_errors": True,
-    "notify_closed": True,
-    "notify_compensation": True,
-    "notify_opened": True,
-    "notify_order_placed": True,
-    "notify_order_cancelled": True,
-    "digest_enabled": True,
-    "digest_time_utc": time(19, 0),
-    "digest_last_sent": None,
-}
-
 
 def _now() -> datetime:
     return datetime.now(tz=UTC)
@@ -82,7 +47,7 @@ async def _load_bot(session: AsyncSession) -> BotStatus:
     """Get-or-create the singleton bot-status row (pk=1)."""
     obj = await session.get(BotStatus, 1)
     if obj is None:
-        obj = BotStatus(id=1, **_BOT_DEFAULTS)
+        obj = BotStatus(id=1)
         session.add(obj)
         await session.flush()
     return obj
@@ -92,7 +57,7 @@ async def _load_notif(session: AsyncSession) -> NotificationSettings:
     """Get-or-create the singleton notification-settings row (pk=1)."""
     obj = await session.get(NotificationSettings, 1)
     if obj is None:
-        obj = NotificationSettings(id=1, updated_at=_now(), **_NOTIF_DEFAULTS)
+        obj = NotificationSettings(id=1)
         session.add(obj)
         await session.flush()
     return obj
@@ -486,7 +451,7 @@ async def load_config() -> StrategyConfig:
     async with new_session() as session, session.begin():
         cfg = await session.get(StrategyConfig, 1)
         if cfg is None:
-            cfg = StrategyConfig(id=1, updated_at=_now(), **_CONFIG_DEFAULTS)
+            cfg = StrategyConfig(id=1)
             session.add(cfg)
             await session.flush()
         return cfg

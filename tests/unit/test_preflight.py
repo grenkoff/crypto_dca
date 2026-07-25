@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from cli.__main__ import app
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.db
 
 runner = CliRunner()
 
