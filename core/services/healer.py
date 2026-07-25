@@ -5,7 +5,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import structlog
-from asgiref.sync import sync_to_async
 
 from core.exchange.types import Execution, Side
 from core.services import repository
@@ -73,9 +72,7 @@ class Healer:
         For each aged open position with no live TP: replay a sell that
         filled unseen, else re-place a protective TP so it is never naked.
         """
-        candidates = await sync_to_async(repository.naked_candidates)(
-            _NAKED_MIN_AGE_S
-        )
+        candidates = await repository.naked_candidates(_NAKED_MIN_AGE_S)
         if not candidates:
             return
         orders = await self._om.client.get_open_orders(self._om.symbol)
@@ -93,16 +90,14 @@ class Healer:
             sells = [e for e in execs if e.side == Side.SELL]
             if sells:
                 for execution in sells:
-                    if await sync_to_async(repository.exec_logged)(
-                        execution.exec_id
-                    ):
+                    if await repository.exec_logged(execution.exec_id):
                         continue
                     log.warning(
                         "heal.naked_settle", id=pos_id, order_id=tp_order_id
                     )
                     await self._om.handle_sell_fill(execution, price)
                 continue
-            pos = await sync_to_async(repository.get_open_position)(pos_id)
+            pos = await repository.get_open_position(pos_id)
             if pos is None:
                 continue
             log.warning(
@@ -126,7 +121,7 @@ class Healer:
         Cross-check awaiting levels vs live orders: replay a vanished order
         that filled, idle one that did not so the grid re-places it.
         """
-        awaiting = await sync_to_async(repository.awaiting_buy_levels)()
+        awaiting = await repository.awaiting_buy_levels()
         if not awaiting:
             return
         orders = await self._om.client.get_open_orders(self._om.symbol)
@@ -143,10 +138,10 @@ class Healer:
         idle, replay = plan_level_heal(awaiting, open_ids, fills_by_order)
         for idx in idle:
             log.warning("grid.heal_idle_stale_level", level=idx)
-            await sync_to_async(repository.idle_level)(idx)
+            await repository.idle_level(idx)
         for idx, fill in replay:
-            if await sync_to_async(repository.exec_logged)(fill.exec_id):
-                await sync_to_async(repository.idle_level)(idx)
+            if await repository.exec_logged(fill.exec_id):
+                await repository.idle_level(idx)
                 continue
             log.warning(
                 "grid.heal_replaying_buy", level=idx, order_id=fill.order_id
@@ -157,7 +152,7 @@ class Healer:
                 log.warning(
                     "grid.heal_replay_failed", level=idx, error=str(exc)[:120]
                 )
-                await sync_to_async(repository.idle_level)(idx)
+                await repository.idle_level(idx)
                 continue
             if booked is None:
                 log.warning(
@@ -165,7 +160,7 @@ class Healer:
                     level=idx,
                     order_id=fill.order_id,
                 )
-                await sync_to_async(repository.idle_level)(idx)
+                await repository.idle_level(idx)
 
     async def recover_missed_fills(self, price: Decimal) -> None:
         """Replay TP fills the WS stream dropped (e.g. on a reconnect).
@@ -173,7 +168,7 @@ class Healer:
         An unlogged sell matching an open position's TP is fed back through
         the normal fill path (idempotent on ``exec_id``) to close it.
         """
-        tp_ids = await sync_to_async(repository.open_tp_order_ids)()
+        tp_ids = await repository.open_tp_order_ids()
         if not tp_ids:
             return
         for execution in await self._om.client.get_executions(
@@ -181,7 +176,7 @@ class Healer:
         ):
             if execution.side != Side.SELL or execution.order_id not in tp_ids:
                 continue
-            if await sync_to_async(repository.exec_logged)(execution.exec_id):
+            if await repository.exec_logged(execution.exec_id):
                 continue
             log.warning(
                 "reconcile.replaying_missed_sell",

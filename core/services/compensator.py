@@ -58,7 +58,7 @@ class Compensator:
         open_positions = await sync_to_async(_open_positions_view)()
         pending = await sync_to_async(_load_pending)()
         pool = pending + profit
-        nearest_buy = await sync_to_async(repository.highest_resting_buy)()
+        nearest_buy = await repository.highest_resting_buy()
         ctx = CompensationContext(
             pool=pool,
             maker_fee=self.config.maker_fee,
