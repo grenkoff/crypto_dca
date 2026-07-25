@@ -12,8 +12,11 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, cast
 
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from django.db.models import F, Max, Min, QuerySet, Sum
 
+from core.exchange.types import Execution as BybitExecution
+from core.services.order_common import SellFillResult
 from core.trading.models import (
     BotStatus,
     CompensationLink,
@@ -21,6 +24,7 @@ from core.trading.models import (
     GridLevel,
     LevelStatus,
     NotificationSettings,
+    OrderSide,
     Position,
     PositionStatus,
     StrategyConfig,
@@ -494,3 +498,170 @@ def _claim_digest_due() -> bool:
 async def claim_digest_due() -> bool:
     """Return True and stamp ``digest_last_sent`` iff the digest is due."""
     return await sync_to_async(_claim_digest_due)()
+
+
+def _upsert_grid_level(
+    level_index: int, price: Decimal, order_id: str
+) -> None:
+    GridLevel.objects.update_or_create(
+        level_index=level_index,
+        defaults={
+            "target_buy_price": price,
+            "current_buy_order_id": order_id,
+            "status": LevelStatus.AWAITING_FILL,
+        },
+    )
+
+
+async def upsert_grid_level(
+    level_index: int, price: Decimal, order_id: str
+) -> None:
+    """Create/refresh a grid level as awaiting-fill with its buy order."""
+    await sync_to_async(_upsert_grid_level)(level_index, price, order_id)
+
+
+def _find_level_by_order_id(order_id: str) -> GridLevel | None:
+    return GridLevel.objects.filter(current_buy_order_id=order_id).first()
+
+
+async def find_level_by_order_id(order_id: str) -> GridLevel | None:
+    """The grid level resting the given buy order id, or None."""
+    return await sync_to_async(_find_level_by_order_id)(order_id)
+
+
+def _find_open_position_by_tp_order(order_id: str) -> Position | None:
+    return Position.objects.filter(
+        tp_order_id=order_id, status=PositionStatus.OPEN
+    ).first()
+
+
+async def find_open_position_by_tp_order(order_id: str) -> Position | None:
+    """The open position whose take-profit is the given order id, or None."""
+    return await sync_to_async(_find_open_position_by_tp_order)(order_id)
+
+
+def _log_execution(execution: BybitExecution) -> None:
+    ExecutionLog.objects.update_or_create(
+        exec_id=execution.exec_id,
+        defaults={
+            "order_id": execution.order_id,
+            "symbol": execution.symbol,
+            "side": OrderSide(execution.side.value),
+            "price": execution.price,
+            "qty": execution.qty,
+            "fee": execution.fee,
+            "fee_coin": execution.fee_coin,
+            "executed_at": execution.executed_at,
+        },
+    )
+
+
+def _persist_buy_fill(
+    *,
+    execution: BybitExecution,
+    level_index: int,
+    fees_in: Decimal,
+    tp_price: Decimal,
+    tp_order_id: str,
+) -> None:
+    with transaction.atomic():
+        Position.objects.create(
+            level_index=level_index,
+            entry_price=execution.price,
+            qty=execution.qty,
+            fees_in=fees_in,
+            tp_order_id=tp_order_id,
+            tp_price=tp_price,
+            status=PositionStatus.OPEN,
+            opened_at=execution.executed_at,
+        )
+        GridLevel.objects.filter(level_index=level_index).update(
+            status=LevelStatus.FILLED, current_buy_order_id=""
+        )
+        _log_execution(execution)
+
+
+async def persist_buy_fill(
+    *,
+    execution: BybitExecution,
+    level_index: int,
+    fees_in: Decimal,
+    tp_price: Decimal,
+    tp_order_id: str,
+) -> None:
+    """Open a position, mark its level filled, log the fill (atomic)."""
+    await sync_to_async(_persist_buy_fill)(
+        execution=execution,
+        level_index=level_index,
+        fees_in=fees_in,
+        tp_price=tp_price,
+        tp_order_id=tp_order_id,
+    )
+
+
+def _apply_sell_fill(
+    *,
+    position: Position,
+    execution: BybitExecution,
+    fees_out: Decimal,
+    lot_size: Decimal,
+) -> SellFillResult:
+    with transaction.atomic():
+        if ExecutionLog.objects.filter(exec_id=execution.exec_id).exists():
+            remaining = max(position.qty - position.filled_qty, Decimal(0))
+            return SellFillResult(
+                closed=position.status == PositionStatus.CLOSED,
+                realized=position.realized_pnl,
+                filled_qty=position.filled_qty,
+                remaining=remaining,
+            )
+        position.filled_qty += execution.qty
+        position.sell_value += execution.price * execution.qty
+        position.fees_out += fees_out
+        remaining = position.qty - position.filled_qty
+        closed = remaining < lot_size
+        if closed:
+            realized = (
+                position.sell_value
+                - position.fees_out
+                - position.entry_price * position.qty
+                - position.fees_in
+            )
+            position.realized_pnl = realized
+            position.status = PositionStatus.CLOSED
+            position.closed_at = execution.executed_at
+        else:
+            realized = Decimal(0)
+        position.save()
+        if closed:
+            GridLevel.objects.filter(level_index=position.level_index).update(
+                status=LevelStatus.IDLE, current_buy_order_id=""
+            )
+        _log_execution(execution)
+    return SellFillResult(
+        closed=closed,
+        realized=realized,
+        filled_qty=position.filled_qty,
+        remaining=max(remaining, Decimal(0)),
+    )
+
+
+async def apply_sell_fill(
+    *,
+    position: Position,
+    execution: BybitExecution,
+    fees_out: Decimal,
+    lot_size: Decimal,
+) -> SellFillResult:
+    """Accumulate one (possibly partial) TP fill onto a position (atomic).
+
+    The position closes only once the unsold remainder drops below one lot;
+    realized PnL is from actual accumulated proceeds and the full entry cost.
+    Idempotent on ``exec_id`` (the WS may redeliver).
+    """
+    return await sync_to_async(_apply_sell_fill)(
+        position=position,
+        execution=execution,
+        fees_out=fees_out,
+        lot_size=lot_size,
+    )
