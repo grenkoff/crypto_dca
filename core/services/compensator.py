@@ -5,14 +5,12 @@ from __future__ import annotations
 from decimal import Decimal
 
 import structlog
-from asgiref.sync import sync_to_async
-from django.db import transaction
 
 from core.exchange.bybit import BybitClient
 from core.exchange.types import Instrument, Side
 from core.services import repository
 from core.services.events import EventBus
-from core.services.order_common import link_id, set_tp
+from core.services.order_common import link_id
 from core.strategy.compensation import plan_compensation
 from core.strategy.rounding import min_notional_price
 from core.strategy.types import (
@@ -21,10 +19,7 @@ from core.strategy.types import (
     OpenPosition,
 )
 from core.trading.models import (
-    BotStatus,
-    CompensationLink,
     Position,
-    PositionStatus,
     StrategyConfig,
 )
 
@@ -55,8 +50,21 @@ class Compensator:
         current_price: Decimal,
     ) -> None:
         """Bank ``profit`` and compact one TP if the pool now funds it."""
-        open_positions = await sync_to_async(_open_positions_view)()
-        pending = await sync_to_async(_load_pending)()
+        open_positions = [
+            OpenPosition(
+                id=int(p.id),
+                entry_price=p.entry_price,
+                qty=p.qty,
+                fees_in=p.fees_in,
+                current_tp_price=p.tp_price
+                if p.tp_price is not None
+                else Decimal(0),
+                compensation_credit=p.compensation_credit,
+                filled_qty=p.filled_qty,
+            )
+            for p in await repository.open_positions()
+        ]
+        pending = await repository.load_pending()
         pool = pending + profit
         nearest_buy = await repository.highest_resting_buy()
         ctx = CompensationContext(
@@ -74,7 +82,7 @@ class Compensator:
             decision, pool, source_position_id
         ):
             return
-        await sync_to_async(_bank_pending)(pool)
+        await repository.bank_pending(pool)
 
     async def _execute(
         self,
@@ -84,7 +92,7 @@ class Compensator:
     ) -> bool:
         """Do the exchange move and persist it; return True if applied."""
         symbol = str(self.config.symbol)
-        target = await Position.objects.aget(id=decision.target_position_id)
+        target = await repository.get_position(decision.target_position_id)
         old_tp = target.tp_price
         if not target.tp_order_id:
             log.warning("compensation.target_has_no_tp", id=target.id)
@@ -114,7 +122,7 @@ class Compensator:
         except Exception as exc:
             await self._restore_protection(target, exc)
             return False
-        await sync_to_async(_record_compensation)(
+        await repository.record_compensation(
             target=target,
             new_tp_price=decision.new_tp_price,
             new_tp_order_id=new_tp_order_id,
@@ -171,7 +179,7 @@ class Compensator:
                 restore_error=str(restore_error),
             )
             return
-        await sync_to_async(set_tp)(
+        await repository.set_tp(
             target=target, tp_price=price, tp_order_id=order_id
         )
         log.error(
@@ -180,56 +188,3 @@ class Compensator:
             price=str(price),
             error=str(place_error),
         )
-
-
-def _load_pending() -> Decimal:
-    return BotStatus.load().pending_credit
-
-
-def _bank_pending(value: Decimal) -> None:
-    status = BotStatus.load()
-    status.pending_credit = value
-    status.save(update_fields=["pending_credit"])
-
-
-def _open_positions_view() -> list[OpenPosition]:
-    return [
-        OpenPosition(
-            id=int(p.id),
-            entry_price=p.entry_price,
-            qty=p.qty,
-            fees_in=p.fees_in,
-            current_tp_price=p.tp_price
-            if p.tp_price is not None
-            else Decimal(0),
-            compensation_credit=p.compensation_credit,
-            filled_qty=p.filled_qty,
-        )
-        for p in Position.objects.filter(status=PositionStatus.OPEN)
-    ]
-
-
-def _record_compensation(
-    *,
-    target: Position,
-    new_tp_price: Decimal,
-    new_tp_order_id: str,
-    new_credit: Decimal,
-    credit_drawn: Decimal,
-    source_position_id: int,
-    new_pending: Decimal,
-) -> None:
-    with transaction.atomic():
-        target.tp_price = new_tp_price
-        target.tp_order_id = new_tp_order_id
-        target.compensation_credit = new_credit
-        target.save()
-        CompensationLink.objects.create(
-            profitable_position_id=source_position_id,
-            compensated_position_id=target.id,
-            profit_applied=credit_drawn,
-            new_tp_price=new_tp_price,
-        )
-        status = BotStatus.load()
-        status.pending_credit = new_pending
-        status.save(update_fields=["pending_credit"])
