@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from asgiref.sync import sync_to_async
 
+from core.db.models import StrategyConfig
 from core.exchange.types import Execution, Instrument, Side
 from core.services import repository
 from core.services.events import RecordingEventBus
@@ -21,7 +22,6 @@ from core.trading.models import (
     LevelStatus,
     Position,
     PositionStatus,
-    StrategyConfig,
 )
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -85,17 +85,17 @@ def client() -> FakeBybitClient:
 
 @pytest.fixture
 def config() -> StrategyConfig:
-    cfg = StrategyConfig.load()
-    cfg.symbol = "BTCUSDT"
-    cfg.grid_mode = "percent"
-    cfg.grid_step = Decimal("0.01")
-    cfg.order_qty_quote = Decimal("20")
-    cfg.min_profit_quote = Decimal("0.05")
-    cfg.maker_fee = Decimal("0.001")
-    cfg.max_open_orders = 10
-    cfg.tp_step = Decimal("100")  # BTC-scale absolute TP offset
-    cfg.save()
-    return cfg
+    # In-memory SA config: the services only read its fields, never persist it.
+    return StrategyConfig(
+        symbol="BTCUSDT",
+        grid_mode="percent",
+        grid_step=Decimal("0.01"),
+        order_qty_quote=Decimal("20"),
+        min_profit_quote=Decimal("0.05"),
+        maker_fee=Decimal("0.001"),
+        max_open_orders=10,
+        tp_step=Decimal("100"),  # BTC-scale absolute TP offset
+    )
 
 
 @pytest.fixture
@@ -153,7 +153,6 @@ async def test_place_buy_skips_below_minimum(
     om: OrderManager, client: FakeBybitClient, config: StrategyConfig
 ) -> None:
     config.order_qty_quote = Decimal("1")  # below min_order_amt of 5
-    await sync_to_async(config.save)()
     om.config = config
     order_id = await om.place_buy_at_level(0, Decimal("60000"))
     assert order_id is None

@@ -384,35 +384,31 @@ async def test_grid_state_held_ignores_closed_positions() -> None:
     assert held == {Decimal("0.02845")}
 
 
+@pytestmark_db
 async def test_heal_stale_buy_replay_failure_idles_level_no_loop() -> None:
     # A stale awaiting-fill level whose buy filled but whose TP can't be placed
     # (insufficient balance) must be idled, not crash the cycle or loop
     # forever.
+    from core.db.models import StrategyConfig
     from core.exchange.types import Instrument
     from core.services.healer import Healer
     from core.services.order_manager import OrderManager
-    from core.trading.models import StrategyConfig
 
-    @sync_to_async
-    def _setup() -> None:
-        cfg = StrategyConfig.load()
-        cfg.symbol = "KASUSDT"
-        cfg.grid_mode = "absolute"
-        cfg.grid_step = Decimal("0.00005")
-        cfg.tp_step = Decimal("0.0001")
-        cfg.order_qty_quote = Decimal("5")
-        cfg.maker_fee = Decimal("0.000625")
-        cfg.min_profit_quote = Decimal("0")
-        cfg.save()
-        GridLevel.objects.create(
-            level_index=590,
-            target_buy_price=Decimal("0.0295"),
-            status=LevelStatus.AWAITING_FILL,
-            current_buy_order_id="OID",
-        )
-
-    await _setup()
-    cfg = await sync_to_async(StrategyConfig.load)()
+    await GridLevel.objects.acreate(
+        level_index=590,
+        target_buy_price=Decimal("0.0295"),
+        status=LevelStatus.AWAITING_FILL,
+        current_buy_order_id="OID",
+    )
+    cfg = StrategyConfig(
+        symbol="KASUSDT",
+        grid_mode="absolute",
+        grid_step=Decimal("0.00005"),
+        tp_step=Decimal("0.0001"),
+        order_qty_quote=Decimal("5"),
+        maker_fee=Decimal("0.000625"),
+        min_profit_quote=Decimal("0"),
+    )
 
     fill = Execution(
         exec_id="e-OID",
@@ -469,37 +465,33 @@ test_heal_stale_buy_replay_failure_idles_level_no_loop = pytest.mark.django_db(
 )(test_heal_stale_buy_replay_failure_idles_level_no_loop)
 
 
+@pytestmark_db
 async def test_heal_stale_buy_replay_submin_fill_idles_level_no_loop() -> None:
     # A stale level whose buy only PARTIALLY filled below the min notional
     # books no position (handle_buy_fill returns None). It must still be idled
     # — otherwise heal replays the same sub-min fill every reconcile forever
     # (the reconcile.drift loop).
+    from core.db.models import StrategyConfig
     from core.exchange.types import Instrument
     from core.services.events import NoOpEventBus
     from core.services.healer import Healer
     from core.services.order_manager import OrderManager
-    from core.trading.models import StrategyConfig
 
-    @sync_to_async
-    def _setup() -> None:
-        cfg = StrategyConfig.load()
-        cfg.symbol = "KASUSDT"
-        cfg.grid_mode = "absolute"
-        cfg.grid_step = Decimal("0.00005")
-        cfg.tp_step = Decimal("0.0001")
-        cfg.order_qty_quote = Decimal("5")
-        cfg.maker_fee = Decimal("0.000625")
-        cfg.min_profit_quote = Decimal("0")
-        cfg.save()
-        GridLevel.objects.create(
-            level_index=573,
-            target_buy_price=Decimal("0.02865"),
-            status=LevelStatus.AWAITING_FILL,
-            current_buy_order_id="OID",
-        )
-
-    await _setup()
-    cfg = await sync_to_async(StrategyConfig.load)()
+    await GridLevel.objects.acreate(
+        level_index=573,
+        target_buy_price=Decimal("0.02865"),
+        status=LevelStatus.AWAITING_FILL,
+        current_buy_order_id="OID",
+    )
+    cfg = StrategyConfig(
+        symbol="KASUSDT",
+        grid_mode="absolute",
+        grid_step=Decimal("0.00005"),
+        tp_step=Decimal("0.0001"),
+        order_qty_quote=Decimal("5"),
+        maker_fee=Decimal("0.000625"),
+        min_profit_quote=Decimal("0"),
+    )
 
     # 40 * 0.02865 = $1.15 notional — below the $5 minimum, so no TP/position
     # is booked

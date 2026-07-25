@@ -7,6 +7,7 @@ Django until the Phase 3 cutover; these only read/write the same tables.
 
 from __future__ import annotations
 
+import enum
 from datetime import date, datetime, time
 from decimal import Decimal
 
@@ -35,6 +36,35 @@ from core.db.base import Base
 _AMOUNT = Numeric(28, 12)
 _FEE = Numeric(10, 8)
 _TS = DateTime(timezone=True)
+
+
+class GridMode(enum.StrEnum):
+    """Grid spacing mode (absolute step or percent)."""
+
+    ABSOLUTE = "absolute"
+    PERCENT = "percent"
+
+
+class LevelStatus(enum.StrEnum):
+    """Lifecycle status of a grid level."""
+
+    IDLE = "idle"
+    AWAITING_FILL = "awaiting_fill"
+    FILLED = "filled"
+
+
+class PositionStatus(enum.StrEnum):
+    """Lifecycle status of a position."""
+
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+class OrderSide(enum.StrEnum):
+    """Order side (buy or sell)."""
+
+    BUY = "Buy"
+    SELL = "Sell"
 
 
 class StrategyConfig(Base):
