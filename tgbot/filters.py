@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from aiogram.filters import BaseFilter
 from aiogram.types import Message
-from asgiref.sync import sync_to_async
 
-from core.trading.models import TelegramUser
+from core.services import repository
 
 
 class AdminUserFilter(BaseFilter):
@@ -16,9 +15,4 @@ class AdminUserFilter(BaseFilter):
         """Return True if the message sender is a bot admin."""
         if message.from_user is None:
             return False
-        return await _is_admin(message.from_user.id)
-
-
-@sync_to_async
-def _is_admin(chat_id: int) -> bool:
-    return TelegramUser.objects.filter(chat_id=chat_id, is_admin=True).exists()
+        return await repository.is_admin(message.from_user.id)

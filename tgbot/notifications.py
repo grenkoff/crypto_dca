@@ -8,23 +8,13 @@ from collections.abc import Iterable
 
 import structlog
 from aiogram import Bot
-from asgiref.sync import sync_to_async
 
+from core.services import repository
 from core.services.redis_bus import RedisEventBus
-from core.trading.models import TelegramUser
 from tgbot.formatters import format_event
 from tgbot.notify_settings import event_enabled
 
 log = structlog.get_logger()
-
-
-@sync_to_async
-def _admin_chat_ids() -> list[int]:
-    return list(
-        TelegramUser.objects.filter(is_admin=True).values_list(
-            "chat_id", flat=True
-        )
-    )
 
 
 async def run_subscriber(
@@ -38,7 +28,7 @@ async def run_subscriber(
                 break
             if not await event_enabled(event.get("type", "")):
                 continue
-            chat_ids = await _admin_chat_ids()
+            chat_ids = await repository.admin_chat_ids()
             text = format_event(event)
             await _broadcast(bot, chat_ids, text)
     except asyncio.CancelledError:

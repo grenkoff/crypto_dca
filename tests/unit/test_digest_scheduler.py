@@ -5,8 +5,8 @@ from decimal import Decimal
 
 import pytest
 
+from core.services import repository
 from core.trading.models import NotificationSettings
-from tgbot.digest import _claim_due
 from tgbot.formatters import DigestSnapshot, build_digest
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -30,15 +30,17 @@ async def test_claim_due_fires_once_per_day() -> None:
     await _set(
         digest_enabled=True, digest_time_utc=time(0, 0), digest_last_sent=None
     )
-    assert await _claim_due() is True
-    assert await _claim_due() is False  # already stamped for today
+    assert await repository.claim_digest_due() is True
+    assert (
+        await repository.claim_digest_due() is False
+    )  # already stamped for today
 
 
 async def test_claim_due_skips_when_disabled() -> None:
     await _set(
         digest_enabled=False, digest_time_utc=time(0, 0), digest_last_sent=None
     )
-    assert await _claim_due() is False
+    assert await repository.claim_digest_due() is False
 
 
 async def test_claim_due_skips_before_trigger() -> None:
@@ -50,7 +52,7 @@ async def test_claim_due_skips_before_trigger() -> None:
     )
     now = datetime.now(tz=UTC)
     expected = now.replace(hour=23, minute=59, second=0, microsecond=0) <= now
-    assert await _claim_due() is expected
+    assert await repository.claim_digest_due() is expected
 
 
 def test_build_digest_signs_and_labels() -> None:
