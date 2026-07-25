@@ -12,14 +12,13 @@ from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 import structlog
-from asgiref.sync import sync_to_async
-from django.db import transaction
 
 from core.exchange.bybit import BybitClient
 from core.exchange.types import Side
+from core.services import repository
 from core.strategy.pricing import compute_tp_price
 from core.strategy.rounding import next_tick_above, round_down_to_tick
-from core.trading.models import Position, PositionStatus, StrategyConfig
+from core.trading.models import StrategyConfig
 
 log = structlog.get_logger()
 
@@ -127,24 +126,19 @@ def plan_consolidation(
 
 async def load_open_positions() -> list[PosRow]:
     """Load all open positions as ``PosRow`` value objects."""
-
-    @sync_to_async
-    def _load() -> list[PosRow]:
-        return [
-            PosRow(
-                id=int(p.id),
-                level_index=int(p.level_index),
-                entry=p.entry_price,
-                qty=p.qty,
-                filled_qty=p.filled_qty,
-                fees_in=p.fees_in,
-                tp_order_id=p.tp_order_id,
-                opened_at=p.opened_at,
-            )
-            for p in Position.objects.filter(status=PositionStatus.OPEN)
-        ]
-
-    return await _load()
+    return [
+        PosRow(
+            id=int(p.id),
+            level_index=int(p.level_index),
+            entry=p.entry_price,
+            qty=p.qty,
+            filled_qty=p.filled_qty,
+            fees_in=p.fees_in,
+            tp_order_id=p.tp_order_id,
+            opened_at=p.opened_at,
+        )
+        for p in await repository.open_positions()
+    ]
 
 
 async def commit_consolidation(
@@ -177,8 +171,14 @@ async def commit_consolidation(
             g.new_tp_price,
             order_link_id=f"consolidate-{g.survivor_id}-{stamp}",
         )
-        await sync_to_async(_apply_merge)(
-            group=g, new_tp_order_id=new_tp_order_id
+        await repository.apply_merge(
+            survivor_id=g.survivor_id,
+            combined_qty=g.combined_qty,
+            weighted_entry=g.weighted_entry,
+            combined_fees_in=g.combined_fees_in,
+            new_tp_order_id=new_tp_order_id,
+            new_tp_price=g.new_tp_price,
+            absorbed_ids=g.absorbed_ids,
         )
         log.info(
             "consolidate.merged",
@@ -190,25 +190,3 @@ async def commit_consolidation(
         )
         done.append(g)
     return done
-
-
-def _apply_merge(*, group: MergeGroup, new_tp_order_id: str) -> None:
-    with transaction.atomic():
-        survivor = Position.objects.select_for_update().get(
-            id=group.survivor_id
-        )
-        survivor.qty = group.combined_qty
-        survivor.entry_price = group.weighted_entry
-        survivor.fees_in = group.combined_fees_in
-        survivor.tp_order_id = new_tp_order_id
-        survivor.tp_price = group.new_tp_price
-        survivor.save(
-            update_fields=[
-                "qty",
-                "entry_price",
-                "fees_in",
-                "tp_order_id",
-                "tp_price",
-            ]
-        )
-        Position.objects.filter(id__in=group.absorbed_ids).delete()

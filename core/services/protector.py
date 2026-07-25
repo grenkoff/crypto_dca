@@ -2,25 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from decimal import Decimal
 
 import structlog
-from asgiref.sync import sync_to_async
-from django.db import transaction
 
 from core.exchange.bybit import BybitClient
 from core.exchange.types import Instrument, Side
+from core.services import repository
 from core.services.events import EventBus
-from core.services.order_common import link_id, set_tp
+from core.services.order_common import link_id
 from core.strategy.rounding import min_notional_price, next_tick_above
-from core.trading.models import (
-    GridLevel,
-    LevelStatus,
-    Position,
-    PositionStatus,
-    StrategyConfig,
-)
+from core.trading.models import Position, StrategyConfig
 
 log = structlog.get_logger()
 
@@ -66,7 +58,7 @@ class Protector:
             price,
             order_link_id=link_id("grid-tp-heal", position.level_index),
         )
-        await sync_to_async(set_tp)(
+        await repository.set_tp(
             target=position, tp_price=price, tp_order_id=order_id
         )
         log.warning("position.reprotected", id=position.id, price=str(price))
@@ -79,7 +71,7 @@ class Protector:
         at its recorded TP price to match the wallet. Returns realized PnL.
         """
         price = position.tp_price or position.entry_price
-        realized = await sync_to_async(_close_at_price)(
+        realized = await repository.close_at_price(
             position=position, price=price, maker_fee=self.config.maker_fee
         )
         log.warning(
@@ -99,40 +91,3 @@ class Protector:
             },
         )
         return realized
-
-
-def _close_at_price(
-    *, position: Position, price: Decimal, maker_fee: Decimal
-) -> Decimal:
-    """Mark a position sold in full at ``price`` (maker) and free its
-    grid level."""
-    with transaction.atomic():
-        remaining = position.remaining_qty
-        sell_value = position.sell_value + price * remaining
-        fees_out = position.fees_out + price * remaining * maker_fee
-        realized = (
-            sell_value
-            - fees_out
-            - position.entry_price * position.qty
-            - position.fees_in
-        )
-        position.filled_qty = position.qty
-        position.sell_value = sell_value
-        position.fees_out = fees_out
-        position.realized_pnl = realized
-        position.status = PositionStatus.CLOSED
-        position.closed_at = datetime.now(tz=UTC)
-        position.save(
-            update_fields=[
-                "filled_qty",
-                "sell_value",
-                "fees_out",
-                "realized_pnl",
-                "status",
-                "closed_at",
-            ]
-        )
-        GridLevel.objects.filter(level_index=position.level_index).update(
-            status=LevelStatus.IDLE, current_buy_order_id=""
-        )
-    return realized

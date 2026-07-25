@@ -665,3 +665,223 @@ async def apply_sell_fill(
         fees_out=fees_out,
         lot_size=lot_size,
     )
+
+
+def _set_tp(*, target: Position, tp_price: Decimal, tp_order_id: str) -> None:
+    target.tp_price = tp_price
+    target.tp_order_id = tp_order_id
+    target.save(update_fields=["tp_price", "tp_order_id"])
+
+
+async def set_tp(
+    *, target: Position, tp_price: Decimal, tp_order_id: str
+) -> None:
+    """Persist a new take-profit price and order id on a position."""
+    await sync_to_async(_set_tp)(
+        target=target, tp_price=tp_price, tp_order_id=tp_order_id
+    )
+
+
+def _get_position(pos_id: int) -> Position:
+    return Position.objects.get(id=pos_id)
+
+
+async def get_position(pos_id: int) -> Position:
+    """Fetch a position by id (raises if absent)."""
+    return await sync_to_async(_get_position)(pos_id)
+
+
+def _open_positions() -> list[Position]:
+    return list(Position.objects.filter(status=PositionStatus.OPEN))
+
+
+async def open_positions() -> list[Position]:
+    """All open positions (callers map to their own value objects)."""
+    return await sync_to_async(_open_positions)()
+
+
+def _load_pending() -> Decimal:
+    return BotStatus.load().pending_credit
+
+
+async def load_pending() -> Decimal:
+    """The banked pending-compensation credit."""
+    return await sync_to_async(_load_pending)()
+
+
+def _bank_pending(value: Decimal) -> None:
+    status = BotStatus.load()
+    status.pending_credit = value
+    status.save(update_fields=["pending_credit"])
+
+
+async def bank_pending(value: Decimal) -> None:
+    """Persist the banked pending-compensation credit."""
+    await sync_to_async(_bank_pending)(value)
+
+
+def _active_buy_order_ids() -> set[str]:
+    return set(
+        GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL)
+        .exclude(current_buy_order_id="")
+        .values_list("current_buy_order_id", flat=True)
+    )
+
+
+async def active_buy_order_ids() -> set[str]:
+    """Order ids of all resting (awaiting-fill) buy levels."""
+    return await sync_to_async(_active_buy_order_ids)()
+
+
+def _heartbeat() -> None:
+    status = BotStatus.load()
+    status.last_heartbeat = datetime.now(tz=UTC)
+    status.save()
+
+
+async def heartbeat() -> None:
+    """Stamp the bot's last-heartbeat time."""
+    await sync_to_async(_heartbeat)()
+
+
+def _close_at_price(
+    *, position: Position, price: Decimal, maker_fee: Decimal
+) -> Decimal:
+    with transaction.atomic():
+        remaining = position.remaining_qty
+        sell_value = position.sell_value + price * remaining
+        fees_out = position.fees_out + price * remaining * maker_fee
+        realized = (
+            sell_value
+            - fees_out
+            - position.entry_price * position.qty
+            - position.fees_in
+        )
+        position.filled_qty = position.qty
+        position.sell_value = sell_value
+        position.fees_out = fees_out
+        position.realized_pnl = realized
+        position.status = PositionStatus.CLOSED
+        position.closed_at = datetime.now(tz=UTC)
+        position.save(
+            update_fields=[
+                "filled_qty",
+                "sell_value",
+                "fees_out",
+                "realized_pnl",
+                "status",
+                "closed_at",
+            ]
+        )
+        GridLevel.objects.filter(level_index=position.level_index).update(
+            status=LevelStatus.IDLE, current_buy_order_id=""
+        )
+    return realized
+
+
+async def close_at_price(
+    *, position: Position, price: Decimal, maker_fee: Decimal
+) -> Decimal:
+    """Mark a position sold in full at ``price`` (maker), free its level."""
+    return await sync_to_async(_close_at_price)(
+        position=position, price=price, maker_fee=maker_fee
+    )
+
+
+def _record_compensation(
+    *,
+    target: Position,
+    new_tp_price: Decimal,
+    new_tp_order_id: str,
+    new_credit: Decimal,
+    credit_drawn: Decimal,
+    source_position_id: int,
+    new_pending: Decimal,
+) -> None:
+    with transaction.atomic():
+        target.tp_price = new_tp_price
+        target.tp_order_id = new_tp_order_id
+        target.compensation_credit = new_credit
+        target.save()
+        CompensationLink.objects.create(
+            profitable_position_id=source_position_id,
+            compensated_position_id=target.id,
+            profit_applied=credit_drawn,
+            new_tp_price=new_tp_price,
+        )
+        status = BotStatus.load()
+        status.pending_credit = new_pending
+        status.save(update_fields=["pending_credit"])
+
+
+async def record_compensation(
+    *,
+    target: Position,
+    new_tp_price: Decimal,
+    new_tp_order_id: str,
+    new_credit: Decimal,
+    credit_drawn: Decimal,
+    source_position_id: int,
+    new_pending: Decimal,
+) -> None:
+    """Apply a compensation move and bank the remaining pool (atomic)."""
+    await sync_to_async(_record_compensation)(
+        target=target,
+        new_tp_price=new_tp_price,
+        new_tp_order_id=new_tp_order_id,
+        new_credit=new_credit,
+        credit_drawn=credit_drawn,
+        source_position_id=source_position_id,
+        new_pending=new_pending,
+    )
+
+
+def _apply_merge(
+    *,
+    survivor_id: int,
+    combined_qty: Decimal,
+    weighted_entry: Decimal,
+    combined_fees_in: Decimal,
+    new_tp_order_id: str,
+    new_tp_price: Decimal,
+    absorbed_ids: list[int],
+) -> None:
+    with transaction.atomic():
+        survivor = Position.objects.select_for_update().get(id=survivor_id)
+        survivor.qty = combined_qty
+        survivor.entry_price = weighted_entry
+        survivor.fees_in = combined_fees_in
+        survivor.tp_order_id = new_tp_order_id
+        survivor.tp_price = new_tp_price
+        survivor.save(
+            update_fields=[
+                "qty",
+                "entry_price",
+                "fees_in",
+                "tp_order_id",
+                "tp_price",
+            ]
+        )
+        Position.objects.filter(id__in=absorbed_ids).delete()
+
+
+async def apply_merge(
+    *,
+    survivor_id: int,
+    combined_qty: Decimal,
+    weighted_entry: Decimal,
+    combined_fees_in: Decimal,
+    new_tp_order_id: str,
+    new_tp_price: Decimal,
+    absorbed_ids: list[int],
+) -> None:
+    """Rewrite the survivor lot and delete the absorbed ones (atomic)."""
+    await sync_to_async(_apply_merge)(
+        survivor_id=survivor_id,
+        combined_qty=combined_qty,
+        weighted_entry=weighted_entry,
+        combined_fees_in=combined_fees_in,
+        new_tp_order_id=new_tp_order_id,
+        new_tp_price=new_tp_price,
+        absorbed_ids=absorbed_ids,
+    )
