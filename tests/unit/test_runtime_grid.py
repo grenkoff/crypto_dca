@@ -281,7 +281,7 @@ def test_grid_params_first_run_adopts_without_change() -> None:
     # first sight: adopt current geometry, report "no change" (no spurious
     # rebuild)
     assert (
-        repository.grid_params_changed(Decimal("0.0001"), Decimal("5"))
+        repository._grid_params_changed(Decimal("0.0001"), Decimal("5"))
         is False
     )
     bot.refresh_from_db()
@@ -291,17 +291,17 @@ def test_grid_params_first_run_adopts_without_change() -> None:
 
 @pytestmark_db
 def test_grid_params_detects_step_and_qty_change() -> None:
-    repository.record_applied_grid_params(Decimal("0.0001"), Decimal("5"))
+    repository._record_applied_grid_params(Decimal("0.0001"), Decimal("5"))
     assert (
-        repository.grid_params_changed(Decimal("0.0001"), Decimal("5"))
+        repository._grid_params_changed(Decimal("0.0001"), Decimal("5"))
         is False
     )
     assert (
-        repository.grid_params_changed(Decimal("0.00005"), Decimal("5"))
+        repository._grid_params_changed(Decimal("0.00005"), Decimal("5"))
         is True
     )  # step changed
     assert (
-        repository.grid_params_changed(Decimal("0.0001"), Decimal("10"))
+        repository._grid_params_changed(Decimal("0.0001"), Decimal("10"))
         is True
     )  # qty changed
 
@@ -320,7 +320,7 @@ def test_reset_all_grid_levels_idles_awaiting() -> None:
         status=LevelStatus.FILLED,
         current_buy_order_id="",
     )
-    repository.reset_all_grid_levels()
+    repository._reset_all_grid_levels()
     g = GridLevel.objects.get(level_index=291)
     assert g.status == LevelStatus.IDLE
     assert g.current_buy_order_id == ""
@@ -351,7 +351,7 @@ def test_grid_state_held_covers_every_open_position() -> None:
     _open_position(
         1000, "0.052"
     )  # manual bag (>=1000) must block its level too
-    _resting, held = repository.grid_state(step)
+    _resting, held = repository._grid_state(step)
     # every held price blocks a fresh buy there — one buy per level, no
     # stacking
     assert held == {Decimal("0.02845"), Decimal("0.02945"), Decimal("0.052")}
@@ -371,7 +371,7 @@ def test_grid_state_held_ignores_closed_positions() -> None:
         status=PositionStatus.CLOSED,
         opened_at=datetime(2026, 7, 8, tzinfo=UTC),
     )
-    _resting, held = repository.grid_state(step)
+    _resting, held = repository._grid_state(step)
     # a closed position frees its level for the grid again
     assert held == {Decimal("0.02845")}
 

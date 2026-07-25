@@ -6,7 +6,6 @@ import asyncio
 from decimal import Decimal
 
 import structlog
-from asgiref.sync import sync_to_async
 
 from core.exchange.types import Side
 from core.services import repository
@@ -41,7 +40,7 @@ class GridMaintainer:
         The band is the ``max_open_orders`` highest ``grid_step`` steps
         below market; gaps fill, out-of-band buys prune, held levels skip.
         """
-        if await sync_to_async(repository.is_paused)():
+        if await repository.is_paused():
             return
         if self._om.grid_mode != "absolute":
             await self._ensure_percent(price)
@@ -58,8 +57,8 @@ class GridMaintainer:
         locked = quote.locked if quote is not None else Decimal(0)
         n = min(int((free + locked) / per_order), int(cfg.max_open_orders))
 
-        resting, held = await sync_to_async(repository.grid_state)(step)
-        ceiling = await sync_to_async(self._buy_ceiling)()
+        resting, held = await repository.grid_state(step)
+        ceiling = await self._buy_ceiling()
         targets = resting_buy_levels(price, step, n, held, ceiling=ceiling)
         target_prices = {p for _, p in targets}
         prune = set(
@@ -69,13 +68,13 @@ class GridMaintainer:
         budget = free + freed * per_order
         await self._place_missing(targets, set(resting) | held, budget)
 
-    def _buy_ceiling(self) -> Decimal | None:
+    async def _buy_ceiling(self) -> Decimal | None:
         """Highest price a resting buy may take, or None if unconstrained.
 
         Keeps the buy band at least ``tp_step + grid_step`` below the bottom
         of the take-profit wall, so a rising grid never crowds a resting TP.
         """
-        lowest_tp = repository.lowest_resting_tp()
+        lowest_tp = await repository.lowest_resting_tp()
         if lowest_tp is None:
             return None
         cfg = self._om.config
@@ -104,7 +103,7 @@ class GridMaintainer:
                         "grid.prune_failed", price=str(p), error=str(exc)
                     )
                     continue
-            await sync_to_async(repository.idle_level)(k)
+            await repository.idle_level(k)
             log.info("grid.pruned", price=str(p))
             freed += 1
             if cancelled:
@@ -142,7 +141,7 @@ class GridMaintainer:
             count=config.max_open_orders,
             tick_size=self._om.instrument.tick_size,
         )
-        existing = await sync_to_async(repository.existing_active_levels)()
+        existing = await repository.existing_active_levels()
         for spec in specs:
             if spec.level_index in existing:
                 continue
@@ -155,7 +154,7 @@ class GridMaintainer:
         every resting buy (TP sells untouched) and idle their levels.
         """
         cfg = self._om.config
-        if not await sync_to_async(repository.grid_params_changed)(
+        if not await repository.grid_params_changed(
             cfg.grid_step, cfg.order_qty_quote
         ):
             return
@@ -177,7 +176,7 @@ class GridMaintainer:
                     order_id=order.order_id,
                     error=str(exc),
                 )
-        await sync_to_async(repository.reset_all_grid_levels)()
-        await sync_to_async(repository.record_applied_grid_params)(
+        await repository.reset_all_grid_levels()
+        await repository.record_applied_grid_params(
             cfg.grid_step, cfg.order_qty_quote
         )
