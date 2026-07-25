@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from asgiref.sync import sync_to_async
 
 from core.services import repository
 from core.trading.models import (
@@ -16,8 +17,8 @@ from core.trading.models import (
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def _closed(entry: str, pnl: str, closed_at: datetime) -> None:
-    Position.objects.create(
+async def _closed(entry: str, pnl: str, closed_at: datetime) -> None:
+    await Position.objects.acreate(
         level_index=1,
         entry_price=Decimal(entry),
         qty=Decimal("100"),
@@ -30,8 +31,8 @@ def _closed(entry: str, pnl: str, closed_at: datetime) -> None:
     )
 
 
-def _open(level: int, entry: str, qty: str, tp: str | None) -> None:
-    Position.objects.create(
+async def _open(level: int, entry: str, qty: str, tp: str | None) -> None:
+    await Position.objects.acreate(
         level_index=level,
         entry_price=Decimal(entry),
         qty=Decimal(qty),
@@ -43,74 +44,81 @@ def _open(level: int, entry: str, qty: str, tp: str | None) -> None:
     )
 
 
-def test_status_data_reports_pause_and_open_count() -> None:
-    bot = BotStatus.load()
-    bot.paused = True
-    bot.save()
-    _open(1, "0.02", "100", "0.03")
-    _open(2, "0.025", "100", "0.035")
-    paused, open_count, _started, _hb = repository._status_data()
+async def test_status_data_reports_pause_and_open_count() -> None:
+    def _pause() -> None:
+        bot = BotStatus.load()
+        bot.paused = True
+        bot.save()
+
+    await sync_to_async(_pause)()
+    await _open(1, "0.02", "100", "0.03")
+    await _open(2, "0.025", "100", "0.035")
+    paused, open_count, _started, _hb = await repository.status_data()
     assert paused is True
     assert open_count == 2
 
 
-def test_realized_pnl_since_windows() -> None:
+async def test_realized_pnl_since_windows() -> None:
     now = datetime.now(tz=UTC)
-    _closed("0.02", "5", now - timedelta(hours=1))
-    _closed("0.02", "3", now - timedelta(days=3))
-    _closed("0.02", "2", now - timedelta(days=100))
-    assert repository._realized_pnl_since(None) == Decimal("10")
-    assert repository._realized_pnl_since(now - timedelta(days=1)) == Decimal(
-        "5"
-    )
-    assert repository._realized_pnl_since(now - timedelta(days=7)) == Decimal(
-        "8"
-    )
+    await _closed("0.02", "5", now - timedelta(hours=1))
+    await _closed("0.02", "3", now - timedelta(days=3))
+    await _closed("0.02", "2", now - timedelta(days=100))
+    assert await repository.realized_pnl_since(None) == Decimal("10")
+    assert await repository.realized_pnl_since(
+        now - timedelta(days=1)
+    ) == Decimal("5")
+    assert await repository.realized_pnl_since(
+        now - timedelta(days=7)
+    ) == Decimal("8")
 
 
-def test_realized_pnl_since_empty_is_zero() -> None:
-    assert repository._realized_pnl_since(None) == Decimal(0)
+async def test_realized_pnl_since_empty_is_zero() -> None:
+    assert await repository.realized_pnl_since(None) == Decimal(0)
 
 
-def test_orders_data_ordered_by_level() -> None:
-    _open(5, "0.02", "100", "0.03")
-    _open(2, "0.025", "50", None)
-    rows = repository._orders_data()
+async def test_orders_data_ordered_by_level() -> None:
+    await _open(5, "0.02", "100", "0.03")
+    await _open(2, "0.025", "50", None)
+    rows = await repository.orders_data()
     assert [r[0] for r in rows] == [2, 5]
     assert rows[0] == (2, Decimal("0.025"), Decimal("50"), None)
     assert rows[1][3] == Decimal("0.03")
 
 
-def test_pnl_curve_data_buckets_by_day() -> None:
+async def test_pnl_curve_data_buckets_by_day() -> None:
     day = datetime(2026, 7, 20, 15, 0, tzinfo=UTC)
-    _closed("0.02", "4", day)
-    _closed("0.02", "6", day + timedelta(hours=2))
-    _open(1, "0.02", "100", "0.03")
-    days, base_capital, locked, dates = repository._pnl_curve_data()
+    await _closed("0.02", "4", day)
+    await _closed("0.02", "6", day + timedelta(hours=2))
+    await _open(1, "0.02", "100", "0.03")
+    days, base_capital, locked, dates = await repository.pnl_curve_data()
     assert days == [("20.07", Decimal("10"))]
     assert base_capital == Decimal("2")
     assert len(locked) == len(dates) == 1
 
 
-def test_digest_metrics_counts_and_deployed() -> None:
+async def test_digest_metrics_counts_and_deployed() -> None:
     now = datetime.now(tz=UTC)
-    _closed("0.02", "5", now - timedelta(hours=1))
-    _open(1, "0.02", "100", "0.03")
-    m = repository._digest_metrics()
+    await _closed("0.02", "5", now - timedelta(hours=1))
+    await _open(1, "0.02", "100", "0.03")
+    m = await repository.digest_metrics()
     assert m["closed_24h"] == 1
     assert m["pnl_24h"] == Decimal("5")
     assert m["open_positions"] == 1
     assert m["deployed"] == Decimal("2")
 
 
-def test_unlock_from_db_no_profit_returns_none() -> None:
-    days, per_day = repository._unlock_from_db(Decimal("0.02"))
+async def test_unlock_from_db_no_profit_returns_none() -> None:
+    await sync_to_async(StrategyConfig.load)()
+    days, per_day = await repository.unlock_from_db(Decimal("0.02"))
     assert days is None
     assert per_day == Decimal(0)
 
 
-def test_symbol_reads_config() -> None:
-    cfg = StrategyConfig.load()
-    cfg.symbol = "KASUSDT"
-    cfg.save()
-    assert repository._symbol() == "KASUSDT"
+async def test_symbol_reads_config() -> None:
+    def _set() -> None:
+        cfg = StrategyConfig.load()
+        cfg.symbol = "KASUSDT"
+        cfg.save()
+
+    await sync_to_async(_set)()
+    assert await repository.symbol() == "KASUSDT"

@@ -10,6 +10,7 @@ import pytest
 from asgiref.sync import sync_to_async
 
 from core.exchange.types import Execution, Instrument, Side
+from core.services import repository
 from core.services.events import RecordingEventBus
 from core.services.order_manager import OrderManager
 from core.services.protector import Protector
@@ -498,7 +499,10 @@ async def test_reprotect_places_maker_sell_above_market(
     # market ran up to 60000: the original TP (59500) now sits below market, so
     # the reprotected sell is floored one tick above market instead of
     # crossing.
-    order_id = await protector.reprotect(pos, current_price=Decimal("60000"))
+    sa_pos = await repository.get_position(pos.id)
+    order_id = await protector.reprotect(
+        sa_pos, current_price=Decimal("60000")
+    )
     placed = client.placed[-1]
     assert placed["side"] == Side.SELL
     assert placed["qty"] == Decimal("0.001")
@@ -520,7 +524,8 @@ async def test_reprotect_covers_only_the_unsold_remainder(
         status=PositionStatus.OPEN,
         opened_at=datetime.now(tz=UTC),
     )
-    await protector.reprotect(pos, current_price=Decimal("59000"))
+    sa_pos = await repository.get_position(pos.id)
+    await protector.reprotect(sa_pos, current_price=Decimal("59000"))
     placed = client.placed[-1]
     # only the 0.002 still held is re-listed, never the full 0.005
     assert placed["qty"] == Decimal("0.002")
@@ -543,7 +548,8 @@ async def test_settle_phantom_closes_at_tp_and_frees_level(
         status=PositionStatus.OPEN,
         opened_at=datetime.now(tz=UTC),
     )
-    realized = await protector.settle_phantom(pos)
+    sa_pos = await repository.get_position(pos.id)
+    realized = await protector.settle_phantom(sa_pos)
 
     await sync_to_async(pos.refresh_from_db)()
     assert pos.status == PositionStatus.CLOSED

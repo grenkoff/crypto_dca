@@ -144,6 +144,11 @@ class Position(Base):
     filled_qty: Mapped[Decimal] = mapped_column(_AMOUNT)
     sell_value: Mapped[Decimal] = mapped_column(_AMOUNT)
 
+    @property
+    def remaining_qty(self) -> Decimal:
+        """Coins still held: total bought minus what a TP already sold."""
+        return max(self.qty - self.filled_qty, Decimal(0))
+
 
 class ExecutionLog(Base):
     """Mirror of ``trading_executionlog``."""

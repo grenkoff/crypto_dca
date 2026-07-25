@@ -1,134 +1,180 @@
 """Database access for grid levels, positions, executions and status.
 
-The public API is async so callers ``await`` it directly; the Django ORM
-work runs in a thread via ``sync_to_async``. Phase 3 swaps the private
-sync bodies for native async SQLAlchemy behind this same interface.
+The sole seam between the money core and persistence. Every function is
+async and runs natively on SQLAlchemy ``AsyncSession``: reads open a
+short session, writes wrap a ``session.begin()`` transaction so a
+mid-way failure never leaves a half-applied state.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, cast
+from typing import Any
 
-from asgiref.sync import sync_to_async
-from django.db import transaction
-from django.db.models import F, Max, Min, QuerySet, Sum
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.exchange.types import Execution as BybitExecution
-from core.services.order_common import SellFillResult
-from core.trading.models import (
+from core.db.models import (
     BotStatus,
     CompensationLink,
     ExecutionLog,
     GridLevel,
-    LevelStatus,
     NotificationSettings,
-    OrderSide,
     Position,
-    PositionStatus,
     StrategyConfig,
     TelegramUser,
 )
+from core.db.session import new_session
+from core.exchange.types import Execution as BybitExecution
+from core.services.order_common import SellFillResult
+from core.trading.models import LevelStatus, PositionStatus
+
+_OPEN = PositionStatus.OPEN.value
+_CLOSED = PositionStatus.CLOSED.value
+_AWAITING = LevelStatus.AWAITING_FILL.value
+_IDLE = LevelStatus.IDLE.value
+_FILLED = LevelStatus.FILLED.value
+
+_BOT_DEFAULTS: dict[str, Any] = {
+    "paused": False,
+    "last_heartbeat": None,
+    "last_error": "",
+    "started_at": None,
+    "applied_grid_step": None,
+    "applied_order_qty": None,
+    "pending_credit": Decimal(0),
+}
+
+_NOTIF_DEFAULTS: dict[str, Any] = {
+    "notify_errors": True,
+    "notify_closed": True,
+    "notify_compensation": True,
+    "notify_opened": True,
+    "notify_order_placed": True,
+    "notify_order_cancelled": True,
+    "digest_enabled": True,
+    "digest_time_utc": time(19, 0),
+    "digest_last_sent": None,
+}
 
 
-def _sum(qs: QuerySet[Position], field: str = "realized_pnl") -> Decimal:
-    """Sum ``field`` over the queryset, treating an empty result as 0."""
-    return qs.aggregate(s=Sum(field))["s"] or Decimal(0)
+def _now() -> datetime:
+    return datetime.now(tz=UTC)
 
 
-def _existing_active_levels() -> set[int]:
-    return set(
-        GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL).values_list(
-            "level_index", flat=True
-        )
-    ) | set(
-        Position.objects.filter(status=PositionStatus.OPEN).values_list(
-            "level_index", flat=True
-        )
-    )
+async def _load_bot(session: AsyncSession) -> BotStatus:
+    """Get-or-create the singleton bot-status row (pk=1)."""
+    obj = await session.get(BotStatus, 1)
+    if obj is None:
+        obj = BotStatus(id=1, **_BOT_DEFAULTS)
+        session.add(obj)
+        await session.flush()
+    return obj
+
+
+async def _load_notif(session: AsyncSession) -> NotificationSettings:
+    """Get-or-create the singleton notification-settings row (pk=1)."""
+    obj = await session.get(NotificationSettings, 1)
+    if obj is None:
+        obj = NotificationSettings(id=1, updated_at=_now(), **_NOTIF_DEFAULTS)
+        session.add(obj)
+        await session.flush()
+    return obj
+
+
+async def _get_config(session: AsyncSession) -> StrategyConfig:
+    """Load the singleton strategy config (pk=1); raise if absent."""
+    cfg = await session.get(StrategyConfig, 1)
+    if cfg is None:
+        raise ValueError("StrategyConfig row is missing")
+    return cfg
+
+
+async def _sum(session: AsyncSession, column: Any, *conds: Any) -> Decimal:
+    """Sum ``column`` over rows matching ``conds`` (0 when empty)."""
+    val = await session.scalar(select(func.sum(column)).where(*conds))
+    return val if val is not None else Decimal(0)
+
+
+async def _count(session: AsyncSession, *conds: Any) -> int:
+    """Count positions matching ``conds``."""
+    val = await session.scalar(select(func.count(Position.id)).where(*conds))
+    return int(val or 0)
 
 
 async def existing_active_levels() -> set[int]:
     """Level indices of awaiting-fill grid levels and open positions."""
-    return await sync_to_async(_existing_active_levels)()
-
-
-def _naked_candidates(min_age_seconds: int) -> list[tuple[int, str]]:
-    cutoff = datetime.now(tz=UTC) - timedelta(seconds=min_age_seconds)
-    return [
-        (int(pid), str(oid))
-        for pid, oid in Position.objects.filter(
-            status=PositionStatus.OPEN, opened_at__lt=cutoff
+    async with new_session() as session:
+        levels = await session.scalars(
+            select(GridLevel.level_index).where(GridLevel.status == _AWAITING)
         )
-        .exclude(tp_order_id="")
-        .values_list("id", "tp_order_id")
-    ]
+        positions = await session.scalars(
+            select(Position.level_index).where(Position.status == _OPEN)
+        )
+        return set(levels.all()) | set(positions.all())
 
 
 async def naked_candidates(min_age_seconds: int) -> list[tuple[int, str]]:
     """(id, tp_order_id) for open positions older than the guard window."""
-    return await sync_to_async(_naked_candidates)(min_age_seconds)
-
-
-def _get_open_position(pos_id: int) -> Position | None:
-    return Position.objects.filter(
-        id=pos_id, status=PositionStatus.OPEN
-    ).first()
+    cutoff = _now() - timedelta(seconds=min_age_seconds)
+    async with new_session() as session:
+        rows = await session.execute(
+            select(Position.id, Position.tp_order_id).where(
+                Position.status == _OPEN,
+                Position.opened_at < cutoff,
+                Position.tp_order_id != "",
+            )
+        )
+        return [(int(pid), str(oid)) for pid, oid in rows.all()]
 
 
 async def get_open_position(pos_id: int) -> Position | None:
     """The open position with ``pos_id``, or None."""
-    return await sync_to_async(_get_open_position)(pos_id)
-
-
-def _grid_state(
-    step: Decimal,
-) -> tuple[dict[Decimal, tuple[int, str]], set[Decimal]]:
-    resting = {
-        g.target_buy_price: (int(g.level_index), g.current_buy_order_id)
-        for g in GridLevel.objects.filter(
-            status=LevelStatus.AWAITING_FILL
-        ).exclude(current_buy_order_id="")
-    }
-    held: set[Decimal] = set()
-    for entry in Position.objects.filter(
-        status=PositionStatus.OPEN
-    ).values_list("entry_price", flat=True):
-        k = int((entry / step).to_integral_value(rounding=ROUND_HALF_UP))
-        held.add(Decimal(k) * step)
-    return resting, held
+    async with new_session() as session:
+        found: Position | None = await session.scalar(
+            select(Position).where(
+                Position.id == pos_id, Position.status == _OPEN
+            )
+        )
+        return found
 
 
 async def grid_state(
     step: Decimal,
 ) -> tuple[dict[Decimal, tuple[int, str]], set[Decimal]]:
     """Resting buys keyed by price and the set of held round prices."""
-    return await sync_to_async(_grid_state)(step)
-
-
-def _idle_level(level_index: int) -> None:
-    GridLevel.objects.filter(level_index=level_index).update(
-        status=LevelStatus.IDLE, current_buy_order_id=""
-    )
+    async with new_session() as session:
+        rows = await session.execute(
+            select(
+                GridLevel.target_buy_price,
+                GridLevel.level_index,
+                GridLevel.current_buy_order_id,
+            ).where(
+                GridLevel.status == _AWAITING,
+                GridLevel.current_buy_order_id != "",
+            )
+        )
+        resting = {price: (int(idx), oid) for price, idx, oid in rows.all()}
+        held: set[Decimal] = set()
+        entries = await session.scalars(
+            select(Position.entry_price).where(Position.status == _OPEN)
+        )
+        for entry in entries.all():
+            k = int((entry / step).to_integral_value(rounding=ROUND_HALF_UP))
+            held.add(Decimal(k) * step)
+    return resting, held
 
 
 async def idle_level(level_index: int) -> None:
     """Idle a grid level and clear its buy-order id."""
-    await sync_to_async(_idle_level)(level_index)
-
-
-def _grid_params_changed(grid_step: Decimal, order_qty: Decimal) -> bool:
-    bot = BotStatus.load()
-    if bot.applied_grid_step is None or bot.applied_order_qty is None:
-        bot.applied_grid_step = grid_step
-        bot.applied_order_qty = order_qty
-        bot.save(update_fields=["applied_grid_step", "applied_order_qty"])
-        return False
-    return (
-        bot.applied_grid_step != grid_step
-        or bot.applied_order_qty != order_qty
-    )
+    async with new_session() as session, session.begin():
+        await session.execute(
+            update(GridLevel)
+            .where(GridLevel.level_index == level_index)
+            .values(status=_IDLE, current_buy_order_id="", updated_at=_now())
+        )
 
 
 async def grid_params_changed(grid_step: Decimal, order_qty: Decimal) -> bool:
@@ -137,141 +183,124 @@ async def grid_params_changed(grid_step: Decimal, order_qty: Decimal) -> bool:
     On the first run the applied values are unset, so we adopt the current
     geometry without forcing a rebuild.
     """
-    return await sync_to_async(_grid_params_changed)(grid_step, order_qty)
-
-
-def _reset_all_grid_levels() -> None:
-    GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL).update(
-        status=LevelStatus.IDLE, current_buy_order_id=""
-    )
+    async with new_session() as session, session.begin():
+        bot = await _load_bot(session)
+        if bot.applied_grid_step is None or bot.applied_order_qty is None:
+            bot.applied_grid_step = grid_step
+            bot.applied_order_qty = order_qty
+            return False
+        return (
+            bot.applied_grid_step != grid_step
+            or bot.applied_order_qty != order_qty
+        )
 
 
 async def reset_all_grid_levels() -> None:
     """Idle every awaiting-fill grid level."""
-    await sync_to_async(_reset_all_grid_levels)()
-
-
-def _record_applied_grid_params(
-    grid_step: Decimal, order_qty: Decimal
-) -> None:
-    bot = BotStatus.load()
-    bot.applied_grid_step = grid_step
-    bot.applied_order_qty = order_qty
-    bot.save(update_fields=["applied_grid_step", "applied_order_qty"])
+    async with new_session() as session, session.begin():
+        await session.execute(
+            update(GridLevel)
+            .where(GridLevel.status == _AWAITING)
+            .values(status=_IDLE, current_buy_order_id="", updated_at=_now())
+        )
 
 
 async def record_applied_grid_params(
     grid_step: Decimal, order_qty: Decimal
 ) -> None:
     """Record the grid geometry the buy grid was built with."""
-    await sync_to_async(_record_applied_grid_params)(grid_step, order_qty)
-
-
-def _awaiting_buy_levels() -> list[tuple[int, str]]:
-    return [
-        (int(idx), oid)
-        for idx, oid in GridLevel.objects.filter(
-            status=LevelStatus.AWAITING_FILL
-        )
-        .exclude(current_buy_order_id="")
-        .values_list("level_index", "current_buy_order_id")
-    ]
+    async with new_session() as session, session.begin():
+        bot = await _load_bot(session)
+        bot.applied_grid_step = grid_step
+        bot.applied_order_qty = order_qty
 
 
 async def awaiting_buy_levels() -> list[tuple[int, str]]:
     """(level_index, order_id) for grid levels still expecting a buy fill."""
-    return await sync_to_async(_awaiting_buy_levels)()
-
-
-def _open_tp_order_ids() -> set[str]:
-    return set(
-        Position.objects.filter(status=PositionStatus.OPEN)
-        .exclude(tp_order_id="")
-        .values_list("tp_order_id", flat=True)
-    )
+    async with new_session() as session:
+        rows = await session.execute(
+            select(
+                GridLevel.level_index, GridLevel.current_buy_order_id
+            ).where(
+                GridLevel.status == _AWAITING,
+                GridLevel.current_buy_order_id != "",
+            )
+        )
+        return [(int(idx), oid) for idx, oid in rows.all()]
 
 
 async def open_tp_order_ids() -> set[str]:
     """TP order ids of all open positions."""
-    return await sync_to_async(_open_tp_order_ids)()
-
-
-def _exec_logged(exec_id: str) -> bool:
-    return ExecutionLog.objects.filter(exec_id=exec_id).exists()
+    async with new_session() as session:
+        rows = await session.scalars(
+            select(Position.tp_order_id).where(
+                Position.status == _OPEN, Position.tp_order_id != ""
+            )
+        )
+        return set(rows.all())
 
 
 async def exec_logged(exec_id: str) -> bool:
     """Whether an execution with ``exec_id`` is already recorded."""
-    return await sync_to_async(_exec_logged)(exec_id)
-
-
-def _is_paused() -> bool:
-    return bool(BotStatus.load().paused)
+    async with new_session() as session:
+        found = await session.scalar(
+            select(ExecutionLog.id).where(ExecutionLog.exec_id == exec_id)
+        )
+        return found is not None
 
 
 async def is_paused() -> bool:
     """Whether the bot is paused."""
-    return await sync_to_async(_is_paused)()
-
-
-def _highest_resting_buy() -> Decimal:
-    top = (
-        GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL)
-        .exclude(current_buy_order_id="")
-        .aggregate(m=Max("target_buy_price"))["m"]
-    )
-    return top if top is not None else Decimal(0)
+    async with new_session() as session, session.begin():
+        bot = await _load_bot(session)
+        return bool(bot.paused)
 
 
 async def highest_resting_buy() -> Decimal:
     """Highest resting buy price (nearest market), or 0 if none."""
-    return await sync_to_async(_highest_resting_buy)()
-
-
-def _lowest_resting_tp() -> Decimal | None:
-    bottom = (
-        Position.objects.filter(status=PositionStatus.OPEN)
-        .exclude(tp_order_id="")
-        .exclude(tp_price__isnull=True)
-        .aggregate(m=Min("tp_price"))["m"]
-    )
-    return cast("Decimal | None", bottom)
+    async with new_session() as session:
+        top = await session.scalar(
+            select(func.max(GridLevel.target_buy_price)).where(
+                GridLevel.status == _AWAITING,
+                GridLevel.current_buy_order_id != "",
+            )
+        )
+        return top if top is not None else Decimal(0)
 
 
 async def lowest_resting_tp() -> Decimal | None:
     """Lowest resting take-profit price (bottom of the wall), or None."""
-    return await sync_to_async(_lowest_resting_tp)()
-
-
-def _status_data() -> tuple[bool, int, datetime | None, datetime | None]:
-    bot = BotStatus.load()
-    open_count = Position.objects.filter(status=PositionStatus.OPEN).count()
-    return bot.paused, open_count, bot.started_at, bot.last_heartbeat
+    async with new_session() as session:
+        return await session.scalar(
+            select(func.min(Position.tp_price)).where(
+                Position.status == _OPEN,
+                Position.tp_order_id != "",
+                Position.tp_price.is_not(None),
+            )
+        )
 
 
 async def status_data() -> tuple[bool, int, datetime | None, datetime | None]:
     """(paused, open_position_count, started_at, last_heartbeat)."""
-    return await sync_to_async(_status_data)()
-
-
-def _realized_pnl_since(cutoff: datetime | None) -> Decimal:
-    qs = Position.objects.filter(status=PositionStatus.CLOSED)
-    if cutoff is not None:
-        qs = qs.filter(closed_at__gte=cutoff)
-    return _sum(qs)
+    async with new_session() as session, session.begin():
+        bot = await _load_bot(session)
+        open_count = await _count(session, Position.status == _OPEN)
+        return bot.paused, open_count, bot.started_at, bot.last_heartbeat
 
 
 async def realized_pnl_since(cutoff: datetime | None) -> Decimal:
     """Realized PnL of closed positions since ``cutoff`` (None = all time)."""
-    return await sync_to_async(_realized_pnl_since)(cutoff)
+    conds = [Position.status == _CLOSED]
+    if cutoff is not None:
+        conds.append(Position.closed_at >= cutoff)
+    async with new_session() as session:
+        return await _sum(session, Position.realized_pnl, *conds)
 
 
-def _locked_by_day(dates: list[date]) -> list[Decimal]:
-    rows = list(
-        Position.objects.values_list(
-            "opened_at", "closed_at", "entry_price", "qty", "fees_in"
-        )
-    )
+def _locked_by_day(
+    rows: Sequence[Any],
+    dates: list[date],
+) -> list[Decimal]:
     out: list[Decimal] = []
     for d in dates:
         eod = datetime(d.year, d.month, d.day, tzinfo=UTC) + timedelta(days=1)
@@ -288,297 +317,310 @@ def _locked_by_day(dates: list[date]) -> list[Decimal]:
     return out
 
 
-def _pnl_curve_data() -> tuple[
-    list[tuple[str, Decimal]], Decimal, list[Decimal], list[date]
-]:
-    daily: dict[date, Decimal] = {}
-    for closed_at, realized in (
-        Position.objects.filter(status=PositionStatus.CLOSED)
-        .exclude(closed_at__isnull=True)
-        .values_list("closed_at", "realized_pnl")
-    ):
-        if closed_at is None:
-            continue
-        day = closed_at.date()
-        daily[day] = daily.get(day, Decimal(0)) + realized
-    sorted_dates = sorted(daily)
-    days = [(d.strftime("%d.%m"), daily[d]) for d in sorted_dates]
-
-    base_capital = Decimal(0)
-    for p in Position.objects.filter(status=PositionStatus.OPEN):
-        base_capital += p.entry_price * p.qty + p.fees_in
-    locked = _locked_by_day(sorted_dates)
-    return days, base_capital, locked, sorted_dates
-
-
 async def pnl_curve_data() -> tuple[
     list[tuple[str, Decimal]], Decimal, list[Decimal], list[date]
 ]:
     """Chart inputs: daily realized profit, base, locked USDT, and dates."""
-    return await sync_to_async(_pnl_curve_data)()
+    async with new_session() as session:
+        closed_rows = await session.execute(
+            select(Position.closed_at, Position.realized_pnl).where(
+                Position.status == _CLOSED, Position.closed_at.is_not(None)
+            )
+        )
+        daily: dict[date, Decimal] = {}
+        for closed_at, realized in closed_rows.all():
+            if closed_at is None:
+                continue
+            day = closed_at.date()
+            daily[day] = daily.get(day, Decimal(0)) + realized
+        sorted_dates = sorted(daily)
+        days = [(d.strftime("%d.%m"), daily[d]) for d in sorted_dates]
 
-
-def _unlock_from_db(
-    price: Decimal | None,
-) -> tuple[Decimal | None, Decimal]:
-    closed = Position.objects.filter(status=PositionStatus.CLOSED).exclude(
-        closed_at__isnull=True
-    )
-    realized = closed.aggregate(s=Sum("realized_pnl"))["s"] or Decimal(0)
-    first = (
-        closed.order_by("closed_at")
-        .values_list("closed_at", flat=True)
-        .first()
-    )
-    if first is None or realized <= 0:
-        return None, Decimal(0)
-    now = datetime.now(tz=UTC)
-    span_days = Decimal(str(max((now - first).total_seconds() / 86400, 1.0)))
-    profit_per_day = realized / span_days
-
-    fee = StrategyConfig.load().maker_fee
-    if price is None or profit_per_day <= 0:
-        return None, profit_per_day
-    total_loss = Decimal(0)
-    for entry, qty, fees_in in Position.objects.filter(
-        status=PositionStatus.OPEN
-    ).values_list("entry_price", "qty", "fees_in"):
-        loss = entry * qty + fees_in - price * qty * (Decimal(1) - fee)
-        if loss > 0:
-            total_loss += loss
-    return total_loss / profit_per_day, profit_per_day
+        base_rows = await session.execute(
+            select(Position.entry_price, Position.qty, Position.fees_in).where(
+                Position.status == _OPEN
+            )
+        )
+        base_capital = sum(
+            (entry * qty + fees for entry, qty, fees in base_rows.all()),
+            Decimal(0),
+        )
+        all_rows = await session.execute(
+            select(
+                Position.opened_at,
+                Position.closed_at,
+                Position.entry_price,
+                Position.qty,
+                Position.fees_in,
+            )
+        )
+        locked = _locked_by_day(all_rows.all(), sorted_dates)
+    return days, base_capital, locked, sorted_dates
 
 
 async def unlock_from_db(
     price: Decimal | None,
 ) -> tuple[Decimal | None, Decimal]:
     """Days to unlock the locked loss and avg realized profit per day."""
-    return await sync_to_async(_unlock_from_db)(price)
-
-
-def _orders_data() -> list[tuple[int, Decimal, Decimal, Decimal | None]]:
-    return [
-        (p.level_index, p.entry_price, p.qty, p.tp_price)
-        for p in Position.objects.filter(status=PositionStatus.OPEN).order_by(
-            "level_index"
+    async with new_session() as session:
+        realized = await _sum(
+            session,
+            Position.realized_pnl,
+            Position.status == _CLOSED,
+            Position.closed_at.is_not(None),
         )
-    ]
+        first = await session.scalar(
+            select(func.min(Position.closed_at)).where(
+                Position.status == _CLOSED, Position.closed_at.is_not(None)
+            )
+        )
+        if first is None or realized <= 0:
+            return None, Decimal(0)
+        span = Decimal(str(max((_now() - first).total_seconds() / 86400, 1.0)))
+        profit_per_day = realized / span
+
+        fee = (await _get_config(session)).maker_fee
+        if price is None or profit_per_day <= 0:
+            return None, profit_per_day
+        open_rows = await session.execute(
+            select(Position.entry_price, Position.qty, Position.fees_in).where(
+                Position.status == _OPEN
+            )
+        )
+        total_loss = Decimal(0)
+        for entry, qty, fees_in in open_rows.all():
+            loss = entry * qty + fees_in - price * qty * (Decimal(1) - fee)
+            if loss > 0:
+                total_loss += loss
+    return total_loss / profit_per_day, profit_per_day
 
 
 async def orders_data() -> list[tuple[int, Decimal, Decimal, Decimal | None]]:
     """(level_index, entry_price, qty, tp_price) for open positions."""
-    return await sync_to_async(_orders_data)()
-
-
-def _digest_metrics() -> dict[str, Any]:
-    now = datetime.now(tz=UTC)
-    d24 = now - timedelta(hours=24)
-    week = now - timedelta(days=7)
-    closed = Position.objects.filter(status=PositionStatus.CLOSED)
-    open_qs = Position.objects.filter(status=PositionStatus.OPEN)
-    return {
-        "closed_24h": closed.filter(closed_at__gte=d24).count(),
-        "pnl_24h": _sum(closed.filter(closed_at__gte=d24)),
-        "pnl_week": _sum(closed.filter(closed_at__gte=week)),
-        "pnl_total": _sum(closed),
-        "compensations_24h": CompensationLink.objects.filter(
-            created_at__gte=d24
-        ).count(),
-        "open_positions": open_qs.count(),
-        "deployed": open_qs.aggregate(s=Sum(F("entry_price") * F("qty")))["s"]
-        or Decimal(0),
-    }
+    async with new_session() as session:
+        rows = await session.execute(
+            select(
+                Position.level_index,
+                Position.entry_price,
+                Position.qty,
+                Position.tp_price,
+            )
+            .where(Position.status == _OPEN)
+            .order_by(Position.level_index)
+        )
+        return [(int(idx), e, q, tp) for idx, e, q, tp in rows.all()]
 
 
 async def digest_metrics() -> dict[str, Any]:
     """DB metrics for the daily digest (counts, PnL windows, deployed)."""
-    return await sync_to_async(_digest_metrics)()
-
-
-def _symbol() -> str:
-    return str(StrategyConfig.objects.get(pk=1).symbol)
+    now = _now()
+    d24 = now - timedelta(hours=24)
+    week = now - timedelta(days=7)
+    closed = Position.status == _CLOSED
+    async with new_session() as session:
+        comp_24h = await session.scalar(
+            select(func.count(CompensationLink.id)).where(
+                CompensationLink.created_at >= d24
+            )
+        )
+        deployed = await _sum(
+            session,
+            Position.entry_price * Position.qty,
+            Position.status == _OPEN,
+        )
+        return {
+            "closed_24h": await _count(
+                session, closed, Position.closed_at >= d24
+            ),
+            "pnl_24h": await _sum(
+                session,
+                Position.realized_pnl,
+                closed,
+                Position.closed_at >= d24,
+            ),
+            "pnl_week": await _sum(
+                session,
+                Position.realized_pnl,
+                closed,
+                Position.closed_at >= week,
+            ),
+            "pnl_total": await _sum(session, Position.realized_pnl, closed),
+            "compensations_24h": int(comp_24h or 0),
+            "open_positions": await _count(session, Position.status == _OPEN),
+            "deployed": deployed,
+        }
 
 
 async def symbol() -> str:
     """The configured trading symbol."""
-    return await sync_to_async(_symbol)()
-
-
-def _is_admin(chat_id: int) -> bool:
-    return TelegramUser.objects.filter(chat_id=chat_id, is_admin=True).exists()
+    async with new_session() as session:
+        return str((await _get_config(session)).symbol)
 
 
 async def is_admin(chat_id: int) -> bool:
     """Whether ``chat_id`` is an allow-listed bot admin."""
-    return await sync_to_async(_is_admin)(chat_id)
-
-
-def _admin_chat_ids() -> list[int]:
-    return list(
-        TelegramUser.objects.filter(is_admin=True).values_list(
-            "chat_id", flat=True
+    async with new_session() as session:
+        found = await session.scalar(
+            select(TelegramUser.id).where(
+                TelegramUser.chat_id == chat_id,
+                TelegramUser.is_admin.is_(True),
+            )
         )
-    )
+        return found is not None
 
 
 async def admin_chat_ids() -> list[int]:
     """Chat ids of all admin Telegram users."""
-    return await sync_to_async(_admin_chat_ids)()
-
-
-def _upsert_admin(chat_id: int, label: str) -> bool:
-    _user, created = TelegramUser.objects.update_or_create(
-        chat_id=chat_id,
-        defaults={"is_admin": True, "label": label},
-    )
-    return created
+    async with new_session() as session:
+        rows = await session.scalars(
+            select(TelegramUser.chat_id).where(TelegramUser.is_admin.is_(True))
+        )
+        return [int(c) for c in rows.all()]
 
 
 async def upsert_admin(chat_id: int, label: str) -> bool:
     """Grant admin to ``chat_id``; return True if newly created."""
-    return await sync_to_async(_upsert_admin)(chat_id, label)
-
-
-def _load_notification_settings() -> NotificationSettings:
-    return NotificationSettings.load()
+    async with new_session() as session, session.begin():
+        user = await session.scalar(
+            select(TelegramUser).where(TelegramUser.chat_id == chat_id)
+        )
+        if user is None:
+            session.add(
+                TelegramUser(
+                    chat_id=chat_id,
+                    label=label,
+                    is_admin=True,
+                    created_at=_now(),
+                )
+            )
+            return True
+        user.is_admin = True
+        user.label = label
+        return False
 
 
 async def load_notification_settings() -> NotificationSettings:
     """Load the singleton notification-settings row."""
-    return await sync_to_async(_load_notification_settings)()
-
-
-def _notify_flag(field: str) -> bool:
-    return bool(getattr(NotificationSettings.load(), field))
+    async with new_session() as session, session.begin():
+        return await _load_notif(session)
 
 
 async def notify_flag(field: str) -> bool:
     """Current value of a boolean notification toggle."""
-    return await sync_to_async(_notify_flag)(field)
-
-
-def _toggle_notify_flag(field: str) -> bool:
-    obj = NotificationSettings.load()
-    new_value = not bool(getattr(obj, field))
-    setattr(obj, field, new_value)
-    obj.save(update_fields=[field, "updated_at"])
-    return new_value
+    async with new_session() as session, session.begin():
+        return bool(getattr(await _load_notif(session), field))
 
 
 async def toggle_notify_flag(field: str) -> bool:
     """Flip a boolean notification toggle and return its new value."""
-    return await sync_to_async(_toggle_notify_flag)(field)
-
-
-def _set_digest_time(t: time) -> time:
-    obj = NotificationSettings.load()
-    obj.digest_time_utc = t
-    obj.save(update_fields=["digest_time_utc", "updated_at"])
-    return obj.digest_time_utc
+    async with new_session() as session, session.begin():
+        obj = await _load_notif(session)
+        new_value = not bool(getattr(obj, field))
+        setattr(obj, field, new_value)
+        obj.updated_at = _now()
+        return new_value
 
 
 async def set_digest_time(t: time) -> time:
     """Store the daily-digest time (UTC); return the stored value."""
-    return await sync_to_async(_set_digest_time)(t)
-
-
-def _claim_digest_due() -> bool:
-    s = NotificationSettings.load()
-    if not s.digest_enabled:
-        return False
-    now = datetime.now(tz=UTC)
-    scheduled = datetime.combine(now.date(), s.digest_time_utc, tzinfo=UTC)
-    if now < scheduled or s.digest_last_sent == now.date():
-        return False
-    s.digest_last_sent = now.date()
-    s.save(update_fields=["digest_last_sent", "updated_at"])
-    return True
+    async with new_session() as session, session.begin():
+        obj = await _load_notif(session)
+        obj.digest_time_utc = t
+        obj.updated_at = _now()
+        return obj.digest_time_utc
 
 
 async def claim_digest_due() -> bool:
     """Return True and stamp ``digest_last_sent`` iff the digest is due."""
-    return await sync_to_async(_claim_digest_due)()
-
-
-def _upsert_grid_level(
-    level_index: int, price: Decimal, order_id: str
-) -> None:
-    GridLevel.objects.update_or_create(
-        level_index=level_index,
-        defaults={
-            "target_buy_price": price,
-            "current_buy_order_id": order_id,
-            "status": LevelStatus.AWAITING_FILL,
-        },
-    )
+    async with new_session() as session, session.begin():
+        s = await _load_notif(session)
+        if not s.digest_enabled:
+            return False
+        now = _now()
+        scheduled = datetime.combine(now.date(), s.digest_time_utc, tzinfo=UTC)
+        if now < scheduled or s.digest_last_sent == now.date():
+            return False
+        s.digest_last_sent = now.date()
+        s.updated_at = now
+        return True
 
 
 async def upsert_grid_level(
     level_index: int, price: Decimal, order_id: str
 ) -> None:
     """Create/refresh a grid level as awaiting-fill with its buy order."""
-    await sync_to_async(_upsert_grid_level)(level_index, price, order_id)
-
-
-def _find_level_by_order_id(order_id: str) -> GridLevel | None:
-    return GridLevel.objects.filter(current_buy_order_id=order_id).first()
+    async with new_session() as session, session.begin():
+        level = await session.scalar(
+            select(GridLevel).where(GridLevel.level_index == level_index)
+        )
+        if level is None:
+            session.add(
+                GridLevel(
+                    level_index=level_index,
+                    target_buy_price=price,
+                    current_buy_order_id=order_id,
+                    status=_AWAITING,
+                    updated_at=_now(),
+                )
+            )
+            return
+        level.target_buy_price = price
+        level.current_buy_order_id = order_id
+        level.status = _AWAITING
+        level.updated_at = _now()
 
 
 async def find_level_by_order_id(order_id: str) -> GridLevel | None:
     """The grid level resting the given buy order id, or None."""
-    return await sync_to_async(_find_level_by_order_id)(order_id)
-
-
-def _find_open_position_by_tp_order(order_id: str) -> Position | None:
-    return Position.objects.filter(
-        tp_order_id=order_id, status=PositionStatus.OPEN
-    ).first()
+    async with new_session() as session:
+        found: GridLevel | None = await session.scalar(
+            select(GridLevel).where(GridLevel.current_buy_order_id == order_id)
+        )
+        return found
 
 
 async def find_open_position_by_tp_order(order_id: str) -> Position | None:
     """The open position whose take-profit is the given order id, or None."""
-    return await sync_to_async(_find_open_position_by_tp_order)(order_id)
+    async with new_session() as session:
+        found: Position | None = await session.scalar(
+            select(Position).where(
+                Position.tp_order_id == order_id, Position.status == _OPEN
+            )
+        )
+        return found
 
 
-def _log_execution(execution: BybitExecution) -> None:
-    ExecutionLog.objects.update_or_create(
-        exec_id=execution.exec_id,
-        defaults={
-            "order_id": execution.order_id,
-            "symbol": execution.symbol,
-            "side": OrderSide(execution.side.value),
-            "price": execution.price,
-            "qty": execution.qty,
-            "fee": execution.fee,
-            "fee_coin": execution.fee_coin,
-            "executed_at": execution.executed_at,
-        },
-    )
-
-
-def _persist_buy_fill(
-    *,
-    execution: BybitExecution,
-    level_index: int,
-    fees_in: Decimal,
-    tp_price: Decimal,
-    tp_order_id: str,
+async def _log_execution(
+    session: AsyncSession, execution: BybitExecution
 ) -> None:
-    with transaction.atomic():
-        Position.objects.create(
-            level_index=level_index,
-            entry_price=execution.price,
-            qty=execution.qty,
-            fees_in=fees_in,
-            tp_order_id=tp_order_id,
-            tp_price=tp_price,
-            status=PositionStatus.OPEN,
-            opened_at=execution.executed_at,
+    """Upsert one execution row (idempotent audit trail)."""
+    row = await session.scalar(
+        select(ExecutionLog).where(ExecutionLog.exec_id == execution.exec_id)
+    )
+    if row is None:
+        session.add(
+            ExecutionLog(
+                exec_id=execution.exec_id,
+                order_id=execution.order_id,
+                symbol=execution.symbol,
+                side=execution.side.value,
+                price=execution.price,
+                qty=execution.qty,
+                fee=execution.fee,
+                fee_coin=execution.fee_coin,
+                executed_at=execution.executed_at,
+                received_at=_now(),
+            )
         )
-        GridLevel.objects.filter(level_index=level_index).update(
-            status=LevelStatus.FILLED, current_buy_order_id=""
-        )
-        _log_execution(execution)
+        return
+    row.order_id = execution.order_id
+    row.symbol = execution.symbol
+    row.side = execution.side.value
+    row.price = execution.price
+    row.qty = execution.qty
+    row.fee = execution.fee
+    row.fee_coin = execution.fee_coin
+    row.executed_at = execution.executed_at
 
 
 async def persist_buy_fill(
@@ -590,60 +632,30 @@ async def persist_buy_fill(
     tp_order_id: str,
 ) -> None:
     """Open a position, mark its level filled, log the fill (atomic)."""
-    await sync_to_async(_persist_buy_fill)(
-        execution=execution,
-        level_index=level_index,
-        fees_in=fees_in,
-        tp_price=tp_price,
-        tp_order_id=tp_order_id,
-    )
-
-
-def _apply_sell_fill(
-    *,
-    position: Position,
-    execution: BybitExecution,
-    fees_out: Decimal,
-    lot_size: Decimal,
-) -> SellFillResult:
-    with transaction.atomic():
-        if ExecutionLog.objects.filter(exec_id=execution.exec_id).exists():
-            remaining = max(position.qty - position.filled_qty, Decimal(0))
-            return SellFillResult(
-                closed=position.status == PositionStatus.CLOSED,
-                realized=position.realized_pnl,
-                filled_qty=position.filled_qty,
-                remaining=remaining,
+    async with new_session() as session, session.begin():
+        session.add(
+            Position(
+                level_index=level_index,
+                entry_price=execution.price,
+                qty=execution.qty,
+                fees_in=fees_in,
+                fees_out=Decimal(0),
+                filled_qty=Decimal(0),
+                sell_value=Decimal(0),
+                tp_order_id=tp_order_id,
+                tp_price=tp_price,
+                status=_OPEN,
+                realized_pnl=Decimal(0),
+                compensation_credit=Decimal(0),
+                opened_at=execution.executed_at,
             )
-        position.filled_qty += execution.qty
-        position.sell_value += execution.price * execution.qty
-        position.fees_out += fees_out
-        remaining = position.qty - position.filled_qty
-        closed = remaining < lot_size
-        if closed:
-            realized = (
-                position.sell_value
-                - position.fees_out
-                - position.entry_price * position.qty
-                - position.fees_in
-            )
-            position.realized_pnl = realized
-            position.status = PositionStatus.CLOSED
-            position.closed_at = execution.executed_at
-        else:
-            realized = Decimal(0)
-        position.save()
-        if closed:
-            GridLevel.objects.filter(level_index=position.level_index).update(
-                status=LevelStatus.IDLE, current_buy_order_id=""
-            )
-        _log_execution(execution)
-    return SellFillResult(
-        closed=closed,
-        realized=realized,
-        filled_qty=position.filled_qty,
-        remaining=max(remaining, Decimal(0)),
-    )
+        )
+        await session.execute(
+            update(GridLevel)
+            .where(GridLevel.level_index == level_index)
+            .values(status=_FILLED, current_buy_order_id="", updated_at=_now())
+        )
+        await _log_execution(session, execution)
 
 
 async def apply_sell_fill(
@@ -659,159 +671,143 @@ async def apply_sell_fill(
     realized PnL is from actual accumulated proceeds and the full entry cost.
     Idempotent on ``exec_id`` (the WS may redeliver).
     """
-    return await sync_to_async(_apply_sell_fill)(
-        position=position,
-        execution=execution,
-        fees_out=fees_out,
-        lot_size=lot_size,
-    )
-
-
-def _set_tp(*, target: Position, tp_price: Decimal, tp_order_id: str) -> None:
-    target.tp_price = tp_price
-    target.tp_order_id = tp_order_id
-    target.save(update_fields=["tp_price", "tp_order_id"])
+    async with new_session() as session, session.begin():
+        pos = await session.get(Position, position.id, with_for_update=True)
+        if pos is None:
+            raise ValueError(f"position {position.id} vanished")
+        already = await session.scalar(
+            select(ExecutionLog.id).where(
+                ExecutionLog.exec_id == execution.exec_id
+            )
+        )
+        if already is not None:
+            remaining = max(pos.qty - pos.filled_qty, Decimal(0))
+            return SellFillResult(
+                closed=pos.status == _CLOSED,
+                realized=pos.realized_pnl,
+                filled_qty=pos.filled_qty,
+                remaining=remaining,
+            )
+        pos.filled_qty += execution.qty
+        pos.sell_value += execution.price * execution.qty
+        pos.fees_out += fees_out
+        remaining = pos.qty - pos.filled_qty
+        closed = remaining < lot_size
+        if closed:
+            realized = (
+                pos.sell_value
+                - pos.fees_out
+                - pos.entry_price * pos.qty
+                - pos.fees_in
+            )
+            pos.realized_pnl = realized
+            pos.status = _CLOSED
+            pos.closed_at = execution.executed_at
+        else:
+            realized = Decimal(0)
+        if closed:
+            await session.execute(
+                update(GridLevel)
+                .where(GridLevel.level_index == pos.level_index)
+                .values(
+                    status=_IDLE, current_buy_order_id="", updated_at=_now()
+                )
+            )
+        await _log_execution(session, execution)
+        return SellFillResult(
+            closed=closed,
+            realized=realized,
+            filled_qty=pos.filled_qty,
+            remaining=max(remaining, Decimal(0)),
+        )
 
 
 async def set_tp(
     *, target: Position, tp_price: Decimal, tp_order_id: str
 ) -> None:
     """Persist a new take-profit price and order id on a position."""
-    await sync_to_async(_set_tp)(
-        target=target, tp_price=tp_price, tp_order_id=tp_order_id
-    )
-
-
-def _get_position(pos_id: int) -> Position:
-    return Position.objects.get(id=pos_id)
+    async with new_session() as session, session.begin():
+        await session.execute(
+            update(Position)
+            .where(Position.id == target.id)
+            .values(tp_price=tp_price, tp_order_id=tp_order_id)
+        )
 
 
 async def get_position(pos_id: int) -> Position:
     """Fetch a position by id (raises if absent)."""
-    return await sync_to_async(_get_position)(pos_id)
-
-
-def _open_positions() -> list[Position]:
-    return list(Position.objects.filter(status=PositionStatus.OPEN))
+    async with new_session() as session:
+        pos = await session.get(Position, pos_id)
+        if pos is None:
+            raise ValueError(f"position {pos_id} not found")
+        return pos
 
 
 async def open_positions() -> list[Position]:
     """All open positions (callers map to their own value objects)."""
-    return await sync_to_async(_open_positions)()
-
-
-def _load_pending() -> Decimal:
-    return BotStatus.load().pending_credit
+    async with new_session() as session:
+        rows = await session.scalars(
+            select(Position).where(Position.status == _OPEN)
+        )
+        return list(rows.all())
 
 
 async def load_pending() -> Decimal:
     """The banked pending-compensation credit."""
-    return await sync_to_async(_load_pending)()
-
-
-def _bank_pending(value: Decimal) -> None:
-    status = BotStatus.load()
-    status.pending_credit = value
-    status.save(update_fields=["pending_credit"])
+    async with new_session() as session, session.begin():
+        return (await _load_bot(session)).pending_credit
 
 
 async def bank_pending(value: Decimal) -> None:
     """Persist the banked pending-compensation credit."""
-    await sync_to_async(_bank_pending)(value)
-
-
-def _active_buy_order_ids() -> set[str]:
-    return set(
-        GridLevel.objects.filter(status=LevelStatus.AWAITING_FILL)
-        .exclude(current_buy_order_id="")
-        .values_list("current_buy_order_id", flat=True)
-    )
+    async with new_session() as session, session.begin():
+        (await _load_bot(session)).pending_credit = value
 
 
 async def active_buy_order_ids() -> set[str]:
     """Order ids of all resting (awaiting-fill) buy levels."""
-    return await sync_to_async(_active_buy_order_ids)()
-
-
-def _heartbeat() -> None:
-    status = BotStatus.load()
-    status.last_heartbeat = datetime.now(tz=UTC)
-    status.save()
+    async with new_session() as session:
+        rows = await session.scalars(
+            select(GridLevel.current_buy_order_id).where(
+                GridLevel.status == _AWAITING,
+                GridLevel.current_buy_order_id != "",
+            )
+        )
+        return set(rows.all())
 
 
 async def heartbeat() -> None:
     """Stamp the bot's last-heartbeat time."""
-    await sync_to_async(_heartbeat)()
-
-
-def _close_at_price(
-    *, position: Position, price: Decimal, maker_fee: Decimal
-) -> Decimal:
-    with transaction.atomic():
-        remaining = position.remaining_qty
-        sell_value = position.sell_value + price * remaining
-        fees_out = position.fees_out + price * remaining * maker_fee
-        realized = (
-            sell_value
-            - fees_out
-            - position.entry_price * position.qty
-            - position.fees_in
-        )
-        position.filled_qty = position.qty
-        position.sell_value = sell_value
-        position.fees_out = fees_out
-        position.realized_pnl = realized
-        position.status = PositionStatus.CLOSED
-        position.closed_at = datetime.now(tz=UTC)
-        position.save(
-            update_fields=[
-                "filled_qty",
-                "sell_value",
-                "fees_out",
-                "realized_pnl",
-                "status",
-                "closed_at",
-            ]
-        )
-        GridLevel.objects.filter(level_index=position.level_index).update(
-            status=LevelStatus.IDLE, current_buy_order_id=""
-        )
-    return realized
+    async with new_session() as session, session.begin():
+        (await _load_bot(session)).last_heartbeat = _now()
 
 
 async def close_at_price(
     *, position: Position, price: Decimal, maker_fee: Decimal
 ) -> Decimal:
     """Mark a position sold in full at ``price`` (maker), free its level."""
-    return await sync_to_async(_close_at_price)(
-        position=position, price=price, maker_fee=maker_fee
-    )
-
-
-def _record_compensation(
-    *,
-    target: Position,
-    new_tp_price: Decimal,
-    new_tp_order_id: str,
-    new_credit: Decimal,
-    credit_drawn: Decimal,
-    source_position_id: int,
-    new_pending: Decimal,
-) -> None:
-    with transaction.atomic():
-        target.tp_price = new_tp_price
-        target.tp_order_id = new_tp_order_id
-        target.compensation_credit = new_credit
-        target.save()
-        CompensationLink.objects.create(
-            profitable_position_id=source_position_id,
-            compensated_position_id=target.id,
-            profit_applied=credit_drawn,
-            new_tp_price=new_tp_price,
+    async with new_session() as session, session.begin():
+        pos = await session.get(Position, position.id, with_for_update=True)
+        if pos is None:
+            raise ValueError(f"position {position.id} vanished")
+        remaining = pos.remaining_qty
+        sell_value = pos.sell_value + price * remaining
+        fees_out = pos.fees_out + price * remaining * maker_fee
+        realized = (
+            sell_value - fees_out - pos.entry_price * pos.qty - pos.fees_in
         )
-        status = BotStatus.load()
-        status.pending_credit = new_pending
-        status.save(update_fields=["pending_credit"])
+        pos.filled_qty = pos.qty
+        pos.sell_value = sell_value
+        pos.fees_out = fees_out
+        pos.realized_pnl = realized
+        pos.status = _CLOSED
+        pos.closed_at = _now()
+        await session.execute(
+            update(GridLevel)
+            .where(GridLevel.level_index == pos.level_index)
+            .values(status=_IDLE, current_buy_order_id="", updated_at=_now())
+        )
+        return realized
 
 
 async def record_compensation(
@@ -825,44 +821,23 @@ async def record_compensation(
     new_pending: Decimal,
 ) -> None:
     """Apply a compensation move and bank the remaining pool (atomic)."""
-    await sync_to_async(_record_compensation)(
-        target=target,
-        new_tp_price=new_tp_price,
-        new_tp_order_id=new_tp_order_id,
-        new_credit=new_credit,
-        credit_drawn=credit_drawn,
-        source_position_id=source_position_id,
-        new_pending=new_pending,
-    )
-
-
-def _apply_merge(
-    *,
-    survivor_id: int,
-    combined_qty: Decimal,
-    weighted_entry: Decimal,
-    combined_fees_in: Decimal,
-    new_tp_order_id: str,
-    new_tp_price: Decimal,
-    absorbed_ids: list[int],
-) -> None:
-    with transaction.atomic():
-        survivor = Position.objects.select_for_update().get(id=survivor_id)
-        survivor.qty = combined_qty
-        survivor.entry_price = weighted_entry
-        survivor.fees_in = combined_fees_in
-        survivor.tp_order_id = new_tp_order_id
-        survivor.tp_price = new_tp_price
-        survivor.save(
-            update_fields=[
-                "qty",
-                "entry_price",
-                "fees_in",
-                "tp_order_id",
-                "tp_price",
-            ]
+    async with new_session() as session, session.begin():
+        tgt = await session.get(Position, target.id, with_for_update=True)
+        if tgt is None:
+            raise ValueError(f"position {target.id} vanished")
+        tgt.tp_price = new_tp_price
+        tgt.tp_order_id = new_tp_order_id
+        tgt.compensation_credit = new_credit
+        session.add(
+            CompensationLink(
+                profitable_position_id=source_position_id,
+                compensated_position_id=tgt.id,
+                profit_applied=credit_drawn,
+                new_tp_price=new_tp_price,
+                created_at=_now(),
+            )
         )
-        Position.objects.filter(id__in=absorbed_ids).delete()
+        (await _load_bot(session)).pending_credit = new_pending
 
 
 async def apply_merge(
@@ -876,12 +851,17 @@ async def apply_merge(
     absorbed_ids: list[int],
 ) -> None:
     """Rewrite the survivor lot and delete the absorbed ones (atomic)."""
-    await sync_to_async(_apply_merge)(
-        survivor_id=survivor_id,
-        combined_qty=combined_qty,
-        weighted_entry=weighted_entry,
-        combined_fees_in=combined_fees_in,
-        new_tp_order_id=new_tp_order_id,
-        new_tp_price=new_tp_price,
-        absorbed_ids=absorbed_ids,
-    )
+    async with new_session() as session, session.begin():
+        survivor = await session.get(
+            Position, survivor_id, with_for_update=True
+        )
+        if survivor is None:
+            raise ValueError(f"position {survivor_id} vanished")
+        survivor.qty = combined_qty
+        survivor.entry_price = weighted_entry
+        survivor.fees_in = combined_fees_in
+        survivor.tp_order_id = new_tp_order_id
+        survivor.tp_price = new_tp_price
+        await session.execute(
+            delete(Position).where(Position.id.in_(absorbed_ids))
+        )

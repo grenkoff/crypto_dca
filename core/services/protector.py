@@ -6,13 +6,14 @@ from decimal import Decimal
 
 import structlog
 
+from core.db.models import Position
 from core.exchange.bybit import BybitClient
 from core.exchange.types import Instrument, Side
 from core.services import repository
 from core.services.events import EventBus
 from core.services.order_common import link_id
 from core.strategy.rounding import min_notional_price, next_tick_above
-from core.trading.models import Position, StrategyConfig
+from core.trading.models import StrategyConfig
 
 log = structlog.get_logger()
 

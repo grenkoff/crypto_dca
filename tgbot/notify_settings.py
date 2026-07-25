@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from datetime import time
 
+from core.db.models import NotificationSettings
 from core.services import repository
-from core.trading.models import NotificationSettings
 
 EVENT_TOGGLE: dict[str, str] = {
     "error": "notify_errors",

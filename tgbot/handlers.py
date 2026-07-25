@@ -15,7 +15,7 @@ from aiogram.types import (
     Message,
 )
 
-from core.trading.models import NotificationSettings
+from core.db.models import NotificationSettings
 from tgbot.charts import render_pnl_chart
 from tgbot.filters import AdminUserFilter
 from tgbot.formatters import (
