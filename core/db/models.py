@@ -1,8 +1,8 @@
-"""SQLAlchemy models mirroring the Django ``trading_*`` tables.
+"""SQLAlchemy models for the ``trading_*`` tables (the source of truth).
 
-Declared to match the live (Django-managed) schema byte-for-byte so
-Alembic autogenerate produces an empty diff. The schema stays owned by
-Django until the Phase 3 cutover; these only read/write the same tables.
+Column types, indexes and constraints match the live schema (originally
+created by Django, now owned here). Python-side defaults mirror the old
+model defaults so construction is ergonomic without changing the DDL.
 """
 
 from __future__ import annotations

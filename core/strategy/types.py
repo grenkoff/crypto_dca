@@ -1,4 +1,4 @@
-"""Pure value types for the strategy engine (no Django dependency)."""
+"""Pure value types for the strategy engine (no I/O or ORM dependency)."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ class GridLevelSpec:
 class OpenPosition:
     """View of an open position as the strategy engine needs it.
 
-    Decoupled from the Django model so the engine is unit-testable without a
+    Decoupled from the ORM model so the engine is unit-testable without a
     DB.
     """
 

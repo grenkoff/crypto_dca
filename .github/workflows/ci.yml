@@ -61,7 +61,7 @@ jobs:
 
       - name: Pylint duplicate-code (DRY)
         run: >-
-          uv run pylint core tgbot trader web manage.py
+          uv run pylint core tgbot trader cli
           --disable=all --enable=duplicate-code
 
       - name: Transaction checks (ACID)
@@ -69,9 +69,6 @@ jobs:
 
       - name: Import contracts (layer boundaries)
         run: uv run lint-imports
-
-      - name: Django system checks
-        run: uv run python manage.py check
 
       - name: Pytest (unit) + coverage floor
         run: uv run pytest -ra --ignore=tests/integration --cov

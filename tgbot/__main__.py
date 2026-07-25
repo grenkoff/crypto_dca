@@ -13,9 +13,9 @@ log = structlog.get_logger()
 
 async def run() -> None:
     """Start the bot polling, digest scheduler and Redis subscriber."""
-    from core.config.bootstrap import bootstrap_django
+    from core.config.bootstrap import bootstrap
 
-    bootstrap_django()
+    bootstrap()
 
     from aiogram import Bot, Dispatcher
 

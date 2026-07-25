@@ -14,12 +14,11 @@ Run `bash scripts/qa.sh`. It checks, in order:
 - `vulture` — dead code (unused functions/classes/methods); framework
   false positives are whitelisted in `whitelist_vulture.py`
 - `pylint duplicate-code` — DRY (copy-paste of ≥ 8 similar lines)
-- `check_transactions` — ACID/transactions: no `await` inside
-  `transaction.atomic()` (A), and ≥ 2 ORM writes in one function must be
-  wrapped in `atomic()` (B)
+- `check_transactions` — ACID/transactions: no non-DB `await` inside
+  `session.begin()` (A), and ≥ 2 SQLAlchemy writes in one function must be
+  wrapped in `session.begin()` (B)
 - `import-linter` — layer boundaries (SoC): `services > exchange > strategy`,
   `strategy` stays pure, `core` never imports an entrypoint
-- `manage.py check` — Django system checks (models, config, migrations)
 - `pytest` — unit tests **+ coverage floor** on `core` (`fail_under`,
   ratcheted; a drop fails the run)
 
@@ -36,9 +35,9 @@ For each failure:
   dependency direction (move the code or invert the dependency); do not relax
   the contract to make it pass.
 - **Dead code (vulture)** — remove it if it is genuinely unused. If it is a
-  framework false positive (Django `Command`/`Meta`/model fields, aiogram
-  `@router` handlers, pydantic `model_config`, a tested public API method,
-  etc.), append the reported name to `whitelist_vulture.py` (or regenerate:
+  framework false positive (SQLAlchemy `Mapped` columns, aiogram `@router`
+  handlers, Typer `@app.command`, pydantic `model_config`, a tested public API
+  method, etc.), append the reported name to `whitelist_vulture.py` (regen:
   `.venv/bin/vulture <paths> --make-whitelist`), NOT into the real code.
 - **Duplication (pylint)** — if it is the same knowledge, extract a shared
   helper; if it is coincidental (false DRY — similar code that changes for

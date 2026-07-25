@@ -1,4 +1,4 @@
-"""Schema-comparison helpers shared by Alembic and the parity tests."""
+"""Schema-comparison helper for Alembic autogenerate."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ def include_name(
 ) -> bool:
     """Limit Alembic schema comparison to the ``trading_*`` tables.
 
-    The Django ``auth``/``sessions``/``contenttypes`` tables and
-    ``alembic_version`` are ignored so autogenerate does not try to
-    drop them while the schema is still Django-owned.
+    Any residual non-``trading_*`` tables (legacy Django meta/auth,
+    ``alembic_version``) are ignored so autogenerate does not try to
+    drop tables the models do not declare.
     """
     if type_ == "table":
         return name is not None and name.startswith("trading_")

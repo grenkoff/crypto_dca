@@ -19,8 +19,8 @@
 
 ## Comments & docstrings
 
-Applies to working code (`core/`, `tgbot/`, `web/`, `trader/`, `manage.py`) —
-NOT tests or migrations.
+Applies to working code (`core/`, `tgbot/`, `trader/`, `cli/`) — NOT tests
+or migrations.
 
 - **No `#` comments at all** — none. Not even `# type: ignore` / `# noqa` /
   `# pragma` / shebang: fix the underlying issue (annotate, `cast`, move the
@@ -52,11 +52,12 @@ NOT tests or migrations.
      `check_transactions` (ACID), `pytest` (+ coverage floor). Get to
      `QA: ALL GREEN`.
   3. **CI** blocks the merge on all of the above.
-- **`vulture`** flags dead code. Django/aiogram/pydantic produce false
-  positives (`Command`/`Meta`/model fields, `@router` handlers, `model_config`,
-  tested public API); whitelist those in `whitelist_vulture.py` (regenerate
-  with `.venv/bin/vulture <paths> --make-whitelist`), never hollow out real
-  code to satisfy it. Real dead code → remove it.
+- **`vulture`** flags dead code. SQLAlchemy/aiogram/pydantic/Typer produce
+  false positives (`Mapped` model columns, `@router` handlers, `@app.command`
+  CLIs, `model_config`, tested public API); whitelist those in
+  `whitelist_vulture.py` (regenerate with
+  `.venv/bin/vulture <paths> --make-whitelist`), never hollow out real code to
+  satisfy it. Real dead code → remove it.
 - **`pylint --enable=duplicate-code`** flags copy-paste (≥ 8 similar lines);
   we use it instead of jscpd to avoid a Node toolchain. It only sees textual
   duplication — real DRY judgement is still yours.
@@ -68,35 +69,42 @@ exchange is an external, non-transactional system. Write with ACID in mind.
 
 Judgement (write this way):
 
+All DB access lives behind the async DAO (`core/services/repository.py`) on
+SQLAlchemy `AsyncSession`. Reads open a short `new_session()`; writes wrap
+`async with session.begin():`.
+
 - **Atomicity** — a multi-step change is all-or-nothing. Any operation that
   writes more than one row/table as one logical unit (open a position + mark
   the level + log the execution) goes inside a single
-  `with transaction.atomic():` block. Never leave a half-applied state.
+  `async with session.begin():` block. Never leave a half-applied state.
 - **Consistency** — never limp on with data that breaks an invariant; enforce
   it with model constraints/guards and fail fast. A sub-minimum notional, a
   missing TP, a negative qty is a raise, not a silent write.
 - **Isolation** — when a row is read then written under possible concurrency
-  (two fills racing one position/level), take `select_for_update()` inside the
-  atomic block so the read-modify-write can't interleave. Keep transactions
-  short.
+  (two fills racing one position/level), re-fetch it inside the transaction
+  with `with_for_update=True` (`session.get(Model, id, with_for_update=True)`)
+  so the read-modify-write can't interleave. Keep transactions short.
 - **Durability** — after commit the state must survive a crash/restart; that
   is *why* recovery reads from the DB. On reconnect the WS may redeliver, so
   fill handling is **idempotent on `exec_id`** (check-then-write in the same
   transaction) — never double-book.
 - **The exchange is outside the transaction.** Do exchange I/O (place/cancel)
-  *before or after* the atomic block, never while holding it — a network
-  round-trip must not keep row locks open, and the exchange can't roll back.
-  The mismatch this leaves is closed by the reconcile/heal layer
+  *before or after* the `session.begin()` block, never while holding it — a
+  network round-trip must not keep row locks open, and the exchange can't roll
+  back. The mismatch this leaves is closed by the reconcile/heal layer
   (`reconcile_once`, `Healer`, `Compensator._restore_protection`), not by
   pretending the two systems are one unit.
 
 Machine-enforced (a gate, like DRY) — `scripts/check_transactions.py`, in
 `/qa` and CI:
 
-- **A** — no `await` inside `transaction.atomic()` (atomic blocks stay
-  synchronous; keep exchange I/O out of them).
-- **B** — a function with ≥ 2 ORM writes must wrap them in
-  `transaction.atomic()`. Genuinely-independent writes can be exempted in
+- **A** — no non-DB `await` inside `session.begin()`. An async atomic block
+  *must* await the session, so the rule forbids awaiting anything else (a
+  Bybit round-trip, any non-session coroutine): only `session.*` awaits and
+  local DAO helpers are allowed. Keep exchange I/O out of the transaction.
+- **B** — a function with ≥ 2 SQLAlchemy writes (`session.add`,
+  `session.delete`, `session.execute(insert()/update()/delete())`) must wrap
+  them in `session.begin()`. Genuinely-independent writes can be exempted in
   `whitelist_transactions.txt` (`path.py:function`) — prefer fixing over
   exempting.
 
@@ -116,7 +124,7 @@ as a gate, not an afterthought.
   a rule (narrow it in `pyproject.toml` with a reason if truly a false hit).
 - **Dependencies** — `.github/dependabot.yml` opens weekly update PRs for the
   Python deps (uv) and the CI actions. Review and merge them; a known CVE in
-  `pybit`/`aiogram`/`django` is your problem too. `uv sync --frozen` keeps
+  `pybit`/`aiogram`/`sqlalchemy` is your problem too. `uv sync --frozen` keeps
   builds reproducible from `uv.lock`.
 - **Test coverage floor** — `pytest --cov` enforces `fail_under` on `core`
   (ratcheted like the complexity gates). A drop means money-path logic landed
@@ -192,8 +200,9 @@ Smell → pattern (the trigger that justifies it):
 Already in the codebase (recognise, don't reinvent): **Strategy** (`EventBus`
 impls, grid modes), **Observer** (`EventBus`), **Proxy/Decorator**
 (`DryRunBybitClient`), **Facade** (`repository`, the runtime collaborators),
-**Factory** (`BybitClient.from_settings`), **Singleton** (`BotStatus.load`),
-**Command** (Django management commands).
+**Factory** (`BybitClient.from_settings`), **Singleton**
+(`repository.load_config` and the pk=1 get-or-create helpers),
+**Command** (the Typer CLIs in `cli/`).
 
 After a design-touching change, run a **`/patterns`** review pass (advisory,
 after `/qa` is green): for each significant hunk, ask "would a pattern here
@@ -201,31 +210,30 @@ remove real duplication/coupling?" *and* the reverse "is any pattern here
 unnecessary?". For a large redesign, the **`pattern-reviewer`** subagent does
 the same review in depth. Neither blocks a merge — they surface suggestions.
 
-## Cookbook idioms (Python / Django)
+## Cookbook idioms (Python / SQLAlchemy)
 
-Write idiomatic, recipe-driven code — the "cookbook" best practices. FastAPI
-is not used here.
+Write idiomatic, recipe-driven code — the "cookbook" best practices. A FastAPI
+web UI is planned (Phase 5 of the Django removal) but not built yet.
 
-Machine-enforced (a gate) — the lintable recipes are ruff rule groups plus
-Django's own checks, in `/qa` and CI:
+Machine-enforced (a gate) — the lintable recipes are ruff rule groups, in
+`/qa` and CI:
 
 - ruff: `C4` (comprehensions), `RET` (returns), `PIE`, `PTH` (pathlib over
   `os.path`), `PERF` (perflint), `TRY` (exceptions — `log.exception` inside
-  `except`), `LOG`/`G` (logging), `RSE`, `SLF`, `INP`, `N` (naming), `DJ`
-  (flake8-django: `__str__`, `Meta` order). `TRY003` is ignored (inline
-  messages on built-in exceptions are fine).
-- `manage.py check` — Django system checks (models, config, migrations).
+  `except`), `LOG`/`G` (logging), `RSE`, `SLF`, `INP`, `N` (naming). `TRY003`
+  is ignored (inline messages on built-in exceptions are fine).
 
 Judgement (write this way; can't be linted) — for the recipes a linter can't
 see, run the **`/cookbook`** review after a change (advisory, after `/qa`):
 
 - **Settings per environment** — no secrets/hosts hardcoded; read from env.
-- **Query efficiency** — avoid N+1; use `select_related`/`prefetch_related`,
-  `.values_list(...)`, `.exists()`/`.count()` over materializing querysets.
-- **Async ORM** — ORM access from async code goes through `sync_to_async` (or
-  the `a*` API) and multi-write units stay atomic (see ACID).
-- **Migration hygiene** — one logical change per migration; never edit an
-  applied migration; keep them reversible.
+- **Query efficiency** — avoid N+1 and materializing whole rows when you need
+  a column or a count: `select(Model.col)` + `session.scalars(...)`,
+  `select(func.count(...))`, `select(Model.id).where(...)` for existence.
+- **Native async** — the DAO is `async def` on `AsyncSession`; no
+  `sync_to_async`. Multi-write units stay atomic in `session.begin()` (ACID).
+- **Migration hygiene** — Alembic; one logical change per migration; never
+  edit an applied migration; keep them reversible where feasible.
 - **Structlog over `print`** — structured events with kwargs, not f-strings.
 - **Comprehensions** — build collections with a list/dict/set comprehension
   rather than a loop-and-append (the mechanical cases are already gated by
