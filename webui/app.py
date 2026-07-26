@@ -6,14 +6,18 @@ data is read through the async DAO; no control actions live here yet.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import AsyncIterator
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+from core.config.settings import redis_settings
+from core.services.redis_bus import RedisEventBus
 from webui import queries
 
 
@@ -62,6 +66,19 @@ def _to_json(view: queries.DashboardView) -> dict[str, Any]:
     }
 
 
+async def _subscribe_events() -> AsyncIterator[dict[str, Any]]:
+    """Yield trader events from the Redis channel (empty if no Redis)."""
+    url = redis_settings().redis_url
+    if not url:
+        return
+    bus = RedisEventBus(url)
+    try:
+        async for event in bus.subscribe():
+            yield event
+    finally:
+        await bus.close()
+
+
 def create_app() -> FastAPI:
     """Build the dashboard FastAPI application."""
     app = FastAPI(title="crypto_dca dashboard", docs_url=None, redoc_url=None)
@@ -85,7 +102,34 @@ def create_app() -> FastAPI:
             {"d": await queries.dashboard_data()},
         )
 
+    @app.get("/fragment", response_class=HTMLResponse)
+    async def fragment(request: Request) -> HTMLResponse:
+        """Render just the snapshot block (for live in-place refresh)."""
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "_snapshot.html",
+            {"d": await queries.dashboard_data()},
+        )
+
+    @app.websocket("/ws")
+    async def ws_events(websocket: WebSocket) -> None:
+        """Stream trader events to the client until it disconnects."""
+        await websocket.accept()
+        try:
+            async for event in _subscribe_events():
+                await websocket.send_json(event)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await _close_quietly(websocket)
+
     return app
+
+
+async def _close_quietly(websocket: WebSocket) -> None:
+    """Close a WebSocket, ignoring an already-closed connection."""
+    with contextlib.suppress(RuntimeError):
+        await websocket.close()
 
 
 app = create_app()

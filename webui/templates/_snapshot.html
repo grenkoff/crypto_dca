@@ -1,0 +1,60 @@
+<header>
+  <h1>{{ d.symbol }}</h1>
+  {% if d.paused %}
+    <span class="pill pause">paused</span>
+  {% else %}
+    <span class="pill run">running</span>
+  {% endif %}
+  <span class="muted">
+    {% if d.last_heartbeat %}heartbeat {{ d.last_heartbeat.strftime('%Y-%m-%d %H:%M:%S') }} UTC{% else %}no heartbeat{% endif %}
+  </span>
+</header>
+
+<div class="grid">
+  {% set windows = [
+    ('Today', d.pnl_today), ('24h', d.pnl_24h), ('7d', d.pnl_7d),
+    ('30d', d.pnl_30d), ('All time', d.pnl_all)
+  ] %}
+  {% for label, value in windows %}
+  <div class="card">
+    <div class="label">PnL {{ label }}</div>
+    <div class="value {{ 'pos' if value > 0 else ('neg' if value < 0 else '') }}">
+      {{ '%+.2f'|format(value) }}
+    </div>
+  </div>
+  {% endfor %}
+  <div class="card">
+    <div class="label">Open positions</div>
+    <div class="value">{{ d.open_positions }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Deployed (USDT)</div>
+    <div class="value">{{ '%.2f'|format(d.deployed) }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Compensations 24h</div>
+    <div class="value">{{ d.compensations_24h }}</div>
+  </div>
+</div>
+
+<table>
+  <thead>
+    <tr><th>Level</th><th>Entry</th><th>Qty</th><th>Take-profit</th></tr>
+  </thead>
+  <tbody>
+    {% for o in d.orders %}
+    <tr>
+      <td>{{ o.level_index }}</td>
+      <td>{{ o.entry_price|num }}</td>
+      <td>{{ o.qty|num }}</td>
+      <td>{{ o.tp_price|num if o.tp_price is not none else '—' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="empty">No open positions.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="muted gen">
+  Snapshot {{ d.generated_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+</div>

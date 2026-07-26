@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 import pytest
+from fastapi import WebSocketDisconnect
+from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from core.db.models import Position, PositionStatus, StrategyConfig
@@ -68,4 +72,39 @@ async def test_dashboard_html_renders() -> None:
     assert resp.status_code == 200
     assert "KASUSDT" in resp.text
     assert "running" in resp.text
+    assert "Live events" in resp.text
+
+
+async def test_fragment_renders_snapshot_only() -> None:
+    await _seed()
+    async with _client() as client:
+        resp = await client.get("/fragment")
+    assert resp.status_code == 200
     assert "Take-profit" in resp.text
+    assert "<html" not in resp.text.lower()
+
+
+async def _fake_events() -> AsyncIterator[dict[str, Any]]:
+    yield {"type": "position.opened", "payload": {"level": 5}, "ts": 1.0}
+    yield {"type": "order.placed", "payload": {}, "ts": 2.0}
+
+
+def test_ws_streams_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("webui.app._subscribe_events", _fake_events)
+    with TestClient(app).websocket_connect("/ws") as ws:
+        first = ws.receive_json()
+        second = ws.receive_json()
+    assert first["type"] == "position.opened"
+    assert second["type"] == "order.placed"
+
+
+def test_ws_closes_without_redis(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REDIS_URL", "")
+    from core.config import settings
+
+    settings.redis_settings.cache_clear()
+    with (
+        TestClient(app).websocket_connect("/ws") as ws,
+        pytest.raises(WebSocketDisconnect),
+    ):
+        ws.receive_text()
