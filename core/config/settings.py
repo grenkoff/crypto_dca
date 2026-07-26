@@ -58,6 +58,21 @@ class TelegramSettings(BaseSettings):
     bot_token: str = Field(default="")
 
 
+class WebuiSettings(BaseSettings):
+    """Web dashboard bind settings (``WEBUI_*``).
+
+    Defaults to loopback; set ``WEBUI_HOST`` to the WireGuard interface IP
+    so the dashboard is only reachable over the VPN.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", env_prefix="WEBUI_"
+    )
+
+    host: str = Field(default="127.0.0.1")
+    port: int = Field(default=8000)
+
+
 @lru_cache(maxsize=1)
 def bybit_settings() -> BybitSettings:
     """Return the cached Bybit settings."""
@@ -86,3 +101,9 @@ def database_settings() -> DatabaseSettings:
 def telegram_settings() -> TelegramSettings:
     """Return the cached Telegram settings."""
     return TelegramSettings()
+
+
+@lru_cache(maxsize=1)
+def webui_settings() -> WebuiSettings:
+    """Return the cached web dashboard settings."""
+    return WebuiSettings()
