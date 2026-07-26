@@ -2,7 +2,7 @@
 
 Bound to ``DATABASE_URL`` via :func:`core.config.settings.database_settings`.
 The DAO (``core.services.repository``) opens sessions through
-:func:`new_session`. Tests rebind the process engine to Django's test
+:func:`new_session`. Tests rebind the process engine to a disposable test
 database via :func:`configure_engine`.
 """
 

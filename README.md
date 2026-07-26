@@ -5,9 +5,9 @@ Long-only grid DCA trading bot for Bybit spot with pairwise loss compensation.
 ## Components
 
 - `trader/` — async trading worker (long-running)
-- `web/` — Django dashboard + config UI + REST API
 - `tgbot/` — Telegram bot (notifications + control commands)
-- `core/` — shared domain code (exchange client, strategy, models, services)
+- `cli/` — operator CLIs (preflight, consolidate, add-admin)
+- `core/` — shared domain code (exchange client, strategy, DAO, services)
 
 ## Local setup
 
@@ -15,16 +15,15 @@ Long-only grid DCA trading bot for Bybit spot with pairwise loss compensation.
 uv sync
 cp .env.example .env  # fill in secrets
 uv run pre-commit install
-uv run python manage.py migrate
-uv run python manage.py createsuperuser
+uv run alembic upgrade head   # apply DB migrations
 ```
 
 ## Run locally
 
 ```bash
-uv run python manage.py runserver   # web (http://127.0.0.1:8000)
 uv run python -m trader             # trading worker
 uv run python -m tgbot              # telegram bot
+uv run python -m cli preflight      # validate config/credentials/balance
 ```
 
 ## Checks
@@ -73,27 +72,23 @@ Full smoke-test walkthrough: see `docs/DEPLOY.md`.
 
 ## Railway deployment
 
-Three services off the same repo, sharing a single Postgres + Redis plugin:
+Two long-running processes off the same repo, sharing one Postgres + Redis:
 
-| Service | Start command | Config file |
-|---------|---------------|-------------|
-| `web` | `migrate && gunicorn web.wsgi:application --bind 0.0.0.0:$PORT` | `railway.json` (default) |
-| `trader` | `python -m trader` | `railway.trader.json` |
-| `tgbot` | `python -m tgbot` | `railway.tgbot.json` |
+| Process | Start command |
+|---------|---------------|
+| `trader` | `python -m trader` |
+| `tgbot` | `python -m tgbot` |
 
-For each service in the Railway dashboard, set "Config Path" to the matching file. All three services share these env vars:
+Shared env vars:
 
-- `DATABASE_URL` — auto-injected from the Postgres plugin
-- `REDIS_URL` — auto-injected from the Redis plugin
+- `DATABASE_URL`, `REDIS_URL`
 - `BYBIT_API_KEY`, `BYBIT_API_SECRET`, `BYBIT_TESTNET`
 - `TELEGRAM_BOT_TOKEN`
-- `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=0`, `DJANGO_ALLOWED_HOSTS=<service-domain>`
 
-First-run after deploy:
-1. Open `web` service shell (or `railway run` locally with prod env): `python manage.py createsuperuser`
-2. `python -m cli add-admin <your_chat_id> --label "Owner"`
-3. Log in at `<web-domain>/admin/`, set up `StrategyConfig` via the dashboard config UI
-4. Ensure `BotStatus.paused = False`
+First-run:
+1. `uv run alembic upgrade head`
+2. `python -m cli preflight` — validate credentials, balance, and config
+3. `python -m cli add-admin <your_chat_id> --label "Owner"`
 5. Restart `trader` service to pick up config
 
 Health check on `web`: `GET /healthz` (unauthenticated, no DB).

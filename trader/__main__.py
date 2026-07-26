@@ -10,10 +10,10 @@ log = structlog.get_logger()
 
 
 async def run() -> None:
-    """Configure logging and Django, build the bus, run the trader."""
-    from core.config.bootstrap import bootstrap_django
+    """Configure logging, build the bus, run the trader."""
+    from core.config.bootstrap import bootstrap
 
-    bootstrap_django()
+    bootstrap()
     from core.config.settings import redis_settings
     from core.services.events import EventBus, NoOpEventBus
     from core.services.redis_bus import RedisEventBus
