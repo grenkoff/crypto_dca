@@ -3,7 +3,6 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="10">
   <title>crypto_dca — {{ d.symbol }}</title>
   <style>
     :root {
@@ -49,71 +48,87 @@
     th { color: var(--muted); font-weight: 600; font-size: 12px; }
     th:first-child, td:first-child { text-align: left; }
     .empty { color: var(--muted); padding: 16px 0; }
-    footer { margin-top: 20px; }
+    .gen { margin-top: 12px; }
+    .feed-wrap { margin-top: 24px; }
+    .feed-head {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--neg); }
+    .dot.on { background: var(--pos); }
+    #feed {
+      max-height: 240px; overflow-y: auto; border: 1px solid var(--line);
+      border-radius: 10px; background: var(--panel);
+    }
+    .ev {
+      padding: 6px 12px; border-bottom: 1px solid var(--line);
+      font-size: 13px; font-variant-numeric: tabular-nums;
+    }
+    .ev:last-child { border-bottom: none; }
+    .ev .t { color: var(--muted); margin-right: 10px; }
+    .ev .k { color: var(--accent); }
+    .feed-empty { padding: 12px; color: var(--muted); font-size: 13px; }
   </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <h1>{{ d.symbol }}</h1>
-    {% if d.paused %}
-      <span class="pill pause">paused</span>
-    {% else %}
-      <span class="pill run">running</span>
-    {% endif %}
-    <span class="muted">
-      {% if d.last_heartbeat %}heartbeat {{ d.last_heartbeat.strftime('%Y-%m-%d %H:%M:%S') }} UTC{% else %}no heartbeat{% endif %}
-    </span>
-  </header>
-
-  <div class="grid">
-    {% set windows = [
-      ('Today', d.pnl_today), ('24h', d.pnl_24h), ('7d', d.pnl_7d),
-      ('30d', d.pnl_30d), ('All time', d.pnl_all)
-    ] %}
-    {% for label, value in windows %}
-    <div class="card">
-      <div class="label">PnL {{ label }}</div>
-      <div class="value {{ 'pos' if value > 0 else ('neg' if value < 0 else '') }}">
-        {{ '%+.2f'|format(value) }}
-      </div>
-    </div>
-    {% endfor %}
-    <div class="card">
-      <div class="label">Open positions</div>
-      <div class="value">{{ d.open_positions }}</div>
-    </div>
-    <div class="card">
-      <div class="label">Deployed (USDT)</div>
-      <div class="value">{{ '%.2f'|format(d.deployed) }}</div>
-    </div>
-    <div class="card">
-      <div class="label">Compensations 24h</div>
-      <div class="value">{{ d.compensations_24h }}</div>
-    </div>
+  <div id="snapshot">
+    {% include "_snapshot.html" %}
   </div>
 
-  <table>
-    <thead>
-      <tr><th>Level</th><th>Entry</th><th>Qty</th><th>Take-profit</th></tr>
-    </thead>
-    <tbody>
-      {% for o in d.orders %}
-      <tr>
-        <td>{{ o.level_index }}</td>
-        <td>{{ o.entry_price|num }}</td>
-        <td>{{ o.qty|num }}</td>
-        <td>{{ o.tp_price|num if o.tp_price is not none else '—' }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="4" class="empty">No open positions.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-
-  <footer class="muted">
-    Generated {{ d.generated_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC · auto-refresh 10s
-  </footer>
+  <div class="feed-wrap">
+    <div class="feed-head">
+      <span id="dot" class="dot"></span>
+      <span class="muted">Live events</span>
+    </div>
+    <div id="feed"><div class="feed-empty">waiting for events…</div></div>
+  </div>
 </div>
+
+<script>
+(function () {
+  const snap = document.getElementById("snapshot");
+  const feed = document.getElementById("feed");
+  const dot = document.getElementById("dot");
+  let empty = true;
+
+  async function refresh() {
+    try {
+      const html = await (await fetch("/fragment")).text();
+      snap.innerHTML = html;
+    } catch (e) { /* keep last snapshot on transient error */ }
+  }
+
+  function addEvent(ev) {
+    if (empty) { feed.innerHTML = ""; empty = false; }
+    const row = document.createElement("div");
+    row.className = "ev";
+    const t = new Date((ev.ts || 0) * 1000).toLocaleTimeString();
+    let detail = "";
+    try { detail = JSON.stringify(ev.payload || {}); } catch (e) {}
+    row.innerHTML =
+      '<span class="t"></span><span class="k"></span> <span class="d"></span>';
+    row.querySelector(".t").textContent = t;
+    row.querySelector(".k").textContent = ev.type || "event";
+    row.querySelector(".d").textContent = detail;
+    feed.prepend(row);
+    while (feed.children.length > 50) feed.removeChild(feed.lastChild);
+  }
+
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(proto + "//" + location.host + "/ws");
+    ws.onopen = () => dot.classList.add("on");
+    ws.onmessage = (e) => {
+      try { addEvent(JSON.parse(e.data)); } catch (err) {}
+      refresh();
+    };
+    ws.onclose = () => { dot.classList.remove("on"); setTimeout(connect, 3000); };
+    ws.onerror = () => ws.close();
+  }
+
+  connect();
+  setInterval(refresh, 30000);
+})();
+</script>
 </body>
 </html>
