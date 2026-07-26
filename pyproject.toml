@@ -16,6 +16,9 @@ dependencies = [
     "asyncpg>=0.31.0",
     "alembic>=1.18.5",
     "typer>=0.27.0",
+    "fastapi>=0.121",
+    "uvicorn[standard]>=0.34",
+    "jinja2>=3.1",
 ]
 
 [dependency-groups]
@@ -32,6 +35,7 @@ dev = [
     "pylint>=4.0.6",
     "hypothesis>=6.161.0",
     "import-linter>=2.13",
+    "httpx>=0.28",
 ]
 
 [tool.ruff]
@@ -105,6 +109,7 @@ paths = [
     "tgbot",
     "trader",
     "cli",
+    "webui",
     "whitelist_vulture.py",
 ]
 ignore_decorators = ["@router.*", "@app.*"]
@@ -142,7 +147,7 @@ show_missing = true
 
 [tool.importlinter]
 # Enforces the separation-of-concerns layering documented in CLAUDE.md.
-root_packages = ["core", "tgbot", "trader", "cli"]
+root_packages = ["core", "tgbot", "trader", "cli", "webui"]
 
 [[tool.importlinter.contracts]]
 name = "core layers: services > exchange > strategy"
@@ -161,7 +166,7 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "core does not import the entrypoints (tgbot / trader / cli)"
+name = "core does not import the entrypoints (tgbot / trader / cli / webui)"
 type = "forbidden"
 source_modules = ["core"]
-forbidden_modules = ["tgbot", "trader", "cli"]
+forbidden_modules = ["tgbot", "trader", "cli", "webui"]

@@ -61,7 +61,7 @@ jobs:
 
       - name: Pylint duplicate-code (DRY)
         run: >-
-          uv run pylint core tgbot trader cli
+          uv run pylint core tgbot trader cli webui
           --disable=all --enable=duplicate-code
 
       - name: Transaction checks (ACID)

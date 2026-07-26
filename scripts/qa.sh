@@ -24,7 +24,7 @@ run "ruff check (PEP 8 + docstrings + unused + complexity)" \
 run "mypy (types)" .venv/bin/mypy .
 run "vulture (dead code)" .venv/bin/vulture
 run "pylint duplicate-code (DRY)" \
-  .venv/bin/pylint core tgbot trader cli \
+  .venv/bin/pylint core tgbot trader cli webui \
   --disable=all --enable=duplicate-code
 run "check_transactions (ACID)" \
   .venv/bin/python scripts/check_transactions.py

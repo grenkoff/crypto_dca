@@ -23,6 +23,7 @@ uv run alembic upgrade head   # apply DB migrations
 ```bash
 uv run python -m trader             # trading worker
 uv run python -m tgbot              # telegram bot
+uv run python -m webui              # read-only dashboard (WEBUI_HOST/PORT)
 uv run python -m cli preflight      # validate config/credentials/balance
 ```
 
