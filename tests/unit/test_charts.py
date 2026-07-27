@@ -35,14 +35,21 @@ def test_pnl_series_equity_is_base_plus_running_profit() -> None:
 def test_render_pnl_chart_returns_png_bytes() -> None:
     days = _days([("01.07", "1"), ("02.07", "0.5"), ("03.07", "-0.2")])
     locked = [Decimal("300"), Decimal("320"), Decimal("310")]
-    price = [0.028, 0.0285, 0.0282]
-    png = render_pnl_chart(days, Decimal("340"), locked, price)
+    ohlc: list[tuple[float, float, float, float] | None] = [
+        (0.028, 0.0282, 0.0279, 0.0281),
+        None,
+        (0.0281, 0.0284, 0.028, 0.0282),
+    ]
+    png = render_pnl_chart(days, Decimal("340"), locked, ohlc)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
     assert len(png) > 1000
 
 
 def test_render_pnl_chart_handles_single_day() -> None:
     png = render_pnl_chart(
-        _days([("01.07", "1")]), Decimal("340"), [Decimal("50")], [0.028]
+        _days([("01.07", "1")]),
+        Decimal("340"),
+        [Decimal("50")],
+        [(0.028, 0.0281, 0.0279, 0.028)],
     )
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
