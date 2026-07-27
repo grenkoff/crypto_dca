@@ -16,6 +16,8 @@ from aiogram.types import (
 )
 
 from core.db.models import NotificationSettings
+from core.services import repository
+from core.services.tokens import hash_token, new_token
 from tgbot.charts import render_pnl_chart
 from tgbot.filters import AdminUserFilter
 from tgbot.formatters import (
@@ -164,3 +166,24 @@ async def cmd_orders(message: Message) -> None:
     """Reply with open positions."""
     snap = await orders_snapshot()
     await message.answer(build_orders(snap), parse_mode="Markdown")
+
+
+@router.message(Command("token"))
+async def cmd_token(message: Message) -> None:
+    """Issue (or rotate) this admin's dashboard control token."""
+    if message.from_user is None:
+        return
+    token = new_token()
+    issued = await repository.issue_control_token(
+        chat_id=message.from_user.id, token_hash=hash_token(token)
+    )
+    if not issued:
+        await message.answer("Could not issue a control token.")
+        return
+    await message.answer(
+        "Dashboard control token (stored once — save it now):\n"
+        f"`{token}`\n\n"
+        "Send it as `Authorization: Bearer <token>` on control actions. "
+        "Run /token again to rotate.",
+        parse_mode="Markdown",
+    )

@@ -27,6 +27,7 @@ from core.db.models import (
     PositionStatus,
     StrategyConfig,
     TelegramUser,
+    WebuiAudit,
 )
 from core.db.session import new_session
 from core.exchange.types import Execution as BybitExecution
@@ -457,6 +458,51 @@ async def load_config() -> StrategyConfig:
         return cfg
 
 
+_CFG_POSITIVE = frozenset({"grid_step", "tp_step", "order_qty_quote"})
+_CFG_NONNEG = frozenset({"min_profit_quote"})
+_CFG_FEES = frozenset({"maker_fee", "taker_fee"})
+_CFG_FIELDS = (
+    _CFG_POSITIVE
+    | _CFG_NONNEG
+    | _CFG_FEES
+    | frozenset({"max_open_orders", "grid_mode", "symbol"})
+)
+
+
+def _validate_config_updates(updates: dict[str, Any]) -> None:
+    """Raise ``ValueError`` on any unknown key or out-of-range value."""
+    for key, value in updates.items():
+        if key not in _CFG_FIELDS:
+            raise ValueError(f"unknown config field: {key}")
+        if key in _CFG_POSITIVE and value <= 0:
+            raise ValueError(f"{key} must be > 0")
+        if key in _CFG_NONNEG and value < 0:
+            raise ValueError(f"{key} must be >= 0")
+        if key in _CFG_FEES and not 0 <= value < Decimal("0.01"):
+            raise ValueError(f"{key} must be in [0, 0.01)")
+        if key == "max_open_orders" and value <= 0:
+            raise ValueError("max_open_orders must be > 0")
+        if key == "grid_mode" and value not in ("absolute", "percent"):
+            raise ValueError("grid_mode must be 'absolute' or 'percent'")
+        if key == "symbol" and not value:
+            raise ValueError("symbol must be non-empty")
+
+
+async def update_config(
+    *, actor: str, updates: dict[str, Any]
+) -> StrategyConfig:
+    """Apply validated strategy-config changes and audit them (atomic)."""
+    _validate_config_updates(updates)
+    async with new_session() as session, session.begin():
+        cfg = await _get_config(session)
+        for key, value in updates.items():
+            setattr(cfg, key, value)
+        cfg.updated_at = _now()
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(updates.items()))
+        session.add(WebuiAudit(actor=actor, action="config", detail=detail))
+        return cfg
+
+
 async def last_heartbeat() -> datetime | None:
     """The bot's last-heartbeat time (None if never stamped)."""
     async with new_session() as session, session.begin():
@@ -511,6 +557,54 @@ async def upsert_admin(chat_id: int, label: str) -> bool:
         user.is_admin = True
         user.label = label
         return False
+
+
+async def issue_control_token(*, chat_id: int, token_hash: str) -> bool:
+    """Store a control-token hash on an admin user; True if applied."""
+    async with new_session() as session, session.begin():
+        user = await session.scalar(
+            select(TelegramUser).where(
+                TelegramUser.chat_id == chat_id,
+                TelegramUser.is_admin.is_(True),
+            )
+        )
+        if user is None:
+            return False
+        user.control_token = token_hash
+        return True
+
+
+async def find_admin_by_token(token_hash: str) -> TelegramUser | None:
+    """The admin user whose control-token hash matches, or None."""
+    async with new_session() as session:
+        found: TelegramUser | None = await session.scalar(
+            select(TelegramUser).where(
+                TelegramUser.control_token == token_hash,
+                TelegramUser.is_admin.is_(True),
+            )
+        )
+        return found
+
+
+async def set_paused(*, paused: bool, actor: str) -> None:
+    """Set the paused flag and record the action (atomic)."""
+    async with new_session() as session, session.begin():
+        bot = await _load_bot(session)
+        bot.paused = paused
+        session.add(
+            WebuiAudit(actor=actor, action="pause" if paused else "resume")
+        )
+
+
+async def recent_audit(limit: int = 20) -> list[WebuiAudit]:
+    """The most recent control-audit rows, newest first."""
+    async with new_session() as session:
+        rows = await session.scalars(
+            select(WebuiAudit)
+            .order_by(WebuiAudit.created_at.desc())
+            .limit(limit)
+        )
+        return list(rows.all())
 
 
 async def load_notification_settings() -> NotificationSettings:
