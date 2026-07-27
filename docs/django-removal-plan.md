@@ -1,6 +1,9 @@
 # Django removal plan — migrate ORM to SQLAlchemy, add FastAPI web UI
 
-**Status:** planning — no code changed yet.
+**Status:** DONE — phases 0–5 implemented and merged to `main` (Django fully
+removed; trader/tgbot/CLI/webui all on SQLAlchemy; FastAPI dashboard built).
+The only remaining step is the live maintenance-stop cutover —
+see `docs/cutover-checklist.md`. This document is kept as the historical plan.
 **Strategy:** incremental DAO-seam (not big-bang).
 **Guiding invariant:** the Postgres schema does **not** change — SQLAlchemy
 maps the existing tables, so there is **no data migration**, only code risk.
