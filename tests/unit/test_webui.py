@@ -89,6 +89,25 @@ async def test_dashboard_html_renders() -> None:
     assert "KASUSDT" in resp.text
     assert "running" in resp.text
     assert "Live events" in resp.text
+    assert "Control" in resp.text
+    assert "Save config" in resp.text
+
+
+async def test_api_config_returns_editable_fields() -> None:
+    await add_rows(StrategyConfig(id=1, symbol="KASUSDT"))
+    async with _client() as client:
+        resp = await client.get("/api/config")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["symbol"] == "KASUSDT"
+    assert "grid_step" in body
+    assert "max_open_orders" in body
+
+
+async def test_api_config_404_when_unconfigured() -> None:
+    async with _client() as client:
+        resp = await client.get("/api/config")
+    assert resp.status_code == 404
 
 
 async def test_fragment_renders_snapshot_only() -> None:

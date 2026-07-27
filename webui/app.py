@@ -134,6 +134,29 @@ def _read_routes(app: FastAPI) -> None:
         """Return the dashboard snapshot as JSON."""
         return JSONResponse(_to_json(await queries.dashboard_data()))
 
+    @app.get("/api/config")
+    async def api_config() -> JSONResponse:
+        """Return the current editable strategy config (for the form)."""
+        try:
+            cfg = await repository.get_config()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404, detail="not configured"
+            ) from exc
+        return JSONResponse(
+            {
+                "symbol": cfg.symbol,
+                "grid_mode": cfg.grid_mode,
+                "grid_step": _num(cfg.grid_step),
+                "tp_step": _num(cfg.tp_step),
+                "order_qty_quote": _num(cfg.order_qty_quote),
+                "min_profit_quote": _num(cfg.min_profit_quote),
+                "maker_fee": _num(cfg.maker_fee),
+                "taker_fee": _num(cfg.taker_fee),
+                "max_open_orders": cfg.max_open_orders,
+            }
+        )
+
     @app.get("/api/audit")
     async def api_audit() -> JSONResponse:
         """Return the recent control-audit entries as JSON."""

@@ -49,16 +49,43 @@
     th:first-child, td:first-child { text-align: left; }
     .empty { color: var(--muted); padding: 16px 0; }
     .gen { margin-top: 12px; }
-    .feed-wrap { margin-top: 24px; }
-    .feed-head {
-      display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+
+    .section { margin-top: 24px; }
+    .section > summary, .section-title {
+      cursor: pointer; color: var(--muted); font-size: 13px;
+      margin-bottom: 8px; user-select: none;
     }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--neg); }
-    .dot.on { background: var(--pos); }
-    #feed {
+    .ctl { border: 1px solid var(--line); border-radius: 10px;
+      background: var(--panel); padding: 14px; }
+    .ctl-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+      margin-bottom: 12px; }
+    input, select {
+      background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+      border-radius: 8px; padding: 6px 10px; font: inherit; min-width: 0;
+    }
+    input:focus, select:focus { outline: 1px solid var(--accent); }
+    .btn {
+      background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+      border-radius: 8px; padding: 6px 14px; cursor: pointer; font: inherit;
+    }
+    .btn:hover { border-color: var(--accent); }
+    .btn.pause-btn { color: var(--neg); border-color: var(--neg); }
+    .btn.resume-btn { color: var(--pos); border-color: var(--pos); }
+    .cfg { display: grid; gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    .cfg label { display: flex; flex-direction: column; gap: 4px;
+      font-size: 12px; color: var(--muted); }
+    .cfg .actions { grid-column: 1 / -1; }
+    .ctl-msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
+    .ctl-msg.ok { color: var(--pos); } .ctl-msg.err { color: var(--neg); }
+
+    #audit, #feed {
       max-height: 240px; overflow-y: auto; border: 1px solid var(--line);
       border-radius: 10px; background: var(--panel);
     }
+    .feed-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--neg); }
+    .dot.on { background: var(--pos); }
     .ev {
       padding: 6px 12px; border-bottom: 1px solid var(--line);
       font-size: 13px; font-variant-numeric: tabular-nums;
@@ -75,7 +102,47 @@
     {% include "_snapshot.html" %}
   </div>
 
-  <div class="feed-wrap">
+  <details class="section">
+    <summary>Control</summary>
+    <div class="ctl">
+      <div class="ctl-row">
+        <input id="token" type="password" style="flex:1"
+               placeholder="control token (from /token in Telegram)">
+        <button id="save-token" class="btn">Save token</button>
+        <span id="token-state" class="muted"></span>
+      </div>
+      <div class="ctl-row">
+        <button id="btn-pause" class="btn pause-btn">Pause</button>
+        <button id="btn-resume" class="btn resume-btn">Resume</button>
+      </div>
+      <form id="cfg-form" class="cfg">
+        <label>grid_step<input name="grid_step" inputmode="decimal"></label>
+        <label>tp_step<input name="tp_step" inputmode="decimal"></label>
+        <label>order_qty_quote<input name="order_qty_quote" inputmode="decimal"></label>
+        <label>min_profit_quote<input name="min_profit_quote" inputmode="decimal"></label>
+        <label>maker_fee<input name="maker_fee" inputmode="decimal"></label>
+        <label>taker_fee<input name="taker_fee" inputmode="decimal"></label>
+        <label>max_open_orders<input name="max_open_orders" inputmode="numeric"></label>
+        <label>grid_mode
+          <select name="grid_mode">
+            <option value="">(unchanged)</option>
+            <option value="absolute">absolute</option>
+            <option value="percent">percent</option>
+          </select>
+        </label>
+        <label>symbol<input name="symbol"></label>
+        <div class="actions"><button type="submit" class="btn">Save config</button></div>
+      </form>
+      <div id="ctl-msg" class="ctl-msg"></div>
+    </div>
+  </details>
+
+  <div class="section">
+    <div class="section-title">Control audit</div>
+    <div id="audit"><div class="feed-empty">no actions yet</div></div>
+  </div>
+
+  <div class="section">
     <div class="feed-head">
       <span id="dot" class="dot"></span>
       <span class="muted">Live events</span>
@@ -86,29 +153,102 @@
 
 <script>
 (function () {
-  const snap = document.getElementById("snapshot");
-  const feed = document.getElementById("feed");
-  const dot = document.getElementById("dot");
-  let empty = true;
+  const $ = (id) => document.getElementById(id);
+  const snap = $("snapshot"), feed = $("feed"), dot = $("dot");
+  const audit = $("audit"), msg = $("ctl-msg");
+  let feedEmpty = true;
+
+  const token = () => localStorage.getItem("ctl_token") || "";
+  function showToken() {
+    $("token-state").textContent = token() ? "token set" : "no token";
+  }
+  function authHeaders() {
+    return {
+      "Authorization": "Bearer " + token(),
+      "Content-Type": "application/json",
+    };
+  }
+  function setMsg(text, ok) {
+    msg.textContent = text;
+    msg.className = "ctl-msg " + (ok ? "ok" : "err");
+  }
 
   async function refresh() {
+    try { snap.innerHTML = await (await fetch("/fragment")).text(); }
+    catch (e) { /* keep last snapshot */ }
+  }
+
+  async function loadAudit() {
     try {
-      const html = await (await fetch("/fragment")).text();
-      snap.innerHTML = html;
-    } catch (e) { /* keep last snapshot on transient error */ }
+      const rows = await (await fetch("/api/audit")).json();
+      if (!rows.length) return;
+      audit.innerHTML = "";
+      for (const r of rows) {
+        const row = document.createElement("div");
+        row.className = "ev";
+        row.innerHTML =
+          '<span class="t"></span><span class="k"></span> <span class="d"></span>';
+        row.querySelector(".t").textContent =
+          new Date(r.at).toLocaleString();
+        row.querySelector(".k").textContent = r.action + " · " + r.actor;
+        row.querySelector(".d").textContent = r.detail || "";
+        audit.appendChild(row);
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  async function control(path) {
+    if (!token()) { setMsg("set a control token first", false); return; }
+    try {
+      const resp = await fetch(path, { method: "POST", headers: authHeaders() });
+      const body = await resp.json().catch(() => ({}));
+      if (resp.ok) { setMsg("ok: " + JSON.stringify(body), true); }
+      else { setMsg("error " + resp.status + ": " + (body.detail || ""), false); }
+    } catch (e) { setMsg("request failed", false); }
+    refresh(); loadAudit();
+  }
+
+  async function submitConfig(ev) {
+    ev.preventDefault();
+    if (!token()) { setMsg("set a control token first", false); return; }
+    const payload = {};
+    for (const el of ev.target.elements) {
+      if (!el.name || el.value === "") continue;
+      payload[el.name] =
+        el.name === "max_open_orders" ? parseInt(el.value, 10) : el.value;
+    }
+    if (!Object.keys(payload).length) { setMsg("nothing to change", false); return; }
+    try {
+      const resp = await fetch("/control/config",
+        { method: "POST", headers: authHeaders(), body: JSON.stringify(payload) });
+      const body = await resp.json().catch(() => ({}));
+      if (resp.ok) { setMsg("config saved: " + JSON.stringify(body), true); }
+      else { setMsg("error " + resp.status + ": " + (body.detail || ""), false); }
+    } catch (e) { setMsg("request failed", false); }
+    refresh(); loadAudit();
+  }
+
+  async function prefillConfig() {
+    try {
+      const cfg = await (await fetch("/api/config")).json();
+      for (const [k, v] of Object.entries(cfg)) {
+        const el = document.querySelector('[name="' + k + '"]');
+        if (el && el.tagName === "INPUT") el.placeholder = "now: " + v;
+      }
+    } catch (e) { /* not configured */ }
   }
 
   function addEvent(ev) {
-    if (empty) { feed.innerHTML = ""; empty = false; }
+    if (feedEmpty) { feed.innerHTML = ""; feedEmpty = false; }
     const row = document.createElement("div");
     row.className = "ev";
-    const t = new Date((ev.ts || 0) * 1000).toLocaleTimeString();
-    let detail = "";
-    try { detail = JSON.stringify(ev.payload || {}); } catch (e) {}
     row.innerHTML =
       '<span class="t"></span><span class="k"></span> <span class="d"></span>';
-    row.querySelector(".t").textContent = t;
+    row.querySelector(".t").textContent =
+      new Date((ev.ts || 0) * 1000).toLocaleTimeString();
     row.querySelector(".k").textContent = ev.type || "event";
+    let detail = "";
+    try { detail = JSON.stringify(ev.payload || {}); } catch (e) {}
     row.querySelector(".d").textContent = detail;
     feed.prepend(row);
     while (feed.children.length > 50) feed.removeChild(feed.lastChild);
@@ -126,6 +266,19 @@
     ws.onerror = () => ws.close();
   }
 
+  $("save-token").addEventListener("click", () => {
+    localStorage.setItem("ctl_token", $("token").value.trim());
+    $("token").value = "";
+    showToken();
+    setMsg("token saved locally", true);
+  });
+  $("btn-pause").addEventListener("click", () => control("/control/pause"));
+  $("btn-resume").addEventListener("click", () => control("/control/resume"));
+  $("cfg-form").addEventListener("submit", submitConfig);
+
+  showToken();
+  prefillConfig();
+  loadAudit();
   connect();
   setInterval(refresh, 30000);
 })();
