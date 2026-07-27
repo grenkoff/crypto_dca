@@ -92,7 +92,8 @@ max-args = 8
 max-returns = 7
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S", "D", "C901", "PLR09", "SLF"]  # tests may poke internals
+"tests/**" = ["S", "D", "C901", "PLR09", "SLF", "RUF001"]  # tests may poke internals
+"tgbot/formatters.py" = ["RUF001"]  # intentional × in rendered math formulas
 "**/migrations/*" = ["E501", "RUF012", "I001", "D"]  # alembic-generated
 "**/__init__.py" = ["D104"]  # keep package __init__ files empty
 "**/forms.py" = ["RUF012"]

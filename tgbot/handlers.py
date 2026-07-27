@@ -21,6 +21,7 @@ from core.services.tokens import hash_token, new_token
 from tgbot.charts import render_pnl_chart
 from tgbot.filters import AdminUserFilter
 from tgbot.formatters import (
+    build_apr,
     build_balance,
     build_orders,
     build_pnl,
@@ -34,6 +35,7 @@ from tgbot.notify_settings import (
     toggle_field,
 )
 from tgbot.queries import (
+    apr_estimate,
     balance_snapshot,
     daily_ohlc,
     orders_snapshot,
@@ -53,7 +55,8 @@ async def cmd_start(message: Message) -> None:
     """Reply with the command list."""
     await message.answer(
         "Crypto DCA bot.\n"
-        "Commands: /status /balance /pnl /orders /notify /digesttime",
+        "Commands: /status /balance /pnl /apr /orders /notify "
+        "/digesttime",
         parse_mode="Markdown",
     )
 
@@ -159,6 +162,13 @@ async def cmd_pnl(message: Message) -> None:
         caption=caption,
         parse_mode="Markdown",
     )
+
+
+@router.message(Command("apr"))
+async def cmd_apr(message: Message) -> None:
+    """Reply with the estimated annual return and its formula."""
+    snap = await apr_estimate()
+    await message.answer(build_apr(snap), parse_mode="Markdown")
 
 
 @router.message(Command("orders"))

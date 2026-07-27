@@ -57,6 +57,18 @@ class DigestSnapshot:
 
 
 @dataclass(frozen=True)
+class AprSnapshot:
+    """Inputs and result for the /apr annual-return estimate."""
+
+    realized: Decimal
+    days: Decimal
+    deployed: Decimal
+    free: Decimal
+    profit_per_day: Decimal
+    apr: Decimal | None
+
+
+@dataclass(frozen=True)
 class OrderRow:
     """One open-position row for the /orders message."""
 
@@ -131,6 +143,31 @@ def build_unlock(locked_now: Decimal, days: Decimal | None) -> str:
         return f"Locked `{locked}` USDT · unlock `n/a`"
     d = days.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return f"Locked `{locked}` USDT · unlock ~`{d}` days"
+
+
+def build_apr(snap: AprSnapshot) -> str:
+    """Render the /apr estimate: the formula and the substituted values."""
+    if snap.apr is None:
+        return (
+            "*Estimated annual return (APR)*\n\n"
+            "_not enough realized profit yet_"
+        )
+    realized = _q(snap.realized, "0.0001")
+    days = _q(snap.days, "0.1")
+    ppd = _q(snap.profit_per_day, "0.0001")
+    deployed = _q(snap.deployed, "0.01")
+    free = _q(snap.free, "0.01")
+    apr = _q(snap.apr, "0.1")
+    return (
+        "*Estimated annual return (APR)*\n\n"
+        "`profit/day = realized / days`\n"
+        "`APR = profit/day × 365 / (locked + free) × 100%`\n\n"
+        f"profit/day = `{realized}` / `{days}` = `{ppd}` USDT\n"
+        f"APR = `{ppd}` × 365 / (`{deployed}` + `{free}`) × 100% "
+        f"≈ `{apr}`%/yr\n\n"
+        "_Extrapolates the realized rate onto committed capital "
+        "(deployed + free); an estimate, not a guarantee._"
+    )
 
 
 def build_orders(snap: OrdersSnapshot) -> str:

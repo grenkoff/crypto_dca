@@ -135,3 +135,14 @@ async def test_pnl_curve_data_caps_at_100_days() -> None:
     assert len(days) == len(dates) == len(locked) == 100
     assert dates[0] == (base + timedelta(days=30)).date()
     assert dates[-1] == (base + timedelta(days=129)).date()
+
+
+async def test_profit_rate_data() -> None:
+    now = datetime.now(tz=UTC)
+    await _closed("0.02", "5", now - timedelta(days=1))
+    await _closed("0.02", "3", now - timedelta(days=10))
+    await _open(1, "0.02", "100", "0.03")
+    realized, span, deployed = await repository.profit_rate_data()
+    assert realized == Decimal("8")
+    assert Decimal("9") < span < Decimal("11")
+    assert deployed == Decimal("2")

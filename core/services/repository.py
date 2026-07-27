@@ -380,6 +380,33 @@ async def unlock_from_db(
     return total_loss / profit_per_day, profit_per_day
 
 
+async def profit_rate_data() -> tuple[Decimal, Decimal, Decimal]:
+    """(all-time realized PnL, span days since first close, deployed cost)."""
+    async with new_session() as session:
+        realized = await _sum(
+            session,
+            Position.realized_pnl,
+            Position.status == _CLOSED,
+            Position.closed_at.is_not(None),
+        )
+        first = await session.scalar(
+            select(func.min(Position.closed_at)).where(
+                Position.status == _CLOSED, Position.closed_at.is_not(None)
+            )
+        )
+        span = (
+            Decimal(str(max((_now() - first).total_seconds() / 86400, 1.0)))
+            if first is not None
+            else Decimal(1)
+        )
+        deployed = await _sum(
+            session,
+            Position.entry_price * Position.qty + Position.fees_in,
+            Position.status == _OPEN,
+        )
+        return realized, span, deployed
+
+
 async def orders_data() -> list[tuple[int, Decimal, Decimal, Decimal | None]]:
     """(level_index, entry_price, qty, tp_price) for open positions."""
     async with new_session() as session:

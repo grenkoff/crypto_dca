@@ -4,11 +4,13 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from tgbot.formatters import (
+    AprSnapshot,
     BalanceSnapshot,
     OrderRow,
     OrdersSnapshot,
     PnlSnapshot,
     StatusSnapshot,
+    build_apr,
     build_balance,
     build_orders,
     build_pnl,
@@ -253,3 +255,35 @@ def test_format_event_compensation_without_old_tp() -> None:
 def test_format_event_unknown_falls_back_to_raw() -> None:
     text = format_event({"type": "weird.thing", "payload": {"foo": "bar"}})
     assert "weird.thing" in text
+
+
+def test_build_apr_shows_general_and_substituted_formulas() -> None:
+    snap = AprSnapshot(
+        realized=Decimal("6.1119"),
+        days=Decimal("22.4"),
+        deployed=Decimal("370.88"),
+        free=Decimal("1.78"),
+        profit_per_day=Decimal("0.2731"),
+        apr=Decimal("26.7"),
+    )
+    text = build_apr(snap)
+    # general formula
+    assert "APR = profit/day × 365 / (locked + free) × 100%" in text
+    # substituted values
+    assert "6.1119" in text
+    assert "22.4" in text
+    assert "370.88" in text
+    assert "1.78" in text
+    assert "26.7" in text
+
+
+def test_build_apr_na_without_realized_profit() -> None:
+    snap = AprSnapshot(
+        realized=Decimal(0),
+        days=Decimal(1),
+        deployed=Decimal(0),
+        free=Decimal(0),
+        profit_per_day=Decimal(0),
+        apr=None,
+    )
+    assert "not enough realized profit yet" in build_apr(snap)
