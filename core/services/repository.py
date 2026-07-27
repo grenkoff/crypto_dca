@@ -380,6 +380,51 @@ async def unlock_from_db(
     return total_loss / profit_per_day, profit_per_day
 
 
+async def profit_rate_data() -> tuple[Decimal, Decimal, Decimal]:
+    """(all-time realized PnL, span days, avg deployed cost over the span).
+
+    ``avg_deployed`` is the time-average of the open-inventory cost basis
+    over each day since the first close — a fairer base than a point-in-time
+    snapshot for annualising an averaged profit rate.
+    """
+    async with new_session() as session:
+        realized = await _sum(
+            session,
+            Position.realized_pnl,
+            Position.status == _CLOSED,
+            Position.closed_at.is_not(None),
+        )
+        first = await session.scalar(
+            select(func.min(Position.closed_at)).where(
+                Position.status == _CLOSED, Position.closed_at.is_not(None)
+            )
+        )
+        if first is None:
+            return realized, Decimal(1), Decimal(0)
+        span = Decimal(str(max((_now() - first).total_seconds() / 86400, 1.0)))
+        rows = list(
+            (
+                await session.execute(
+                    select(
+                        Position.opened_at,
+                        Position.closed_at,
+                        Position.entry_price,
+                        Position.qty,
+                        Position.fees_in,
+                    )
+                )
+            ).all()
+        )
+    start = first.date()
+    today = _now().date()
+    grid = [start + timedelta(days=i) for i in range((today - start).days + 1)]
+    series = _locked_by_day(rows, grid)
+    avg_deployed = (
+        sum(series, Decimal(0)) / len(series) if series else Decimal(0)
+    )
+    return realized, span, avg_deployed
+
+
 async def orders_data() -> list[tuple[int, Decimal, Decimal, Decimal | None]]:
     """(level_index, entry_price, qty, tp_price) for open positions."""
     async with new_session() as session:

@@ -10,6 +10,7 @@ import structlog
 from core.exchange.bybit import BybitClient
 from core.services import repository
 from tgbot.formatters import (
+    AprSnapshot,
     BalanceSnapshot,
     DigestSnapshot,
     OrderRow,
@@ -164,4 +165,33 @@ async def balance_snapshot() -> BalanceSnapshot:
     balances = await client.get_balances()
     return BalanceSnapshot(
         balances={coin: b.free for coin, b in balances.items() if b.total > 0}
+    )
+
+
+async def apr_estimate() -> AprSnapshot:
+    """Assemble the /apr estimate: realized rate over avg committed capital."""
+    realized, days, avg_deployed = await repository.profit_rate_data()
+    free = Decimal(0)
+    try:
+        client = BybitClient.from_settings()
+        balances = await client.get_balances()
+        usdt = balances.get("USDT")
+        if usdt is not None:
+            free = usdt.free
+    except Exception as exc:
+        log.warning("apr.balance_fetch_failed", error=str(exc)[:100])
+    profit_per_day = realized / days if days > 0 else Decimal(0)
+    committed = avg_deployed + free
+    apr = (
+        profit_per_day * 365 / committed * 100
+        if realized > 0 and committed > 0
+        else None
+    )
+    return AprSnapshot(
+        realized=realized,
+        days=days,
+        avg_deployed=avg_deployed,
+        free=free,
+        profit_per_day=profit_per_day,
+        apr=apr,
     )

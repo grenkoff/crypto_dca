@@ -57,6 +57,18 @@ class DigestSnapshot:
 
 
 @dataclass(frozen=True)
+class AprSnapshot:
+    """Inputs and result for the /apr annual-return estimate."""
+
+    realized: Decimal
+    days: Decimal
+    avg_deployed: Decimal
+    free: Decimal
+    profit_per_day: Decimal
+    apr: Decimal | None
+
+
+@dataclass(frozen=True)
 class OrderRow:
     """One open-position row for the /orders message."""
 
@@ -131,6 +143,34 @@ def build_unlock(locked_now: Decimal, days: Decimal | None) -> str:
         return f"Locked `{locked}` USDT · unlock `n/a`"
     d = days.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return f"Locked `{locked}` USDT · unlock ~`{d}` days"
+
+
+_APR_GENERAL = (
+    r"\mathrm{APR} = \frac{\mathrm{realized}\times 365}"
+    r"{\mathrm{days}\times(\overline{\mathrm{locked}}+\mathrm{free})}"
+    r"\times 100\%"
+)
+
+
+def apr_formulas(snap: AprSnapshot) -> tuple[str, str] | None:
+    """LaTeX (general, substituted) for the APR estimate, or None.
+
+    ``locked`` is barred to mark the average deployed capital over the span.
+    """
+    if snap.apr is None:
+        return None
+    realized = _q(snap.realized, "0.0001")
+    days = _q(snap.days, "0.1")
+    avg_deployed = _q(snap.avg_deployed, "0.01")
+    free = _q(snap.free, "0.01")
+    apr = _q(snap.apr, "0.1")
+    num = f"{realized}" + r"\times 365"
+    den = f"{days}" + r"\times(" + f"{avg_deployed}+{free}" + ")"
+    substituted = (
+        r"\mathrm{APR} = \frac{" + num + "}{" + den + r"}\times 100\% "
+        r"\approx " + f"{apr}" + r"\%\,\mathrm{/yr}"
+    )
+    return _APR_GENERAL, substituted
 
 
 def build_orders(snap: OrdersSnapshot) -> str:

@@ -4,11 +4,13 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from tgbot.formatters import (
+    AprSnapshot,
     BalanceSnapshot,
     OrderRow,
     OrdersSnapshot,
     PnlSnapshot,
     StatusSnapshot,
+    apr_formulas,
     build_balance,
     build_orders,
     build_pnl,
@@ -253,3 +255,36 @@ def test_format_event_compensation_without_old_tp() -> None:
 def test_format_event_unknown_falls_back_to_raw() -> None:
     text = format_event({"type": "weird.thing", "payload": {"foo": "bar"}})
     assert "weird.thing" in text
+
+
+def test_apr_formulas_general_and_substituted() -> None:
+    snap = AprSnapshot(
+        realized=Decimal("6.1119"),
+        days=Decimal("22.4"),
+        avg_deployed=Decimal("370.88"),
+        free=Decimal("1.78"),
+        profit_per_day=Decimal("0.2731"),
+        apr=Decimal("26.7"),
+    )
+    result = apr_formulas(snap)
+    assert result is not None
+    general, substituted = result
+    # general LaTeX: a fraction with the symbolic terms; locked is barred
+    assert r"\frac" in general
+    assert r"\mathrm{realized}" in general
+    assert r"\overline{\mathrm{locked}}+\mathrm{free}" in general
+    # substituted LaTeX: the numbers plugged in (avg deployed + free)
+    assert r"\frac{6.1119\times 365}{22.4\times(370.88+1.78)}" in substituted
+    assert r"\approx 26.7" in substituted
+
+
+def test_apr_formulas_none_without_realized_profit() -> None:
+    snap = AprSnapshot(
+        realized=Decimal(0),
+        days=Decimal(1),
+        avg_deployed=Decimal(0),
+        free=Decimal(0),
+        profit_per_day=Decimal(0),
+        apr=None,
+    )
+    assert apr_formulas(snap) is None

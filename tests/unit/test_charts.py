@@ -53,3 +53,11 @@ def test_render_pnl_chart_handles_single_day() -> None:
         [(0.028, 0.0281, 0.0279, 0.028)],
     )
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_render_formulas_returns_png() -> None:
+    from tgbot.charts import render_formulas
+
+    png = render_formulas([r"\mathrm{APR} = \frac{a}{b}\times 100\%"])
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert len(png) > 1000

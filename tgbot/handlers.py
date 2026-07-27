@@ -18,9 +18,10 @@ from aiogram.types import (
 from core.db.models import NotificationSettings
 from core.services import repository
 from core.services.tokens import hash_token, new_token
-from tgbot.charts import render_pnl_chart
+from tgbot.charts import render_formulas, render_pnl_chart
 from tgbot.filters import AdminUserFilter
 from tgbot.formatters import (
+    apr_formulas,
     build_balance,
     build_orders,
     build_pnl,
@@ -34,6 +35,7 @@ from tgbot.notify_settings import (
     toggle_field,
 )
 from tgbot.queries import (
+    apr_estimate,
     balance_snapshot,
     daily_ohlc,
     orders_snapshot,
@@ -53,7 +55,8 @@ async def cmd_start(message: Message) -> None:
     """Reply with the command list."""
     await message.answer(
         "Crypto DCA bot.\n"
-        "Commands: /status /balance /pnl /orders /notify /digesttime",
+        "Commands: /status /balance /pnl /apr /orders /notify "
+        "/digesttime",
         parse_mode="Markdown",
     )
 
@@ -157,6 +160,27 @@ async def cmd_pnl(message: Message) -> None:
     await message.answer_photo(
         BufferedInputFile(png, filename="pnl.png"),
         caption=caption,
+        parse_mode="Markdown",
+    )
+
+
+@router.message(Command("apr"))
+async def cmd_apr(message: Message) -> None:
+    """Reply with the estimated annual return as LaTeX formulas."""
+    snap = await apr_estimate()
+    formulas = apr_formulas(snap)
+    if formulas is None:
+        await message.answer(
+            "Estimated annual return: not enough realized profit yet."
+        )
+        return
+    png = await asyncio.to_thread(render_formulas, list(formulas))
+    await message.answer_photo(
+        BufferedInputFile(png, filename="apr.png"),
+        caption=(
+            "*Estimated annual return (APR)* — extrapolation of the "
+            "realized rate onto committed capital; not a guarantee."
+        ),
         parse_mode="Markdown",
     )
 
