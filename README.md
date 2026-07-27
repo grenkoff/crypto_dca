@@ -90,9 +90,14 @@ First-run:
 1. `uv run alembic upgrade head`
 2. `python -m cli preflight` — validate credentials, balance, and config
 3. `python -m cli add-admin <your_chat_id> --label "Owner"`
-5. Restart `trader` service to pick up config
+4. Restart `trader` service to pick up config
 
-Health check on `web`: `GET /healthz` (unauthenticated, no DB).
+Dashboard (`python -m webui`) is read-only except the control actions
+(`/control/pause` · `/control/resume` · `/control/config`), which require a
+control token: send `/token` to the bot (admin-only) and use it as
+`Authorization: Bearer <token>`.
+
+Health check on `webui`: `GET /healthz` (unauthenticated, no DB).
 
 ## Strategy
 

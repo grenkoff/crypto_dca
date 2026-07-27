@@ -1,7 +1,8 @@
-"""FastAPI dashboard: read-only status, PnL and open positions.
+"""FastAPI dashboard: status/PnL/positions plus authenticated control.
 
-Served behind the WireGuard VPN (bind host from ``WEBUI_*`` settings). All
-data is read through the async DAO; no control actions live here yet.
+Served behind the WireGuard VPN (bind host from ``WEBUI_*`` settings). Reads
+go through the async DAO; control actions require an admin control token
+(``Authorization: Bearer <token>``, issued by the tgbot ``/token``).
 """
 
 from __future__ import annotations
@@ -12,12 +13,23 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from core.config.settings import redis_settings
+from core.services import repository
 from core.services.redis_bus import RedisEventBus
+from core.services.tokens import hash_token
 from webui import queries
 
 
@@ -79,9 +91,38 @@ async def _subscribe_events() -> AsyncIterator[dict[str, Any]]:
         await bus.close()
 
 
-def create_app() -> FastAPI:
-    """Build the dashboard FastAPI application."""
-    app = FastAPI(title="crypto_dca dashboard", docs_url=None, redoc_url=None)
+class ConfigUpdate(BaseModel):
+    """Optional strategy-config fields to change from the dashboard."""
+
+    grid_step: Decimal | None = None
+    tp_step: Decimal | None = None
+    order_qty_quote: Decimal | None = None
+    min_profit_quote: Decimal | None = None
+    maker_fee: Decimal | None = None
+    taker_fee: Decimal | None = None
+    max_open_orders: int | None = None
+    grid_mode: str | None = None
+    symbol: str | None = None
+
+
+async def _require_admin(authorization: str = Header(default="")) -> str:
+    """Resolve the actor from a Bearer control token, or 401."""
+    prefix = "Bearer "
+    token = (
+        authorization[len(prefix) :].strip()
+        if authorization.startswith(prefix)
+        else ""
+    )
+    if not token:
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    user = await repository.find_admin_by_token(hash_token(token))
+    if user is None:
+        raise HTTPException(status_code=401, detail="invalid token")
+    return user.label or str(user.chat_id)
+
+
+def _read_routes(app: FastAPI) -> None:
+    """Register the read-only pages, JSON API and event stream."""
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -93,22 +134,34 @@ def create_app() -> FastAPI:
         """Return the dashboard snapshot as JSON."""
         return JSONResponse(_to_json(await queries.dashboard_data()))
 
+    @app.get("/api/audit")
+    async def api_audit() -> JSONResponse:
+        """Return the recent control-audit entries as JSON."""
+        rows = await repository.recent_audit()
+        return JSONResponse(
+            [
+                {
+                    "actor": r.actor,
+                    "action": r.action,
+                    "detail": r.detail,
+                    "at": r.created_at.isoformat(),
+                }
+                for r in rows
+            ]
+        )
+
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request) -> HTMLResponse:
         """Render the server-side dashboard page."""
         return _TEMPLATES.TemplateResponse(
-            request,
-            "dashboard.html",
-            {"d": await queries.dashboard_data()},
+            request, "dashboard.html", {"d": await queries.dashboard_data()}
         )
 
     @app.get("/fragment", response_class=HTMLResponse)
     async def fragment(request: Request) -> HTMLResponse:
         """Render just the snapshot block (for live in-place refresh)."""
         return _TEMPLATES.TemplateResponse(
-            request,
-            "_snapshot.html",
-            {"d": await queries.dashboard_data()},
+            request, "_snapshot.html", {"d": await queries.dashboard_data()}
         )
 
     @app.websocket("/ws")
@@ -123,6 +176,52 @@ def create_app() -> FastAPI:
         finally:
             await _close_quietly(websocket)
 
+
+def _control_routes(app: FastAPI) -> None:
+    """Register the authenticated control actions."""
+
+    @app.post("/control/pause")
+    async def control_pause(
+        actor: str = Depends(_require_admin),
+    ) -> dict[str, Any]:
+        """Pause the trader (stops placing new buys)."""
+        await repository.set_paused(paused=True, actor=actor)
+        return {"paused": True}
+
+    @app.post("/control/resume")
+    async def control_resume(
+        actor: str = Depends(_require_admin),
+    ) -> dict[str, Any]:
+        """Resume the trader."""
+        await repository.set_paused(paused=False, actor=actor)
+        return {"paused": False}
+
+    @app.post("/control/config")
+    async def control_config(
+        body: ConfigUpdate, actor: str = Depends(_require_admin)
+    ) -> dict[str, Any]:
+        """Apply validated strategy-config changes."""
+        updates = body.model_dump(exclude_none=True)
+        if not updates:
+            raise HTTPException(status_code=400, detail="no fields to update")
+        try:
+            cfg = await repository.update_config(actor=actor, updates=updates)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "symbol": cfg.symbol,
+            "grid_mode": cfg.grid_mode,
+            "grid_step": _num(cfg.grid_step),
+            "order_qty_quote": _num(cfg.order_qty_quote),
+            "max_open_orders": cfg.max_open_orders,
+        }
+
+
+def create_app() -> FastAPI:
+    """Build the dashboard FastAPI application."""
+    app = FastAPI(title="crypto_dca dashboard", docs_url=None, redoc_url=None)
+    _read_routes(app)
+    _control_routes(app)
     return app
 
 

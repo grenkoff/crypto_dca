@@ -288,3 +288,16 @@ class TelegramUser(Base):
     label: Mapped[str] = mapped_column(String(64), default="")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(_TS, default=_utcnow)
+    control_token: Mapped[str | None] = mapped_column(String(64))
+
+
+class WebuiAudit(Base):
+    """Audit trail of dashboard control actions (who/what/when)."""
+
+    __tablename__ = "webui_audit"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    actor: Mapped[str] = mapped_column(String(64))
+    action: Mapped[str] = mapped_column(String(32))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_utcnow)
