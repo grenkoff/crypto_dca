@@ -69,16 +69,18 @@ Set `TRADER_DRY_RUN=1` to have the trader log intended orders without placing th
 TRADER_DRY_RUN=1 uv run python -m trader
 ```
 
-Full smoke-test walkthrough: see `docs/DEPLOY.md`.
+## Running the bot
 
-## Railway deployment
-
-Two long-running processes off the same repo, sharing one Postgres + Redis:
+Runs on the host (not a PaaS), sharing one Postgres + Redis. Use
+`scripts/restart.sh [trader|tgbot]` to (re)launch a single detached instance
+without leaving orphans. To switch the live bot to a new revision, follow
+`docs/cutover-checklist.md`.
 
 | Process | Start command |
 |---------|---------------|
 | `trader` | `python -m trader` |
 | `tgbot` | `python -m tgbot` |
+| `webui` | `python -m webui` (read-only dashboard + control) |
 
 Shared env vars:
 
