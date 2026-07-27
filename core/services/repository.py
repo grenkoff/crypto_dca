@@ -35,6 +35,7 @@ from core.services.order_common import SellFillResult
 
 _OPEN = str(PositionStatus.OPEN)
 _CLOSED = str(PositionStatus.CLOSED)
+_MAX_CHART_DAYS = 100
 _AWAITING = str(LevelStatus.AWAITING_FILL)
 _IDLE = str(LevelStatus.IDLE)
 _FILLED = str(LevelStatus.FILLED)
@@ -300,7 +301,11 @@ def _locked_by_day(
 async def pnl_curve_data() -> tuple[
     list[tuple[str, Decimal]], Decimal, list[Decimal], list[date]
 ]:
-    """Chart inputs: daily realized profit, base, locked USDT, and dates."""
+    """Chart inputs: daily realized profit, base, locked USDT, and dates.
+
+    Capped to the most recent ``_MAX_CHART_DAYS`` days so the chart stays
+    readable as history grows.
+    """
     async with new_session() as session:
         closed_rows = await session.execute(
             select(Position.closed_at, Position.realized_pnl).where(
@@ -313,7 +318,7 @@ async def pnl_curve_data() -> tuple[
                 continue
             day = closed_at.date()
             daily[day] = daily.get(day, Decimal(0)) + realized
-        sorted_dates = sorted(daily)
+        sorted_dates = sorted(daily)[-_MAX_CHART_DAYS:]
         days = [(d.strftime("%d.%m"), daily[d]) for d in sorted_dates]
 
         base_rows = await session.execute(

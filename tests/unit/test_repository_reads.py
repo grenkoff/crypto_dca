@@ -113,3 +113,25 @@ async def test_unlock_from_db_no_profit_returns_none() -> None:
 async def test_symbol_reads_config() -> None:
     await add_rows(StrategyConfig(id=1, symbol="KASUSDT"))
     assert await repository.symbol() == "KASUSDT"
+
+
+async def test_pnl_curve_data_caps_at_100_days() -> None:
+    base = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    await add_rows(
+        *[
+            Position(
+                level_index=1,
+                entry_price=Decimal("0.02"),
+                qty=Decimal("100"),
+                status=PositionStatus.CLOSED,
+                realized_pnl=Decimal("1"),
+                opened_at=base + timedelta(days=i) - timedelta(hours=1),
+                closed_at=base + timedelta(days=i),
+            )
+            for i in range(130)
+        ]
+    )
+    days, _base, locked, dates = await repository.pnl_curve_data()
+    assert len(days) == len(dates) == len(locked) == 100
+    assert dates[0] == (base + timedelta(days=30)).date()
+    assert dates[-1] == (base + timedelta(days=129)).date()
