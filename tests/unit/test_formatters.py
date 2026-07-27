@@ -77,15 +77,18 @@ def test_build_pnl() -> None:
     assert text.count("\n") == 6
 
 
-def test_build_unlock_shows_locked_and_days_on_one_line() -> None:
-    text = build_unlock(Decimal("410.905"), Decimal("136.7"))
-    assert text == "Locked `410.90` USDT · unlock ~`137` days"
-    assert "\n" not in text
+def test_build_unlock_shows_locked_days_and_annual_return() -> None:
+    text = build_unlock(Decimal("410.905"), Decimal("136.7"), Decimal("0.5"))
+    lines = text.split("\n")
+    assert lines[0] == "Locked `410.90` USDT · unlock ~`137` days"
+    # 0.5/day * 365 / 410.905 * 100 = 44.4%/yr
+    assert lines[1] == "Est. return ~`44.4`%/yr (from realized rate)"
 
 
-def test_build_unlock_na_when_days_unknown() -> None:
-    text = build_unlock(Decimal("100"), None)
+def test_build_unlock_na_when_days_unknown_no_profit() -> None:
+    text = build_unlock(Decimal("100"), None, Decimal("0"))
     assert text == "Locked `100.00` USDT · unlock `n/a`"
+    assert "\n" not in text  # no annual line without a positive profit rate
 
 
 def test_build_pnl_rounds_to_four_decimals() -> None:
