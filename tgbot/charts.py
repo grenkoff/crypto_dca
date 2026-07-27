@@ -203,3 +203,24 @@ def render_pnl_chart(
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     return buf.getvalue()
+
+
+def render_formulas(lines: list[str]) -> bytes:
+    """Render LaTeX (mathtext) formula lines to a PNG image."""
+    from matplotlib.figure import Figure
+
+    fig = Figure(figsize=(7.2, 1.0 * len(lines) + 0.2), dpi=200)
+    ax = fig.subplots()
+    ax.axis("off")
+    for i, line in enumerate(lines):
+        ax.text(
+            0.5,
+            1 - (i + 0.5) / len(lines),
+            f"${line}$",
+            ha="center",
+            va="center",
+            fontsize=18,
+        )
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.25)
+    return buf.getvalue()

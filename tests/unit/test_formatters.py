@@ -10,7 +10,7 @@ from tgbot.formatters import (
     OrdersSnapshot,
     PnlSnapshot,
     StatusSnapshot,
-    build_apr,
+    apr_formulas,
     build_balance,
     build_orders,
     build_pnl,
@@ -257,7 +257,7 @@ def test_format_event_unknown_falls_back_to_raw() -> None:
     assert "weird.thing" in text
 
 
-def test_build_apr_shows_general_and_substituted_formulas() -> None:
+def test_apr_formulas_general_and_substituted() -> None:
     snap = AprSnapshot(
         realized=Decimal("6.1119"),
         days=Decimal("22.4"),
@@ -266,18 +266,19 @@ def test_build_apr_shows_general_and_substituted_formulas() -> None:
         profit_per_day=Decimal("0.2731"),
         apr=Decimal("26.7"),
     )
-    text = build_apr(snap)
-    # general formula
-    assert "APR = profit/day × 365 / (locked + free) × 100%" in text
-    # substituted values
-    assert "6.1119" in text
-    assert "22.4" in text
-    assert "370.88" in text
-    assert "1.78" in text
-    assert "26.7" in text
+    result = apr_formulas(snap)
+    assert result is not None
+    general, substituted = result
+    # general LaTeX: a fraction with the symbolic terms
+    assert r"\frac" in general
+    assert r"\mathrm{realized}" in general
+    assert r"\mathrm{locked}+\mathrm{free}" in general
+    # substituted LaTeX: the numbers plugged in
+    assert r"\frac{6.1119\times 365}{22.4\times(370.88+1.78)}" in substituted
+    assert r"\approx 26.7" in substituted
 
 
-def test_build_apr_na_without_realized_profit() -> None:
+def test_apr_formulas_none_without_realized_profit() -> None:
     snap = AprSnapshot(
         realized=Decimal(0),
         days=Decimal(1),
@@ -286,4 +287,4 @@ def test_build_apr_na_without_realized_profit() -> None:
         profit_per_day=Decimal(0),
         apr=None,
     )
-    assert "not enough realized profit yet" in build_apr(snap)
+    assert apr_formulas(snap) is None

@@ -145,29 +145,28 @@ def build_unlock(locked_now: Decimal, days: Decimal | None) -> str:
     return f"Locked `{locked}` USDT · unlock ~`{d}` days"
 
 
-def build_apr(snap: AprSnapshot) -> str:
-    """Render the /apr estimate: the formula and the substituted values."""
+_APR_GENERAL = (
+    r"\mathrm{APR} = \frac{\mathrm{realized}\times 365}"
+    r"{\mathrm{days}\times(\mathrm{locked}+\mathrm{free})}\times 100\%"
+)
+
+
+def apr_formulas(snap: AprSnapshot) -> tuple[str, str] | None:
+    """LaTeX (general, substituted) for the APR estimate, or None."""
     if snap.apr is None:
-        return (
-            "*Estimated annual return (APR)*\n\n"
-            "_not enough realized profit yet_"
-        )
+        return None
     realized = _q(snap.realized, "0.0001")
     days = _q(snap.days, "0.1")
-    ppd = _q(snap.profit_per_day, "0.0001")
     deployed = _q(snap.deployed, "0.01")
     free = _q(snap.free, "0.01")
     apr = _q(snap.apr, "0.1")
-    return (
-        "*Estimated annual return (APR)*\n\n"
-        "`profit/day = realized / days`\n"
-        "`APR = profit/day × 365 / (locked + free) × 100%`\n\n"
-        f"profit/day = `{realized}` / `{days}` = `{ppd}` USDT\n"
-        f"APR = `{ppd}` × 365 / (`{deployed}` + `{free}`) × 100% "
-        f"≈ `{apr}`%/yr\n\n"
-        "_Extrapolates the realized rate onto committed capital "
-        "(deployed + free); an estimate, not a guarantee._"
+    num = f"{realized}" + r"\times 365"
+    den = f"{days}" + r"\times(" + f"{deployed}+{free}" + ")"
+    substituted = (
+        r"\mathrm{APR} = \frac{" + num + "}{" + den + r"}\times 100\% "
+        r"\approx " + f"{apr}" + r"\%\,\mathrm{/yr}"
     )
+    return _APR_GENERAL, substituted
 
 
 def build_orders(snap: OrdersSnapshot) -> str:
