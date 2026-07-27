@@ -72,23 +72,34 @@ async def pnl_curve_data() -> tuple[
     return await repository.pnl_curve_data()
 
 
-async def daily_close_line(dates: list[date]) -> list[float]:
-    """Close price of the traded symbol for each UTC day (NaN if missing)."""
+async def daily_ohlc(
+    dates: list[date],
+) -> list[tuple[float, float, float, float] | None]:
+    """Daily OHLC per UTC day, None if that day's candle is missing."""
     if not dates:
         return []
-    closes: dict[date, Decimal] = {}
+    bars: dict[date, tuple[Decimal, Decimal, Decimal, Decimal]] = {}
     try:
         client = BybitClient.from_settings()
         symbol = await repository.symbol()
         start = datetime(
             dates[0].year, dates[0].month, dates[0].day, tzinfo=UTC
         )
-        closes = await client.get_daily_closes(
+        bars = await client.get_daily_ohlc(
             symbol, int(start.timestamp() * 1000)
         )
     except Exception as exc:
         log.warning("pnl.price_line_failed", error=str(exc)[:100])
-    return [float(closes[d]) if d in closes else float("nan") for d in dates]
+    out: list[tuple[float, float, float, float] | None] = []
+    for d in dates:
+        bar = bars.get(d)
+        if bar is None:
+            out.append(None)
+        else:
+            out.append(
+                (float(bar[0]), float(bar[1]), float(bar[2]), float(bar[3]))
+            )
+    return out
 
 
 async def unlock_estimate() -> tuple[Decimal | None, Decimal]:
