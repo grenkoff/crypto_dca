@@ -141,8 +141,10 @@ async def test_profit_rate_data() -> None:
     now = datetime.now(tz=UTC)
     await _closed("0.02", "5", now - timedelta(days=1))
     await _closed("0.02", "3", now - timedelta(days=10))
-    await _open(1, "0.02", "100", "0.03")
-    realized, span, deployed = await repository.profit_rate_data()
+    await _open(1, "0.02", "100", "0.03")  # deployed cost 2, always open
+    realized, span, avg_deployed = await repository.profit_rate_data()
     assert realized == Decimal("8")
     assert Decimal("9") < span < Decimal("11")
-    assert deployed == Decimal("2")
+    # the always-open position (cost 2) is deployed every day of the span,
+    # so the time-average deployed is at least its cost
+    assert avg_deployed >= Decimal("2")

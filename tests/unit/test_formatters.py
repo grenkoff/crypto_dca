@@ -261,7 +261,7 @@ def test_apr_formulas_general_and_substituted() -> None:
     snap = AprSnapshot(
         realized=Decimal("6.1119"),
         days=Decimal("22.4"),
-        deployed=Decimal("370.88"),
+        avg_deployed=Decimal("370.88"),
         free=Decimal("1.78"),
         profit_per_day=Decimal("0.2731"),
         apr=Decimal("26.7"),
@@ -269,11 +269,11 @@ def test_apr_formulas_general_and_substituted() -> None:
     result = apr_formulas(snap)
     assert result is not None
     general, substituted = result
-    # general LaTeX: a fraction with the symbolic terms
+    # general LaTeX: a fraction with the symbolic terms; locked is barred
     assert r"\frac" in general
     assert r"\mathrm{realized}" in general
-    assert r"\mathrm{locked}+\mathrm{free}" in general
-    # substituted LaTeX: the numbers plugged in
+    assert r"\overline{\mathrm{locked}}+\mathrm{free}" in general
+    # substituted LaTeX: the numbers plugged in (avg deployed + free)
     assert r"\frac{6.1119\times 365}{22.4\times(370.88+1.78)}" in substituted
     assert r"\approx 26.7" in substituted
 
@@ -282,7 +282,7 @@ def test_apr_formulas_none_without_realized_profit() -> None:
     snap = AprSnapshot(
         realized=Decimal(0),
         days=Decimal(1),
-        deployed=Decimal(0),
+        avg_deployed=Decimal(0),
         free=Decimal(0),
         profit_per_day=Decimal(0),
         apr=None,

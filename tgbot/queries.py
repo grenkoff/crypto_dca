@@ -169,8 +169,8 @@ async def balance_snapshot() -> BalanceSnapshot:
 
 
 async def apr_estimate() -> AprSnapshot:
-    """Assemble the /apr estimate: realized rate over committed capital."""
-    realized, days, deployed = await repository.profit_rate_data()
+    """Assemble the /apr estimate: realized rate over avg committed capital."""
+    realized, days, avg_deployed = await repository.profit_rate_data()
     free = Decimal(0)
     try:
         client = BybitClient.from_settings()
@@ -181,7 +181,7 @@ async def apr_estimate() -> AprSnapshot:
     except Exception as exc:
         log.warning("apr.balance_fetch_failed", error=str(exc)[:100])
     profit_per_day = realized / days if days > 0 else Decimal(0)
-    committed = deployed + free
+    committed = avg_deployed + free
     apr = (
         profit_per_day * 365 / committed * 100
         if realized > 0 and committed > 0
@@ -190,7 +190,7 @@ async def apr_estimate() -> AprSnapshot:
     return AprSnapshot(
         realized=realized,
         days=days,
-        deployed=deployed,
+        avg_deployed=avg_deployed,
         free=free,
         profit_per_day=profit_per_day,
         apr=apr,
