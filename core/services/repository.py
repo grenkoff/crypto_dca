@@ -278,6 +278,19 @@ async def realized_pnl_since(cutoff: datetime | None) -> Decimal:
         return await _sum(session, Position.realized_pnl, *conds)
 
 
+def _fill_day_gaps(daily: dict[date, Decimal]) -> list[date]:
+    """Continuous day range from the first close through the last close.
+
+    Days without a close are included so the chart shows flat-zero periods
+    (e.g. no free capital to trade) instead of skipping them.
+    """
+    if not daily:
+        return []
+    start, end = min(daily), max(daily)
+    span = (end - start).days
+    return [start + timedelta(days=i) for i in range(span + 1)]
+
+
 def _locked_by_day(
     rows: Sequence[Any],
     dates: list[date],
@@ -318,8 +331,11 @@ async def pnl_curve_data() -> tuple[
                 continue
             day = closed_at.date()
             daily[day] = daily.get(day, Decimal(0)) + realized
-        sorted_dates = sorted(daily)[-_MAX_CHART_DAYS:]
-        days = [(d.strftime("%d.%m"), daily[d]) for d in sorted_dates]
+        sorted_dates = _fill_day_gaps(daily)[-_MAX_CHART_DAYS:]
+        days = [
+            (d.strftime("%d.%m"), daily.get(d, Decimal(0)))
+            for d in sorted_dates
+        ]
 
         base_rows = await session.execute(
             select(Position.entry_price, Position.qty, Position.fees_in).where(

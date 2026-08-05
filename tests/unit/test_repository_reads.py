@@ -92,6 +92,25 @@ async def test_pnl_curve_data_buckets_by_day() -> None:
     assert len(locked) == len(dates) == 1
 
 
+async def test_pnl_curve_data_fills_gap_days_with_zero() -> None:
+    await _closed("0.02", "5", datetime(2026, 7, 20, 12, 0, tzinfo=UTC))
+    await _closed("0.02", "5", datetime(2026, 7, 23, 12, 0, tzinfo=UTC))
+    days, _base, locked, dates = await repository.pnl_curve_data()
+    assert [label for label, _ in days] == [
+        "20.07",
+        "21.07",
+        "22.07",
+        "23.07",
+    ]
+    assert [profit for _, profit in days] == [
+        Decimal("5"),
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("5"),
+    ]
+    assert len(locked) == len(dates) == 4
+
+
 async def test_digest_metrics_counts_and_deployed() -> None:
     now = datetime.now(tz=UTC)
     await _closed("0.02", "5", now - timedelta(hours=1))
