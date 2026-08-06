@@ -156,7 +156,7 @@ def render_pnl_chart(
     labels, profits, equity = pnl_series(days, base_capital)
     xs = list(range(len(equity)))
 
-    fig = Figure(figsize=(8.4, 3.6), dpi=110)
+    fig = Figure(figsize=(8.4, 5.4), dpi=110)
     ax = fig.subplots()
     funds_ax = ax.twinx()
     bar_ax = ax.twinx()
