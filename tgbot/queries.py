@@ -74,23 +74,26 @@ async def pnl_curve_data() -> tuple[
 
 
 async def daily_ohlc(
-    dates: list[date],
+    dates: list[date], symbol: str | None = None
 ) -> list[tuple[float, float, float, float] | None]:
-    """Daily OHLC per UTC day, None if that day's candle is missing."""
+    """Daily OHLC per UTC day, None if that day's candle is missing.
+
+    Defaults to the configured trading symbol; pass ``symbol`` for another.
+    """
     if not dates:
         return []
     bars: dict[date, tuple[Decimal, Decimal, Decimal, Decimal]] = {}
     try:
         client = BybitClient.from_settings()
-        symbol = await repository.symbol()
+        sym = symbol or await repository.symbol()
         start = datetime(
             dates[0].year, dates[0].month, dates[0].day, tzinfo=UTC
         )
-        bars = await client.get_daily_ohlc(
-            symbol, int(start.timestamp() * 1000)
-        )
+        bars = await client.get_daily_ohlc(sym, int(start.timestamp() * 1000))
     except Exception as exc:
-        log.warning("pnl.price_line_failed", error=str(exc)[:100])
+        log.warning(
+            "pnl.price_line_failed", error=str(exc)[:100], symbol=symbol
+        )
     out: list[tuple[float, float, float, float] | None] = []
     for d in dates:
         bar = bars.get(d)
@@ -101,6 +104,39 @@ async def daily_ohlc(
                 (float(bar[0]), float(bar[1]), float(bar[2]), float(bar[3]))
             )
     return out
+
+
+def rescale_ohlc(
+    ohlc: list[tuple[float, float, float, float] | None],
+    ref: list[tuple[float, float, float, float] | None],
+) -> list[tuple[float, float, float, float] | None]:
+    """Scale ``ohlc`` so its first candle closes on ``ref``'s first close.
+
+    Aligns the two series at the earliest day both have a candle, so their
+    relative moves (correlation) read on one price axis. Returns ``ohlc``
+    unchanged if there is no shared day or the close is non-positive.
+    """
+    factor: float | None = None
+    for cand, base in zip(ohlc, ref, strict=False):
+        if cand is not None and base is not None and cand[3] > 0:
+            factor = base[3] / cand[3]
+            break
+    if factor is None:
+        return ohlc
+    f = factor
+    return [
+        None if b is None else (b[0] * f, b[1] * f, b[2] * f, b[3] * f)
+        for b in ohlc
+    ]
+
+
+async def btc_daily_ohlc(
+    dates: list[date],
+    ref_ohlc: list[tuple[float, float, float, float] | None],
+) -> list[tuple[float, float, float, float] | None]:
+    """BTCUSDT daily candles scaled to align first close with ``ref_ohlc``."""
+    raw = await daily_ohlc(dates, "BTCUSDT")
+    return rescale_ohlc(raw, ref_ohlc)
 
 
 async def unlock_estimate() -> tuple[Decimal | None, Decimal]:

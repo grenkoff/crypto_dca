@@ -88,13 +88,18 @@ _AMBER = "#f59e0b"
 _BAR = "#7dd3fc"
 _MA = "#2563eb"
 _INK = "black"
+_GREY = "#b8b8b8"
 _MA_WINDOW = 10
 
 
 def _draw_candles(
-    axis: Any, ohlc: list[tuple[float, float, float, float] | None]
+    axis: Any,
+    ohlc: list[tuple[float, float, float, float] | None],
+    *,
+    color: str = _INK,
+    zorder: int = 3,
 ) -> None:
-    """Draw daily OHLC candlesticks: hollow up, filled down, black wicks."""
+    """Draw OHLC candles in ``color``: hollow up, filled down."""
     from matplotlib.patches import Rectangle
 
     width = 0.3
@@ -102,8 +107,8 @@ def _draw_candles(
         if bar is None:
             continue
         op, hi, lo, cl = bar
-        face = "white" if cl >= op else _INK
-        axis.plot([i, i], [lo, hi], color=_INK, linewidth=0.7, zorder=3)
+        face = "white" if cl >= op else color
+        axis.plot([i, i], [lo, hi], color=color, linewidth=0.7, zorder=zorder)
         height = abs(cl - op) or (hi - lo) * 0.02
         axis.add_patch(
             Rectangle(
@@ -111,9 +116,9 @@ def _draw_candles(
                 width,
                 height,
                 facecolor=face,
-                edgecolor=_INK,
+                edgecolor=color,
                 linewidth=0.6,
-                zorder=3,
+                zorder=zorder,
             )
         )
 
@@ -135,12 +140,15 @@ def render_pnl_chart(
     base_capital: Decimal,
     locked: list[Decimal],
     ohlc: list[tuple[float, float, float, float] | None],
+    btc_ohlc: list[tuple[float, float, float, float] | None] | None = None,
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
     Locked USDT (amber) sits on the left axis; funds (green), daily realized
     profit (bars + MA), and the KAS price (daily candlesticks) each get their
-    own right axis. ``matplotlib`` is imported lazily to keep start-up fast.
+    own right axis. ``btc_ohlc`` (already rescaled to KAS units) is drawn as
+    lighter grey candles on the same price axis to gauge BTC correlation.
+    ``matplotlib`` is imported lazily to keep start-up fast.
     """
     from matplotlib.figure import Figure
     from matplotlib.patches import Patch
@@ -170,6 +178,8 @@ def render_pnl_chart(
     ax.plot(lk_x, lk_y, color=_AMBER, label="locked")
     fn_x, fn_y = _smooth(fxs, [float(v) for v in equity])
     funds_ax.plot(fn_x, fn_y, color=_GREEN, label="funds")
+    if btc_ohlc is not None:
+        _draw_candles(price_ax, btc_ohlc, color=_GREY, zorder=2)
     _draw_candles(price_ax, ohlc)
     for line_ax in (ax, funds_ax, price_ax):
         line_ax.set_zorder(bar_ax.get_zorder() + 1)
@@ -190,6 +200,9 @@ def render_pnl_chart(
     kas = Patch(facecolor="white", edgecolor=_INK, label="KAS price")
     handles = [*h1, *h2, *h3, kas]
     labels_all = [*l1, *l2, *l3, "KAS price"]
+    if btc_ohlc is not None:
+        handles.append(Patch(facecolor="white", edgecolor=_GREY, label="BTC"))
+        labels_all.append("BTC price")
     fig.legend(
         handles,
         labels_all,
