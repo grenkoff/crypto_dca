@@ -55,6 +55,22 @@ def test_render_pnl_chart_handles_single_day() -> None:
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_render_pnl_chart_with_btc_candles() -> None:
+    days = _days([("01.07", "1"), ("02.07", "0.5")])
+    ohlc: list[tuple[float, float, float, float] | None] = [
+        (0.028, 0.0282, 0.0279, 0.0281),
+        (0.0281, 0.0284, 0.028, 0.0282),
+    ]
+    btc: list[tuple[float, float, float, float] | None] = [
+        (0.0281, 0.0283, 0.028, 0.0281),
+        (0.0282, 0.0285, 0.0281, 0.0283),
+    ]
+    png = render_pnl_chart(
+        days, Decimal("340"), [Decimal("50"), Decimal("52")], ohlc, btc
+    )
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 def test_render_formulas_returns_png() -> None:
     from tgbot.charts import render_formulas
 
