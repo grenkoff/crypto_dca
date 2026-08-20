@@ -4,13 +4,17 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from core.db.models import (
     BotStatus,
+    CompensationLink,
+    ExecutionLog,
     Position,
     PositionStatus,
     StrategyConfig,
 )
+from core.db.session import new_session
 from core.services import repository
 from tests.conftest import add_rows
 
@@ -167,3 +171,90 @@ async def test_profit_rate_data() -> None:
     # the always-open position (cost 2) is deployed every day of the span,
     # so the time-average deployed is at least its cost
     assert avg_deployed >= Decimal("2")
+
+
+async def _cfg(maker_fee: str = "0", grid_step: str = "0.00005") -> None:
+    await add_rows(
+        StrategyConfig(
+            id=1,
+            symbol="KASUSDT",
+            grid_step=Decimal(grid_step),
+            tp_step=Decimal("0.0002"),
+            order_qty_quote=Decimal("5"),
+            maker_fee=Decimal(maker_fee),
+        )
+    )
+
+
+async def test_tp_projection_counts_open_lots_at_their_tp() -> None:
+    await _cfg()
+    await _open(1, "0.02", "100", "0.03")
+    series = await repository.tp_projection_series(Decimal("10"), 1)
+    assert len(series) == 1
+    assert series[0][1] == Decimal("10") + Decimal("100") * Decimal("0.03")
+
+
+async def test_tp_projection_applies_maker_fee_to_the_sale() -> None:
+    await _cfg(maker_fee="0.001")
+    await _open(1, "0.02", "100", "0.03")
+    _day, value = (await repository.tp_projection_series(Decimal("10"), 1))[0]
+    assert value == Decimal("10") + Decimal("3") * Decimal("0.999")
+
+
+async def test_tp_projection_rewinds_usdt_over_later_fills() -> None:
+    now = datetime.now(tz=UTC)
+    await _cfg()
+    await add_rows(
+        ExecutionLog(
+            exec_id="e1",
+            order_id="o1",
+            symbol="KASUSDT",
+            side="Sell",
+            price=Decimal("0.03"),
+            qty=Decimal("100"),
+            fee=Decimal("0.5"),
+            fee_coin="USDT",
+            executed_at=now - timedelta(hours=1),
+        ),
+        ExecutionLog(
+            exec_id="e2",
+            order_id="o2",
+            symbol="KASUSDT",
+            side="Buy",
+            price=Decimal("0.02"),
+            qty=Decimal("50"),
+            fee=Decimal("0.03"),
+            fee_coin="KAS",
+            executed_at=now - timedelta(hours=1),
+        ),
+    )
+    series = await repository.tp_projection_series(Decimal("100"), 2)
+    yesterday = series[0][1]
+    assert yesterday == Decimal("100") - (Decimal("2.5") - Decimal("1"))
+
+
+async def test_tp_projection_uses_the_tp_a_lot_carried_back_then() -> None:
+    now = datetime.now(tz=UTC)
+    await _cfg()
+    await _open(1, "0.02", "100", "0.03")
+    async with new_session() as session:
+        pos_id = await session.scalar(select(Position.id))
+    assert pos_id is not None
+    await add_rows(
+        CompensationLink(
+            profit_applied=Decimal("0.1"),
+            new_tp_price=Decimal("0.03"),
+            created_at=now - timedelta(hours=2),
+            compensated_position_id=pos_id,
+            profitable_position_id=pos_id,
+        )
+    )
+    series = await repository.tp_projection_series(Decimal("0"), 2)
+    before, after = series[0][1], series[1][1]
+    assert after == Decimal("100") * Decimal("0.03")
+    assert before == Decimal("100") * (Decimal("0.03") + Decimal("0.00005"))
+
+
+async def test_tp_projection_rejects_a_non_positive_window() -> None:
+    with pytest.raises(ValueError, match="days must be positive"):
+        await repository.tp_projection_series(Decimal("0"), 0)

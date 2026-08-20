@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db.models import (
@@ -23,6 +23,7 @@ from core.db.models import (
     GridLevel,
     LevelStatus,
     NotificationSettings,
+    OrderSide,
     Position,
     PositionStatus,
     StrategyConfig,
@@ -35,6 +36,7 @@ from core.services.order_common import SellFillResult
 
 _OPEN = str(PositionStatus.OPEN)
 _CLOSED = str(PositionStatus.CLOSED)
+_SELL = str(OrderSide.SELL)
 _MAX_CHART_DAYS = 100
 _AWAITING = str(LevelStatus.AWAITING_FILL)
 _IDLE = str(LevelStatus.IDLE)
@@ -455,6 +457,137 @@ async def orders_data() -> list[tuple[int, Decimal, Decimal, Decimal | None]]:
             .order_by(Position.level_index)
         )
         return [(int(idx), e, q, tp) for idx, e, q, tp in rows.all()]
+
+
+def _usdt_added_after(rows: Sequence[Any], moment: datetime) -> Decimal:
+    """USDT that fills executed after ``moment`` added to the balance.
+
+    A sell credits its notional minus the quote-side fee; a buy debits its
+    notional (its fee is charged in the base coin and never touches USDT).
+    """
+    return sum(
+        (
+            price * qty - fee if side == _SELL else -(price * qty)
+            for side, price, qty, fee, executed_at in rows
+            if executed_at > moment
+        ),
+        Decimal(0),
+    )
+
+
+def _tp_at(
+    comps: Sequence[tuple[datetime, Decimal]],
+    moment: datetime,
+    current_tp: Decimal,
+    grid_step: Decimal,
+) -> Decimal:
+    """The take-profit price a lot carried at ``moment``.
+
+    Compensation only ever moves a TP down onto the grid slot below, so
+    before the earliest logged move the price was one ``grid_step`` higher.
+    """
+    past = [tp for created, tp in comps if created <= moment]
+    if past:
+        return past[-1]
+    if comps:
+        return comps[0][1] + grid_step
+    return current_tp
+
+
+def _tp_gross_at(
+    rows: Sequence[Any],
+    comps: dict[int, list[tuple[datetime, Decimal]]],
+    moment: datetime,
+    grid_step: Decimal,
+) -> Decimal:
+    """Gross USDT the lots open at ``moment`` would fetch at their TPs."""
+    total = Decimal(0)
+    for pid, opened, closed, qty, filled, tp in rows:
+        if tp is None or opened > moment:
+            continue
+        if closed is not None and closed <= moment:
+            continue
+        held = qty - filled if closed is None else qty
+        total += held * _tp_at(comps.get(pid, []), moment, tp, grid_step)
+    return total
+
+
+async def tp_projection_series(
+    usdt_now: Decimal, days: int
+) -> list[tuple[date, Decimal]]:
+    """USDT the account would hold if every open lot sold at its TP.
+
+    One point per UTC day over the last ``days`` days, rebuilt from the
+    execution log (USDT flow) and the compensation log (past TP prices).
+    """
+    if days <= 0:
+        raise ValueError("days must be positive")
+    now = _now()
+    dates = [(now - timedelta(days=i)).date() for i in reversed(range(days))]
+    first = datetime.combine(dates[0], time.min, tzinfo=UTC)
+    async with new_session() as session:
+        cfg = await _get_config(session)
+        execs = (
+            await session.execute(
+                select(
+                    ExecutionLog.side,
+                    ExecutionLog.price,
+                    ExecutionLog.qty,
+                    ExecutionLog.fee,
+                    ExecutionLog.executed_at,
+                ).where(ExecutionLog.executed_at > first)
+            )
+        ).all()
+        positions = (
+            await session.execute(
+                select(
+                    Position.id,
+                    Position.opened_at,
+                    Position.closed_at,
+                    Position.qty,
+                    Position.filled_qty,
+                    Position.tp_price,
+                ).where(
+                    or_(
+                        Position.closed_at.is_(None),
+                        Position.closed_at > first,
+                    )
+                )
+            )
+        ).all()
+        comp_rows = (
+            (
+                await session.execute(
+                    select(
+                        CompensationLink.compensated_position_id,
+                        CompensationLink.created_at,
+                        CompensationLink.new_tp_price,
+                    )
+                    .where(
+                        CompensationLink.compensated_position_id.in_(
+                            [row.id for row in positions]
+                        )
+                    )
+                    .order_by(CompensationLink.created_at)
+                )
+            ).all()
+            if positions
+            else []
+        )
+    comps: dict[int, list[tuple[datetime, Decimal]]] = {}
+    for pid, created, tp in comp_rows:
+        comps.setdefault(pid, []).append((created, tp))
+    net = Decimal(1) - cfg.maker_fee
+    out: list[tuple[date, Decimal]] = []
+    for day in dates:
+        eod = min(
+            datetime.combine(day, time.min, tzinfo=UTC) + timedelta(days=1),
+            now,
+        )
+        usdt = usdt_now - _usdt_added_after(execs, eod)
+        gross = _tp_gross_at(positions, comps, eod, cfg.grid_step)
+        out.append((day, usdt + gross * net))
+    return out
 
 
 async def digest_metrics() -> dict[str, Any]:

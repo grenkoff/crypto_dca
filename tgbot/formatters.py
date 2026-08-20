@@ -5,6 +5,7 @@ Kept side-effect free so they're easily snapshot-testable.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -54,6 +55,7 @@ class DigestSnapshot:
     deployed: Decimal
     free_usdt: Decimal
     price: Decimal | None
+    tp_projection: Sequence[Decimal]
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,21 @@ def _q(amount: Decimal, places: str = "0.0001") -> Decimal:
     return amount.quantize(Decimal(places))
 
 
+_SPARK = "▁▂▃▄▅▆▇█"
+
+
+def _sparkline(values: Sequence[Decimal]) -> str:
+    """Render values as a unicode bar strip; flat when they barely move."""
+    if not values:
+        return ""
+    low, high = min(values), max(values)
+    span = high - low
+    if span <= 0:
+        return _SPARK[0] * len(values)
+    top = len(_SPARK) - 1
+    return "".join(_SPARK[int((v - low) / span * top)] for v in values)
+
+
 def _price5(value: Any) -> str:
     """Render a price string/Decimal with a fixed 5 decimals (e.g. 0.02890)."""
     try:
@@ -248,7 +265,24 @@ def build_digest(snap: DigestSnapshot) -> str:
         f"*Compensations (24h):* {snap.compensations_24h}\n"
         f"*Open positions:* {snap.open_positions} · "
         f"deployed `{_q(snap.deployed, '0.0001')}` USDT\n"
-        f"*Free USDT:* `{_q(snap.free_usdt, '0.0001')}` · *KAS:* {price}"
+        f"*Free USDT:* `{_q(snap.free_usdt, '0.0001')}` · *KAS:* {price}\n"
+        f"{_build_projection(snap.tp_projection)}"
+    )
+
+
+def _build_projection(series: Sequence[Decimal]) -> str:
+    """Render the all-TPs-filled projection and its recent trend."""
+    if not series:
+        return "*If all TPs fill:* _n/a_"
+    now = series[-1]
+    line = f"*If all TPs fill:* `{_q(now, '0.01')}` USDT"
+    if len(series) < 2:
+        return line
+    first = series[0]
+    return (
+        f"{line}\n*{len(series)}d:* `{_q(first, '0.01')}` → "
+        f"`{_q(now, '0.01')}` (`{_signed(now - first, '0.01')}`) "
+        f"{_sparkline(series)}"
     )
 
 

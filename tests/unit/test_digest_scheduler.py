@@ -59,6 +59,11 @@ def test_build_digest_signs_and_labels() -> None:
         deployed=Decimal("268.33"),
         free_usdt=Decimal("3.10"),
         price=Decimal("0.0308"),
+        tp_projection=[
+            Decimal("504.84"),
+            Decimal("505.01"),
+            Decimal("505.79"),
+        ],
     )
     text = build_digest(snap)
     assert "Daily digest" in text
@@ -67,6 +72,8 @@ def test_build_digest_signs_and_labels() -> None:
     assert "-3.10" in text  # negative total keeps its sign
     assert "UTC" in text
     assert "0.0308" in text
+    assert "If all TPs fill:* `505.79` USDT" in text
+    assert "*3d:* `504.84` → `505.79` (`+0.95`)" in text
 
 
 def test_build_digest_handles_missing_price() -> None:
@@ -81,6 +88,8 @@ def test_build_digest_handles_missing_price() -> None:
         deployed=Decimal(0),
         free_usdt=Decimal(0),
         price=None,
+        tp_projection=[],
     )
     text = build_digest(snap)
     assert "n/a" in text
+    assert "If all TPs fill:* _n/a_" in text

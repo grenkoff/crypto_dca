@@ -10,6 +10,7 @@ from tgbot.formatters import (
     OrdersSnapshot,
     PnlSnapshot,
     StatusSnapshot,
+    _sparkline,
     apr_formulas,
     build_balance,
     build_orders,
@@ -288,3 +289,18 @@ def test_apr_formulas_none_without_realized_profit() -> None:
         apr=None,
     )
     assert apr_formulas(snap) is None
+
+
+def test_sparkline_maps_values_across_the_bar_range() -> None:
+    strip = _sparkline([Decimal(0), Decimal(4), Decimal(8)])
+    assert strip[0] == "▁"
+    assert strip[-1] == "█"
+    assert len(strip) == 3
+
+
+def test_sparkline_stays_flat_when_values_do_not_move() -> None:
+    assert _sparkline([Decimal("5"), Decimal("5"), Decimal("5")]) == "▁▁▁"
+
+
+def test_sparkline_of_nothing_is_empty() -> None:
+    assert _sparkline([]) == ""
