@@ -21,6 +21,8 @@ from tgbot.formatters import (
 
 log = structlog.get_logger()
 
+_PROJECTION_DAYS = 10
+
 
 async def status_snapshot() -> StatusSnapshot:
     """Build the /status snapshot."""
@@ -171,15 +173,23 @@ async def digest_snapshot() -> DigestSnapshot:
     db = await repository.digest_metrics()
     client = BybitClient.from_settings()
     free_usdt = Decimal(0)
+    total_usdt = Decimal(0)
     price: Decimal | None = None
     try:
         balances = await client.get_balances()
         usdt = balances.get("USDT")
         if usdt is not None:
             free_usdt = usdt.free
+            total_usdt = usdt.total
         price = await client.get_last_price(await repository.symbol())
     except Exception as exc:
         log.warning("digest.live_fetch_failed", error=str(exc)[:100])
+    projection = [
+        value
+        for _, value in await repository.tp_projection_series(
+            total_usdt, _PROJECTION_DAYS
+        )
+    ]
     when_utc = datetime.now(tz=UTC).replace(tzinfo=None)
     return DigestSnapshot(
         when_utc=when_utc,
@@ -192,6 +202,7 @@ async def digest_snapshot() -> DigestSnapshot:
         deployed=db["deployed"],
         free_usdt=free_usdt,
         price=price,
+        tp_projection=projection,
     )
 
 
