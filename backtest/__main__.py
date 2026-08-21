@@ -22,6 +22,8 @@ from backtest.history import (
     save_bars,
     utc_day,
 )
+from backtest.report import ReportMeta, build_report
+from backtest.sweep import MatrixSpec, run_matrix
 from core.exchange.types import Instrument
 
 app = typer.Typer(add_completion=False, help="crypto_dca backtesting.")
@@ -189,6 +191,60 @@ def sweep(
                 _INSTRUMENT,
             )
             _report(f"grid {grid} tp {tp}", res, days)
+
+
+@app.command()
+def matrix(
+    symbol: str = "KASUSDT",
+    since: str = "",
+    until: str = "",
+    grid_steps: str = "0.00001,0.00002,0.00003,0.00004,0.00005,"
+    "0.00006,0.00007,0.00008,0.00009,0.00010",
+    tp_steps: str = "0.00005,0.00010,0.00015,0.00020,0.00025,"
+    "0.00030,0.00035,0.00040,0.00045,0.00050",
+    capital: str = "100",
+    out: str = "report.html",
+    refresh: bool = False,
+) -> None:
+    """Replay the full parameter matrix and write an HTML report."""
+    bars = _bars(symbol, _DEFAULT_BUCKET, refresh)
+    window = _window(bars, since or None, until or None)
+    first = datetime.fromtimestamp(int(window.ts[0]) / 1000, tz=UTC)
+    last = datetime.fromtimestamp(int(window.ts[-1]) / 1000 + 1, tz=UTC)
+    spec = MatrixSpec(
+        grid_steps=_decimals(grid_steps),
+        tp_steps=_decimals(tp_steps),
+        capital=Decimal(capital),
+        max_orders=_MAX_ORDERS,
+    )
+    total = len(spec.grid_steps) * len(spec.tp_steps)
+    typer.echo(f"replaying {total} cells over {len(window):,} bars …")
+    cells = run_matrix(
+        cache_path(_CACHE, symbol, _DEFAULT_BUCKET),
+        first,
+        last,
+        spec,
+        _INSTRUMENT,
+    )
+    meta = ReportMeta(
+        symbol=symbol,
+        since=first.date(),
+        until=last.date(),
+        days=_days(window),
+        capital=Decimal(capital),
+        bars=len(window),
+        first_price=Decimal(int(window.close[0])) / Decimal(100_000_000),
+        last_price=Decimal(int(window.close[-1])) / Decimal(100_000_000),
+        baseline_grid=Decimal("0.00005"),
+        baseline_tp=Decimal("0.0002"),
+    )
+    Path(out).write_text(build_report(cells, meta))
+    best = max(cells, key=lambda c: c.realized)
+    typer.echo(
+        f"best: grid {best.grid_step} tp {best.tp_step} → "
+        f"{best.realized:.2f} USDT realized, {best.trades} trades"
+    )
+    typer.echo(f"report → {out}")
 
 
 if __name__ == "__main__":

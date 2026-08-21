@@ -92,3 +92,31 @@ def test_replaying_nothing_is_rejected() -> None:
     empty = np.array([], dtype=np.int64)
     with pytest.raises(ValueError, match="no bars to replay"):
         run_backtest(to_bars(empty, empty, 1000), _cfg(), _INSTRUMENT)
+
+
+def test_equity_curve_has_one_point_per_day() -> None:
+    day = 86_400_000
+    times = np.array([0, day, 2 * day], dtype=np.int64)
+    prices = np.array([3_000_000, 2_800_000, 3_100_000], dtype=np.int64)
+    res = run_backtest(to_bars(times, prices, 1000), _cfg(), _INSTRUMENT)
+    assert len(res.equity_curve) == 3
+    assert res.equity_curve[0][0].isoformat() == "1970-01-01"
+
+
+def test_starved_share_is_total_when_capital_never_suffices() -> None:
+    bars = _bars(["0.03000", "0.02800", "0.03100"])
+    res = run_backtest(bars, _cfg(start_usdt=Decimal("1")), _INSTRUMENT)
+    assert res.starved_share == Decimal(1)
+
+
+def test_drawdown_is_zero_when_equity_only_climbs() -> None:
+    bars = _bars(["0.03000", "0.03100", "0.03200"])
+    res = run_backtest(bars, _cfg(), _INSTRUMENT)
+    assert res.max_drawdown == Decimal(0)
+
+
+def test_profit_per_trade_is_zero_without_trades() -> None:
+    bars = _bars(["0.03000", "0.02900"])
+    res = run_backtest(bars, _cfg(), _INSTRUMENT)
+    assert res.trades == 0
+    assert res.profit_per_trade == Decimal(0)
