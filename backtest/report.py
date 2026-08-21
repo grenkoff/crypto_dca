@@ -29,6 +29,11 @@ _SEQ = [
     "#104281",
 ]
 _SERIES = ["#2a78d6", "#eb6834", "#1baf7a"]
+_INK_DARK = "#0b0b0b"
+_INK_LIGHT = "#ffffff"
+_INK_FLIP = 7
+_IDLE_WARN = Decimal("0.6")
+_IDLE_BAD = Decimal("0.85")
 
 
 @dataclass(frozen=True)
@@ -55,12 +60,14 @@ def _step(value: Decimal) -> str:
     return f"{value:.5f}"
 
 
-def _ramp(value: Decimal, low: Decimal, high: Decimal) -> str:
+def _ramp(value: Decimal, low: Decimal, high: Decimal) -> tuple[str, str]:
+    """Fill colour for a magnitude, plus ink that stays legible on it."""
     if high <= low:
-        return _SEQ[0]
+        return _SEQ[0], _INK_DARK
     share = (value - low) / (high - low)
-    index = int(share * (len(_SEQ) - 1))
-    return _SEQ[max(0, min(index, len(_SEQ) - 1))]
+    index = max(0, min(int(share * (len(_SEQ) - 1)), len(_SEQ) - 1))
+    ink = _INK_DARK if index < _INK_FLIP else _INK_LIGHT
+    return _SEQ[index], ink
 
 
 def _heatmap(
@@ -176,6 +183,20 @@ def _equity_chart(cells: list[Cell], meta: ReportMeta) -> str:
     )
 
 
+def _idle_pill(share: Decimal) -> str:
+    """Idle share as a labelled state chip, not colour alone."""
+    if share >= _IDLE_BAD:
+        state, mark = "bad", "starved"
+    elif share >= _IDLE_WARN:
+        state, mark = "warn", "tight"
+    else:
+        state, mark = "ok", "fed"
+    return (
+        f'<span class="pill {state}">{_fmt(share * 100, 0)}% '
+        f"<em>{mark}</em></span>"
+    )
+
+
 def _row(cell: Cell) -> str:
     return (
         "<tr>"
@@ -189,7 +210,7 @@ def _row(cell: Cell) -> str:
         f"<td>{_fmt(cell.profit_per_trade, 4)}</td>"
         f"<td>{_fmt(cell.avg_deployed)}</td>"
         f"<td>{_fmt(cell.max_drawdown)}</td>"
-        f"<td>{_fmt(cell.starved_share * 100, 0)}%</td>"
+        f"<td>{_idle_pill(cell.starved_share)}</td>"
         "</tr>"
     )
 
@@ -247,30 +268,36 @@ def build_report(cells: list[Cell], meta: ReportMeta) -> str:
 
 
 _TEMPLATE = """<title>Grid Parameter Matrix</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 :root {{
   color-scheme: light;
   --bg: #fcfcfb; --panel: #ffffff; --ink: #0b0b0b; --muted: #52514e;
-  --line: #e3e2dd; --accent: #2a78d6; --ramp-lo: #cde2fb; --ramp-hi: #104281;
+  --line: #dfe3e8; --accent: #2a78d6; --ramp-lo: #cde2fb; --ramp-hi: #104281;
+  --good: #0ca30c; --warn: #fab219; --bad: #d03b3b;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
 }}
 @media (prefers-color-scheme: dark) {{
   :root:not([data-theme="light"]) {{
     color-scheme: dark;
-    --bg: #1a1a19; --panel: #232322; --ink: #ffffff; --muted: #c3c2b7;
-    --line: #3a3a37; --accent: #3987e5;
+    --bg: #1a1a19; --panel: #23262a; --ink: #ffffff; --muted: #c3c2b7;
+    --line: #383d43; --accent: #3987e5;
   }}
 }}
 :root[data-theme="dark"] {{
   color-scheme: dark;
-  --bg: #1a1a19; --panel: #232322; --ink: #ffffff; --muted: #c3c2b7;
-  --line: #3a3a37; --accent: #3987e5;
+  --bg: #1a1a19; --panel: #23262a; --ink: #ffffff; --muted: #c3c2b7;
+  --line: #383d43; --accent: #3987e5;
 }}
 body {{
   margin: 0; padding: 2rem 1.25rem 4rem; background: var(--bg);
-  color: var(--ink); font: 15px/1.55 ui-sans-serif, system-ui, sans-serif;
+  color: var(--ink); font: 15px/1.55 var(--sans);
 }}
 main {{ max-width: 1080px; margin: 0 auto; }}
-h1 {{ font-size: 1.7rem; margin: 0 0 .3rem; letter-spacing: -.01em; }}
+h1 {{ font-size: 1.7rem; margin: 0 0 .3rem; letter-spacing: -.02em;
+  font-weight: 600; text-wrap: balance; }}
 h2 {{ font-size: 1.15rem; margin: 2.6rem 0 .5rem; }}
 p {{ margin: .5rem 0; }}
 .muted {{ color: var(--muted); }}
@@ -283,12 +310,14 @@ p {{ margin: .5rem 0; }}
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 12px; padding: .9rem 1rem;
 }}
-.tile .k {{ color: var(--muted); font-size: .8rem; text-transform: uppercase;
-  letter-spacing: .04em; }}
-.tile .v {{ font-size: 1.5rem; font-weight: 600; margin-top: .2rem; }}
+.tile .k {{ color: var(--muted); font-size: .72rem; text-transform: uppercase;
+  letter-spacing: .07em; font-weight: 500; }}
+.tile .v {{ font-size: 1.5rem; font-weight: 600; margin-top: .2rem;
+  font-family: var(--mono); letter-spacing: -.02em; }}
 .tile .n {{ color: var(--muted); font-size: .85rem; }}
 .scroll {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
-table {{ border-collapse: collapse; font-variant-numeric: tabular-nums; }}
+table {{ border-collapse: collapse; font-variant-numeric: tabular-nums;
+  font-family: var(--mono); }}
 .heat {{ font-size: .8rem; }}
 .heat th {{
   color: var(--muted); font-weight: 500; padding: .3rem .45rem;
@@ -297,10 +326,20 @@ table {{ border-collapse: collapse; font-variant-numeric: tabular-nums; }}
 .heat .corner {{ text-align: left; }}
 .heat td {{
   padding: .45rem .5rem; text-align: right; border: 2px solid var(--bg);
-  border-radius: 4px; background: var(--fill); color: #0b0b0b;
+  border-radius: 4px; background: var(--fill); color: var(--ink);
   min-width: 62px; cursor: default; position: relative;
 }}
 .heat td.top {{ outline: 2px solid var(--ink); outline-offset: -2px; }}
+.heat td:focus-visible {{ outline: 3px solid var(--accent);
+  outline-offset: 1px; }}
+.pill {{ display: inline-flex; gap: .35rem; align-items: baseline;
+  padding: .1rem .45rem; border-radius: 999px; font-size: .75rem;
+  border: 1px solid var(--state); color: var(--ink); }}
+.pill em {{ font-style: normal; color: var(--state); font-family: var(--sans);
+  font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; }}
+.pill.ok {{ --state: var(--good); }}
+.pill.warn {{ --state: var(--warn); }}
+.pill.bad {{ --state: var(--bad); }}
 .heat td:hover::after, .heat td:focus::after {{
   content: attr(data-tip); position: absolute; left: 50%; bottom: 100%;
   transform: translateX(-50%); background: var(--ink); color: var(--bg);

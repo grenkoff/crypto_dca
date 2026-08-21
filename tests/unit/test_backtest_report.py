@@ -82,3 +82,23 @@ def test_report_survives_a_single_point_curve() -> None:
     stub = Cell(**{**cell.__dict__, "curve": [(date(2026, 1, 1), Decimal(1))]})
     html = build_report([stub], _meta())
     assert "Grid parameter matrix" in html
+
+
+def test_idle_pill_labels_the_state_not_just_the_colour() -> None:
+    fed = build_report([_cell_with_idle("0.10")], _meta())
+    starved = build_report([_cell_with_idle("0.95")], _meta())
+    assert "fed" in fed and "pill ok" in fed
+    assert "starved" in starved and "pill bad" in starved
+
+
+def _cell_with_idle(share: str) -> Cell:
+    cell = _cell("0.00005", "0.0002", "1")
+    return Cell(**{**cell.__dict__, "starved_share": Decimal(share)})
+
+
+def test_report_links_only_google_fonts() -> None:
+    html = build_report([_cell("0.00005", "0.0002", "1")], _meta())
+    assert "fonts.googleapis.com" in html
+    assert "IBM Plex Mono" in html
+    for marker in ("http://", "cdn.", "unpkg", "jsdelivr"):
+        assert marker not in html
