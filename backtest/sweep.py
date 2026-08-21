@@ -6,6 +6,7 @@ processes; workers load the bar cache once and slice it per run.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -116,16 +117,26 @@ def run_matrix(
     spec: MatrixSpec,
     instrument: Instrument,
     workers: int | None = None,
+    on_cell: Callable[[int, int, Cell], None] | None = None,
 ) -> list[Cell]:
-    """Replay every grid_step/tp_step pair and return the cells."""
+    """Replay every grid_step/tp_step pair and return the cells.
+
+    ``on_cell`` is called as each replay lands, so a long matrix can
+    report progress instead of going quiet for an hour.
+    """
     jobs = [
         (str(grid), str(tp), str(spec.capital), spec.max_orders, instrument)
         for grid in spec.grid_steps
         for tp in spec.tp_steps
     ]
+    done: list[Cell] = []
     with ProcessPoolExecutor(
         max_workers=workers,
         initializer=_init,
         initargs=(str(cache), since.isoformat(), until.isoformat()),
     ) as pool:
-        return list(pool.map(_run_cell, jobs, chunksize=1))
+        for cell in pool.map(_run_cell, jobs, chunksize=1):
+            done.append(cell)
+            if on_cell is not None:
+                on_cell(len(done), len(jobs), cell)
+    return done

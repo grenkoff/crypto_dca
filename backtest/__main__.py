@@ -23,7 +23,7 @@ from backtest.history import (
     utc_day,
 )
 from backtest.report import ReportMeta, build_report
-from backtest.sweep import MatrixSpec, run_matrix
+from backtest.sweep import Cell, MatrixSpec, run_matrix
 from core.exchange.types import Instrument
 
 app = typer.Typer(add_completion=False, help="crypto_dca backtesting.")
@@ -45,6 +45,10 @@ _INSTRUMENT = Instrument(
     min_order_qty=Decimal("0.01"),
     min_order_amt=Decimal("1"),
 )
+
+
+def _step(value: Decimal) -> str:
+    return f"{value:.5f}"
 
 
 def _decimals(raw: str) -> list[Decimal]:
@@ -219,12 +223,21 @@ def matrix(
     )
     total = len(spec.grid_steps) * len(spec.tp_steps)
     typer.echo(f"replaying {total} cells over {len(window):,} bars …")
+
+    def progress(done: int, total_cells: int, cell: Cell) -> None:
+        typer.echo(
+            f"  [{done:>3}/{total_cells}] grid {_step(cell.grid_step)} "
+            f"tp {_step(cell.tp_step)} → {cell.realized:.2f} USDT, "
+            f"{cell.trades} trades"
+        )
+
     cells = run_matrix(
         cache_path(_CACHE, symbol, _DEFAULT_BUCKET),
         first,
         last,
         spec,
         _INSTRUMENT,
+        on_cell=progress,
     )
     meta = ReportMeta(
         symbol=symbol,

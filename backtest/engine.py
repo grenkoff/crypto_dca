@@ -74,17 +74,26 @@ class _Lot:
     fees_in: Decimal
     tp: Decimal
     credit: Decimal = field(default=Decimal(0))
+    _view: OpenPosition | None = field(default=None, repr=False)
+
+    def retag(self, tp: Decimal, credit: Decimal) -> None:
+        """Move this lot's take-profit, dropping the cached view."""
+        self.tp = tp
+        self.credit = credit
+        self._view = None
 
     def view(self) -> OpenPosition:
-        """The strategy-facing view of this lot."""
-        return OpenPosition(
-            id=self.id,
-            entry_price=self.entry,
-            qty=self.qty,
-            fees_in=self.fees_in,
-            current_tp_price=self.tp,
-            compensation_credit=self.credit,
-        )
+        """The strategy-facing view of this lot, cached between moves."""
+        if self._view is None:
+            self._view = OpenPosition(
+                id=self.id,
+                entry_price=self.entry,
+                qty=self.qty,
+                fees_in=self.fees_in,
+                current_tp_price=self.tp,
+                compensation_credit=self.credit,
+            )
+        return self._view
 
 
 class _Book:
@@ -97,7 +106,10 @@ class _Book:
         self.base = Decimal(0)
         self.pool = Decimal(0)
         self.lots: list[_Lot] = []
+        self.held: set[Decimal] = set()
         self.resting: set[Decimal] = set()
+        self._low_tp: Decimal | None = None
+        self._low_stale = False
         self.trades = 0
         self.buys = 0
         self.compensations = 0
@@ -125,21 +137,28 @@ class _Book:
         if count <= 0:
             self.resting.clear()
             return
-        held = {lot.entry for lot in self.lots}
         ceiling = self._buy_ceiling()
         targets = resting_buy_levels(
-            price, self.cfg.grid_step, count, held, ceiling
+            price, self.cfg.grid_step, count, self.held, ceiling
         )
         self.resting = {level_price for _, level_price in targets}
 
+    def lowest_tp(self) -> Decimal | None:
+        """The nearest resting take-profit, recomputed only when stale.
+
+        Opening a lot or compensating one can only introduce a lower TP,
+        so those update the cache in place; closing one invalidates it.
+        """
+        if self._low_stale:
+            self._low_tp = min((lot.tp for lot in self.lots), default=None)
+            self._low_stale = False
+        return self._low_tp
+
     def _buy_ceiling(self) -> Decimal | None:
-        if not self.lots:
+        lowest = self.lowest_tp()
+        if lowest is None:
             return None
-        return (
-            min(lot.tp for lot in self.lots)
-            - self.cfg.tp_step
-            - self.cfg.grid_step
-        )
+        return lowest - self.cfg.tp_step - self.cfg.grid_step
 
     def fill_buys(self, low: Decimal) -> None:
         """Fill every resting buy the bar reached."""
@@ -179,13 +198,18 @@ class _Book:
             )
             self._next_id += 1
             self.buys += 1
+            self.held.add(price)
+            new_tp = self.lots[-1].tp
+            if self._low_tp is None or new_tp < self._low_tp:
+                self._low_tp = new_tp
 
     def fill_tps(self, high: Decimal, price: Decimal) -> None:
         """Sell every lot whose take-profit the bar reached."""
         while self.lots:
-            lot = min(self.lots, key=lambda item: item.tp)
-            if lot.tp > high:
+            lowest = self.lowest_tp()
+            if lowest is None or lowest > high:
                 return
+            lot = min(self.lots, key=lambda item: item.tp)
             proceeds = lot.qty * lot.tp * (Decimal(1) - self.cfg.maker_fee)
             realized = proceeds - lot.entry * lot.qty - lot.fees_in
             self.usdt += proceeds
@@ -193,6 +217,8 @@ class _Book:
             self.deployed -= lot.entry * lot.qty
             self.realized += realized
             self.lots.remove(lot)
+            self.held.discard(lot.entry)
+            self._low_stale = True
             self.trades += 1
             self.pool += realized
             self.compensate(price)
@@ -221,8 +247,9 @@ class _Book:
         target = next(
             lot for lot in self.lots if lot.id == decision.target_position_id
         )
-        target.tp = decision.new_tp_price
-        target.credit = decision.new_credit
+        target.retag(decision.new_tp_price, decision.new_credit)
+        if self._low_tp is None or decision.new_tp_price < self._low_tp:
+            self._low_tp = decision.new_tp_price
         self.pool -= decision.credit_drawn
         self.compensations += 1
 
