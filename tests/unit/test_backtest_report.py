@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 from backtest.report import ReportMeta, build_report
-from backtest.sweep import Cell
+from backtest.sweep import (
+    Cell,
+    dump_cells,
+    load_cells,
+)
 
 
 def _cell(grid: str, tp: str, realized: str, equity: str = "100") -> Cell:
@@ -102,3 +107,51 @@ def test_report_links_only_google_fonts() -> None:
     assert "IBM Plex Mono" in html
     for marker in ("http://", "cdn.", "unpkg", "jsdelivr"):
         assert marker not in html
+
+
+def test_heatmap_cells_carry_a_real_fill_and_ink_colour() -> None:
+    cells = [
+        _cell("0.00005", "0.0001", "1.00"),
+        _cell("0.00005", "0.0002", "9.00"),
+    ]
+    html = build_report(cells, _meta())
+    assert "--fill:#" in html
+    assert "--ink:#" in html
+    assert "--fill:(" not in html
+    for chunk in html.split('style="--fill:')[1:]:
+        decl = chunk.split('"')[0]
+        fill, ink = decl.split(";")
+        assert fill.startswith(("--fill:#", "#"))
+        assert ink.startswith("--ink:#")
+
+
+def test_heatmap_flips_ink_on_the_darkest_fills() -> None:
+    cells = [_cell("0.00005", f"0.000{i}", str(i)) for i in range(1, 10)]
+    html = build_report(cells, _meta())
+    assert "--ink:#ffffff" in html
+    assert "--ink:#0b0b0b" in html
+
+
+def test_cells_survive_a_dump_load_round_trip(tmp_path: Path) -> None:
+    cells = [
+        _cell("0.00005", "0.0002", "3.5", "97"),
+        _cell("0.00010", "0.0004", "1.25", "88"),
+    ]
+    path = tmp_path / "cells.json"
+    dump_cells(path, cells, {"symbol": "KASUSDT"})
+    back, saved = load_cells(path)
+    assert saved["symbol"] == "KASUSDT"
+    assert [c.grid_step for c in back] == [c.grid_step for c in cells]
+    assert [c.realized for c in back] == [c.realized for c in cells]
+    assert [c.curve for c in back] == [c.curve for c in cells]
+    assert back[0].ratio == cells[0].ratio
+
+
+def test_a_report_redrawn_from_saved_cells_matches_the_original(
+    tmp_path: Path,
+) -> None:
+    cells = [_cell("0.00005", "0.0002", "3.5", "97")]
+    path = tmp_path / "cells.json"
+    dump_cells(path, cells)
+    restored, _ = load_cells(path)
+    assert build_report(restored, _meta()) == build_report(cells, _meta())

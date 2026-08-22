@@ -93,9 +93,10 @@ def _heatmap(
                 continue
             value = getattr(cell, pick)
             mark = " top" if cell is best else ""
+            fill, ink = _ramp(value, low, high)
             tds.append(
-                f'<td class="cell{mark}" style="--fill:'
-                f'{_ramp(value, low, high)}" tabindex="0" '
+                f'<td class="cell{mark}" '
+                f'style="--fill:{fill};--ink:{ink}" tabindex="0" '
                 f'data-tip="grid {_step(grid)} · tp {_step(tp)} · '
                 f"{cell.ratio}x slots&#10;realized {_fmt(cell.realized)} · "
                 f"equity {_fmt(cell.equity)}&#10;trades {cell.trades} · "

@@ -23,7 +23,13 @@ from backtest.history import (
     utc_day,
 )
 from backtest.report import ReportMeta, build_report
-from backtest.sweep import Cell, MatrixSpec, run_matrix
+from backtest.sweep import (
+    Cell,
+    MatrixSpec,
+    dump_cells,
+    load_cells,
+    run_matrix,
+)
 from core.exchange.types import Instrument
 
 app = typer.Typer(add_completion=False, help="crypto_dca backtesting.")
@@ -251,13 +257,56 @@ def matrix(
         baseline_grid=Decimal("0.00005"),
         baseline_tp=Decimal("0.0002"),
     )
+    data = Path(out).with_suffix(".json")
+    dump_cells(
+        data,
+        cells,
+        {
+            "symbol": symbol,
+            "since": meta.since.isoformat(),
+            "until": meta.until.isoformat(),
+            "days": str(meta.days),
+            "capital": str(meta.capital),
+            "bars": str(meta.bars),
+            "first_price": str(meta.first_price),
+            "last_price": str(meta.last_price),
+            "baseline_grid": str(meta.baseline_grid),
+            "baseline_tp": str(meta.baseline_tp),
+        },
+    )
     Path(out).write_text(build_report(cells, meta))
+    typer.echo(f"data → {data}")
     best = max(cells, key=lambda c: c.realized)
     typer.echo(
         f"best: grid {best.grid_step} tp {best.tp_step} → "
         f"{best.realized:.2f} USDT realized, {best.trades} trades"
     )
     typer.echo(f"report → {out}")
+
+
+@app.command()
+def redraw(
+    data: str = "data/report.json", out: str = "data/report.html"
+) -> None:
+    """Rebuild the HTML report from saved results, without replaying."""
+    cells, saved = load_cells(Path(data))
+    if not cells or not saved:
+        typer.echo(f"no usable results in {data}", err=True)
+        raise typer.Exit(1)
+    meta = ReportMeta(
+        symbol=saved["symbol"],
+        since=date.fromisoformat(saved["since"]),
+        until=date.fromisoformat(saved["until"]),
+        days=Decimal(saved["days"]),
+        capital=Decimal(saved["capital"]),
+        bars=int(saved["bars"]),
+        first_price=Decimal(saved["first_price"]),
+        last_price=Decimal(saved["last_price"]),
+        baseline_grid=Decimal(saved["baseline_grid"]),
+        baseline_tp=Decimal(saved["baseline_tp"]),
+    )
+    Path(out).write_text(build_report(cells, meta))
+    typer.echo(f"report → {out} ({len(cells)} cells)")
 
 
 if __name__ == "__main__":

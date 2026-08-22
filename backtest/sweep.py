@@ -6,6 +6,7 @@ processes; workers load the bar cache once and slice it per run.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
@@ -55,6 +56,74 @@ class MatrixSpec:
     tp_steps: list[Decimal]
     capital: Decimal
     max_orders: int
+
+
+def dump_cells(
+    path: Path, cells: list[Cell], meta: dict[str, str] | None = None
+) -> None:
+    """Persist matrix results so a report can be redrawn without a rerun."""
+    path.write_text(
+        json.dumps(
+            {
+                "meta": meta or {},
+                "cells": [
+                    {
+                        **{
+                            key: str(getattr(cell, key))
+                            for key in (
+                                "grid_step",
+                                "tp_step",
+                                "realized",
+                                "equity",
+                                "avg_deployed",
+                                "stuck_cost",
+                                "max_drawdown",
+                                "starved_share",
+                                "profit_per_trade",
+                                "apr",
+                            )
+                        },
+                        "trades": cell.trades,
+                        "compensations": cell.compensations,
+                        "open_positions": cell.open_positions,
+                        "curve": [
+                            [day.isoformat(), str(value)]
+                            for day, value in cell.curve
+                        ],
+                    }
+                    for cell in cells
+                ],
+            }
+        )
+    )
+
+
+def load_cells(path: Path) -> tuple[list[Cell], dict[str, str]]:
+    """Read matrix results and metadata written by :func:`dump_cells`."""
+    saved = json.loads(path.read_text())
+    cells = [
+        Cell(
+            grid_step=Decimal(raw["grid_step"]),
+            tp_step=Decimal(raw["tp_step"]),
+            realized=Decimal(raw["realized"]),
+            equity=Decimal(raw["equity"]),
+            trades=int(raw["trades"]),
+            compensations=int(raw["compensations"]),
+            open_positions=int(raw["open_positions"]),
+            avg_deployed=Decimal(raw["avg_deployed"]),
+            stuck_cost=Decimal(raw["stuck_cost"]),
+            max_drawdown=Decimal(raw["max_drawdown"]),
+            starved_share=Decimal(raw["starved_share"]),
+            profit_per_trade=Decimal(raw["profit_per_trade"]),
+            apr=Decimal(raw["apr"]),
+            curve=[
+                (date.fromisoformat(day), Decimal(value))
+                for day, value in raw["curve"]
+            ],
+        )
+        for raw in saved["cells"]
+    ]
+    return cells, saved.get("meta", {})
 
 
 def _init(cache: str, since: str, until: str) -> None:
