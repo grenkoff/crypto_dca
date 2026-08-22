@@ -24,6 +24,7 @@ def _cfg(
     *,
     tp_step: Decimal = Decimal("0.0002"),
     start_usdt: Decimal = Decimal("100"),
+    compensation_moves: int = 1,
 ) -> BacktestConfig:
     return BacktestConfig(
         grid_step=Decimal("0.00005"),
@@ -32,6 +33,7 @@ def _cfg(
         maker_fee=Decimal("0.000625"),
         max_open_orders=50,
         start_usdt=start_usdt,
+        compensation_moves=compensation_moves,
     )
 
 
@@ -120,3 +122,24 @@ def test_profit_per_trade_is_zero_without_trades() -> None:
     res = run_backtest(bars, _cfg(), _INSTRUMENT)
     assert res.trades == 0
     assert res.profit_per_trade == Decimal(0)
+
+
+def test_greedy_compensation_spends_the_pool_on_more_moves() -> None:
+    prices = [
+        "0.03000",
+        "0.02800",
+        "0.03200",
+        "0.02800",
+        "0.03200",
+        "0.02800",
+        "0.03200",
+    ]
+    single = run_backtest(_bars(prices), _cfg(), _INSTRUMENT)
+    greedy = run_backtest(
+        _bars(prices), _cfg(compensation_moves=50), _INSTRUMENT
+    )
+    assert greedy.compensations >= single.compensations
+
+
+def test_one_move_per_close_is_the_default() -> None:
+    assert _cfg().compensation_moves == 1

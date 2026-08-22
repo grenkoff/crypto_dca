@@ -35,6 +35,7 @@ class BacktestConfig:
     max_open_orders: int
     start_usdt: Decimal
     min_profit_quote: Decimal = Decimal(0)
+    compensation_moves: int = 1
 
 
 @dataclass(frozen=True)
@@ -224,9 +225,19 @@ class _Book:
             self.compensate(price)
 
     def compensate(self, price: Decimal) -> None:
-        """Apply one compensation move if the pool funds it."""
+        """Spend the credit pool on take-profit moves after a close.
+
+        The live compensator makes at most one move per close; raising
+        ``compensation_moves`` lets the pool keep buying moves while it
+        still funds them, which is the variant under test.
+        """
+        for _ in range(max(self.cfg.compensation_moves, 1)):
+            if not self._compensate_once(price):
+                return
+
+    def _compensate_once(self, price: Decimal) -> bool:
         if self.pool <= 0 or not self.lots:
-            return
+            return False
         decision = plan_compensation(
             [lot.view() for lot in self.lots],
             CompensationContext(
@@ -243,7 +254,7 @@ class _Book:
             ),
         )
         if decision is None:
-            return
+            return False
         target = next(
             lot for lot in self.lots if lot.id == decision.target_position_id
         )
@@ -252,6 +263,7 @@ class _Book:
             self._low_tp = decision.new_tp_price
         self.pool -= decision.credit_drawn
         self.compensations += 1
+        return True
 
 
 def _bar_day(ts_ms: int) -> date:
