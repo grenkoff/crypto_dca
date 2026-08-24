@@ -43,13 +43,14 @@ def slot_below(tp_price: Decimal, grid_step: Decimal) -> Decimal:
 def plan_compensation(
     open_positions: list[OpenPosition], ctx: CompensationContext
 ) -> CompensationDecision | None:
-    """Plan the next TP compaction move, or None to keep banking the pool.
+    """Plan the next TP compaction move, or None if none pays for itself.
 
-    Picks the nearest-to-market TP whose grid slot directly below is empty
-    and at or above the wall floor (``nearest_buy + tp_step + grid_step``,
-    market, min notional), then moves it there if the pool funds a
-    strictly-positive pair. If that nearest gap can't be funded yet, returns
-    None so the profit keeps accumulating.
+    Walks TPs from nearest-to-market outward, looking for one whose grid
+    slot directly below is empty and at or above the wall floor
+    (``nearest_buy + tp_step + grid_step``, market, min notional). A slot
+    is only taken when selling there still clears the lot's cost and both
+    fees; a move that would book a loss is skipped and the search goes on
+    to the next candidate.
     """
     if ctx.pool <= 0 or ctx.grid_step <= 0 or not open_positions:
         return None
@@ -86,14 +87,12 @@ def plan_compensation(
             - victim.entry_price * victim.qty
             - victim.fees_in
         )
-        pair = realized + victim.compensation_credit
-        draw = Decimal(0) if pair > 0 else (-pair + _PROFIT_EPS)
-        if draw > ctx.pool:
-            return None
+        if realized <= _PROFIT_EPS:
+            continue
         return CompensationDecision(
             target_position_id=victim.id,
             new_tp_price=target,
-            new_credit=victim.compensation_credit + draw,
-            credit_drawn=draw,
+            new_credit=victim.compensation_credit,
+            credit_drawn=Decimal(0),
         )
     return None

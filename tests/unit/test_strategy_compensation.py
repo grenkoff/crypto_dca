@@ -115,18 +115,45 @@ def test_tp_one_step_above_floor_moves_down_to_the_floor() -> None:
     assert decision.new_tp_price == Decimal("0.02775")
 
 
-def test_underwater_move_draws_credit_and_keeps_pair_positive() -> None:
+def test_a_move_that_would_book_a_loss_is_skipped() -> None:
     victim = _pos(1, "0.02810", entry="0.03000", qty="200")
+    assert plan_compensation([victim], _ctx(nearest_buy="0")) is None
+
+
+def test_a_losing_candidate_is_passed_over_for_a_profitable_one() -> None:
+    underwater = _pos(1, "0.02810", entry="0.03000", qty="200")
+    healthy = _pos(2, "0.02900", entry="0.02000", qty="200")
+    decision = plan_compensation([underwater, healthy], _ctx(nearest_buy="0"))
+    assert decision is not None
+    assert decision.target_position_id == 2
+    assert decision.new_tp_price == Decimal("0.02895")
+
+
+def test_an_accepted_move_still_clears_cost_and_both_fees() -> None:
+    victim = _pos(1, "0.02900", entry="0.02000", qty="200", fees_in="0.05")
     decision = plan_compensation([victim], _ctx(nearest_buy="0"))
     assert decision is not None
-    assert decision.new_tp_price == Decimal("0.02805")
-    assert decision.credit_drawn > 0
     realized = (
         decision.new_tp_price * victim.qty * (Decimal(1) - Decimal("0.000625"))
         - victim.entry_price * victim.qty
         - victim.fees_in
     )
-    assert realized + decision.new_credit > 0  # pair strictly in profit
+    assert realized > 0
+
+
+def test_compensation_never_spends_the_credit_pool() -> None:
+    healthy = _pos(1, "0.02900", entry="0.02000", qty="200")
+    decision = plan_compensation([healthy], _ctx(nearest_buy="0", pool="1"))
+    assert decision is not None
+    assert decision.credit_drawn == Decimal(0)
+    assert decision.new_credit == healthy.compensation_credit
+
+
+def test_a_lot_that_already_carries_credit_is_not_pushed_further_down() -> (
+    None
+):
+    victim = _pos(1, "0.02810", entry="0.03000", qty="200", credit="10")
+    assert plan_compensation([victim], _ctx(nearest_buy="0")) is None
 
 
 def test_underwater_move_skipped_when_pool_too_small() -> None:
