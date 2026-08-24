@@ -131,8 +131,9 @@ class BybitClient:
 
     async def get_daily_ohlc(
         self, symbol: str, start_ms: int
-    ) -> dict[date, tuple[Decimal, Decimal, Decimal, Decimal]]:
-        """Daily OHLC tuples keyed by UTC date, from ``start_ms`` to now."""
+    ) -> dict[date, tuple[Decimal, Decimal, Decimal, Decimal, Decimal]]:
+        """Daily OHLC plus base volume, keyed by UTC date, from
+        ``start_ms``."""
         resp = await asyncio.to_thread(
             self._http.get_kline,
             category=CATEGORY,
@@ -148,6 +149,7 @@ class BybitClient:
                 Decimal(str(row[2])),
                 Decimal(str(row[3])),
                 Decimal(str(row[4])),
+                Decimal(str(row[5])),
             )
             for row in result.get("list") or []
         }

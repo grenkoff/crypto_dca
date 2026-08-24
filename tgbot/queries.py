@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -20,6 +21,8 @@ from tgbot.formatters import (
 )
 
 log = structlog.get_logger()
+
+Bar = tuple[float, float, float, float, float]
 
 _PROJECTION_DAYS = 10
 
@@ -77,14 +80,14 @@ async def pnl_curve_data() -> tuple[
 
 async def daily_ohlc(
     dates: list[date], symbol: str | None = None
-) -> list[tuple[float, float, float, float] | None]:
-    """Daily OHLC per UTC day, None if that day's candle is missing.
+) -> list[Bar | None]:
+    """Daily OHLC plus volume per UTC day, None if the candle is missing.
 
     Defaults to the configured trading symbol; pass ``symbol`` for another.
     """
     if not dates:
         return []
-    bars: dict[date, tuple[Decimal, Decimal, Decimal, Decimal]] = {}
+    bars: Mapping[date, tuple[Decimal, ...]] = {}
     try:
         client = BybitClient.from_settings()
         sym = symbol or await repository.symbol()
@@ -96,22 +99,27 @@ async def daily_ohlc(
         log.warning(
             "pnl.price_line_failed", error=str(exc)[:100], symbol=symbol
         )
-    out: list[tuple[float, float, float, float] | None] = []
+    out: list[Bar | None] = []
     for d in dates:
         bar = bars.get(d)
         if bar is None:
             out.append(None)
         else:
             out.append(
-                (float(bar[0]), float(bar[1]), float(bar[2]), float(bar[3]))
+                (
+                    float(bar[0]),
+                    float(bar[1]),
+                    float(bar[2]),
+                    float(bar[3]),
+                    float(bar[4]),
+                )
             )
     return out
 
 
 def rescale_ohlc(
-    ohlc: list[tuple[float, float, float, float] | None],
-    ref: list[tuple[float, float, float, float] | None],
-) -> list[tuple[float, float, float, float] | None]:
+    ohlc: list[Bar | None], ref: list[Bar | None]
+) -> list[Bar | None]:
     """Scale ``ohlc`` so its first candle closes on ``ref``'s first close.
 
     Aligns the two series at the earliest day both have a candle, so their
@@ -127,15 +135,14 @@ def rescale_ohlc(
         return ohlc
     f = factor
     return [
-        None if b is None else (b[0] * f, b[1] * f, b[2] * f, b[3] * f)
+        None if b is None else (b[0] * f, b[1] * f, b[2] * f, b[3] * f, b[4])
         for b in ohlc
     ]
 
 
 async def btc_daily_ohlc(
-    dates: list[date],
-    ref_ohlc: list[tuple[float, float, float, float] | None],
-) -> list[tuple[float, float, float, float] | None]:
+    dates: list[date], ref_ohlc: list[Bar | None]
+) -> list[Bar | None]:
     """BTCUSDT daily candles scaled to align first close with ``ref_ohlc``."""
     raw = await daily_ohlc(dates, "BTCUSDT")
     return rescale_ohlc(raw, ref_ohlc)
