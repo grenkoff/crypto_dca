@@ -28,10 +28,12 @@ from core.db.models import (
     PositionStatus,
     StrategyConfig,
     TelegramUser,
+    Transfer,
     WebuiAudit,
 )
 from core.db.session import new_session
 from core.exchange.types import Execution as BybitExecution
+from core.exchange.types import Transfer as BybitTransfer
 from core.services.order_common import SellFillResult
 
 _OPEN = str(PositionStatus.OPEN)
@@ -512,6 +514,59 @@ def _tp_gross_at(
     return total
 
 
+async def open_base_qty() -> Decimal:
+    """Base coin still held by open positions."""
+    async with new_session() as session:
+        return await _sum(
+            session,
+            Position.qty - Position.filled_qty,
+            Position.status == _OPEN,
+        )
+
+
+async def record_transfers(rows: Sequence[BybitTransfer]) -> int:
+    """Store funding movements, skipping ones already known."""
+    if not rows:
+        return 0
+    async with new_session() as session, session.begin():
+        known = set(
+            (
+                await session.scalars(
+                    select(Transfer.external_id).where(
+                        Transfer.external_id.in_([r.external_id for r in rows])
+                    )
+                )
+            ).all()
+        )
+        fresh = [r for r in rows if r.external_id not in known]
+        session.add_all(
+            [
+                Transfer(
+                    external_id=r.external_id,
+                    coin=r.coin,
+                    amount=r.amount,
+                    at=r.at,
+                    recorded_at=_now(),
+                )
+                for r in fresh
+            ]
+        )
+        return len(fresh)
+
+
+async def last_transfer_at() -> datetime | None:
+    """Timestamp of the most recent stored transfer, if any."""
+    async with new_session() as session:
+        return await session.scalar(select(func.max(Transfer.at)))
+
+
+def _transferred_after(
+    rows: Sequence[tuple[datetime, Decimal]], moment: datetime
+) -> Decimal:
+    """Net funding that arrived after ``moment``."""
+    return sum((amount for at, amount in rows if at > moment), Decimal(0))
+
+
 async def tp_projection_series(
     usdt_now: Decimal, days: int
 ) -> list[tuple[date, Decimal]]:
@@ -524,9 +579,29 @@ async def tp_projection_series(
         raise ValueError("days must be positive")
     now = _now()
     dates = [(now - timedelta(days=i)).date() for i in reversed(range(days))]
+    return await projection_for_days(usdt_now, dates)
+
+
+async def projection_for_days(
+    usdt_now: Decimal, dates: list[date]
+) -> list[tuple[date, Decimal]]:
+    """The all-TPs-filled projection on each of ``dates`` (UTC days)."""
+    if not dates:
+        return []
+    now = _now()
     first = datetime.combine(dates[0], time.min, tzinfo=UTC)
     async with new_session() as session:
         cfg = await _get_config(session)
+        transfers = [
+            (at, amount)
+            for at, amount in (
+                await session.execute(
+                    select(Transfer.at, Transfer.amount).where(
+                        Transfer.at > first
+                    )
+                )
+            ).all()
+        ]
         execs = (
             await session.execute(
                 select(
@@ -584,10 +659,32 @@ async def tp_projection_series(
             datetime.combine(day, time.min, tzinfo=UTC) + timedelta(days=1),
             now,
         )
-        usdt = usdt_now - _usdt_added_after(execs, eod)
+        usdt = (
+            usdt_now
+            - _usdt_added_after(execs, eod)
+            - _transferred_after(transfers, eod)
+        )
         gross = _tp_gross_at(positions, comps, eod, cfg.grid_step)
         out.append((day, usdt + gross * net))
     return out
+
+
+async def account_value_series(
+    usdt_now: Decimal,
+    spare_base: Decimal,
+    price: Decimal,
+    dates: list[date],
+) -> list[tuple[date, Decimal]]:
+    """What the whole account is worth per day, in USDT.
+
+    Cash (including what rests in buy orders), every open lot valued at
+    the take-profit it carried that day, and base coin held outside any
+    position valued at ``price``. Deposits and withdrawals are rewound
+    with the trades, so the line steps when funding moves.
+    """
+    projection = await projection_for_days(usdt_now, dates)
+    spare = spare_base * price
+    return [(day, value + spare) for day, value in projection]
 
 
 async def digest_metrics() -> dict[str, Any]:

@@ -46,6 +46,15 @@ class Instrument(_Frozen):
     min_order_amt: Decimal
 
 
+class Transfer(_Frozen):
+    """A funding movement in or out of the account."""
+
+    external_id: str
+    coin: str
+    amount: Decimal
+    at: datetime
+
+
 class Balance(_Frozen):
     """A coin balance split into free and locked amounts."""
 

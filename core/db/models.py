@@ -275,6 +275,23 @@ class CompensationLink(Base):
     )
 
 
+class Transfer(Base):
+    """A funding movement in or out of the account (cash, not trading)."""
+
+    __tablename__ = "trading_transfer"
+    __table_args__ = (
+        UniqueConstraint("external_id", name="trading_transfer_external_key"),
+        Index("trading_transfer_at_idx", "at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    external_id: Mapped[str] = mapped_column(String(64))
+    coin: Mapped[str] = mapped_column(String(16))
+    amount: Mapped[Decimal] = mapped_column(_AMOUNT)
+    at: Mapped[datetime] = mapped_column(_TS)
+    recorded_at: Mapped[datetime] = mapped_column(_TS, default=_utcnow)
+
+
 class TelegramUser(Base):
     """Mirror of ``trading_telegramuser``."""
 

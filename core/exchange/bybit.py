@@ -24,11 +24,13 @@ from core.exchange.types import (
     Order,
     OrderStatus,
     Side,
+    Transfer,
 )
 
 log = structlog.get_logger()
 
 CATEGORY = "spot"
+_TRANSFER_WINDOW_MS = 7 * 24 * 60 * 60 * 1000 - 1000
 
 
 _RETRIES = 3
@@ -57,6 +59,7 @@ class _HTTP(Protocol):
     def get_open_orders(self, **kwargs: Any) -> dict[str, Any]: ...
     def get_executions(self, **kwargs: Any) -> dict[str, Any]: ...
     def get_order_history(self, **kwargs: Any) -> dict[str, Any]: ...
+    def get_transaction_log(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 def _raise_for_ret(response: dict[str, Any]) -> dict[str, Any]:
@@ -174,6 +177,57 @@ class BybitClient:
             )
             for row in result.get("list") or []
         }
+
+    async def get_transfers(
+        self, start_ms: int, end_ms: int
+    ) -> list[Transfer]:
+        """Funding moved in or out between two instants.
+
+        The transaction log caps each request at seven days, so the range
+        is walked in windows; every page is followed to its end.
+        """
+        out: list[Transfer] = []
+        window = _TRANSFER_WINDOW_MS
+        for kind in ("TRANSFER_IN", "TRANSFER_OUT"):
+            start = start_ms
+            while start < end_ms:
+                stop = min(start + window, end_ms)
+                out.extend(await self._transfer_page(kind, start, stop))
+                start = stop
+        return sorted(out, key=lambda t: t.at)
+
+    async def _transfer_page(
+        self, kind: str, start_ms: int, end_ms: int
+    ) -> list[Transfer]:
+        rows: list[Transfer] = []
+        cursor: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "accountType": "UNIFIED",
+                "type": kind,
+                "startTime": start_ms,
+                "endTime": end_ms,
+                "limit": 50,
+            }
+            if cursor:
+                kwargs["cursor"] = cursor
+            resp = await asyncio.to_thread(
+                self._http.get_transaction_log, **kwargs
+            )
+            result = _raise_for_ret(resp)
+            page = result.get("list") or []
+            rows.extend(
+                Transfer(
+                    external_id=str(row["id"]),
+                    coin=str(row["currency"]),
+                    amount=Decimal(str(row["change"])),
+                    at=_ts(row["transactionTime"]),
+                )
+                for row in page
+            )
+            cursor = result.get("nextPageCursor") or None
+            if not cursor or not page:
+                return rows
 
     async def get_balances(self) -> dict[str, Balance]:
         """Fetch unified-account balances keyed by coin."""

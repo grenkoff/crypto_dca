@@ -48,7 +48,6 @@ class BacktestResult:
     realized: Decimal
     open_positions: int
     usdt: Decimal
-    base_qty: Decimal
     equity: Decimal
     avg_deployed: Decimal
     last_price: Decimal
@@ -65,17 +64,6 @@ class BacktestResult:
         if self.trades == 0:
             return Decimal(0)
         return self.realized / self.trades
-
-    @property
-    def descent_per_credit(self) -> Decimal:
-        """Wall descent bought per USDT drawn from the credit pool.
-
-        How much resting take-profit value the compensator pulled toward
-        market for each USDT it spent doing so.
-        """
-        if self.credit_drawn <= 0:
-            return Decimal(0)
-        return self.tp_descent / self.credit_drawn
 
 
 @dataclass
@@ -334,7 +322,6 @@ def run_backtest(
         realized=book.realized,
         open_positions=len(book.lots),
         usdt=book.usdt,
-        base_qty=book.base,
         equity=final,
         avg_deployed=deployed_sum / len(bars),
         last_price=last,

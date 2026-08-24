@@ -172,12 +172,15 @@ def render_pnl_chart(
     locked: list[Decimal],
     ohlc: list[Bar | None],
     btc_ohlc: list[Bar | None] | None = None,
+    funds: list[Decimal] | None = None,
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
     Locked USDT (amber) sits on the left axis; funds (green), daily realized
     profit (bars + MA), and the KAS price (daily candlesticks) each get their
-    own right axis. ``btc_ohlc`` (already rescaled to KAS units) is drawn as
+    own right axis. ``funds`` is the whole account's worth per day when
+    given; without it the line falls back to cost basis plus realized
+    profit. ``btc_ohlc`` (already rescaled to KAS units) is drawn as
     lighter grey candles on the same price axis to gauge BTC correlation.
     KAS volume sits in its own panel below, above the date axis.
     ``matplotlib`` is imported lazily to keep start-up fast.
@@ -185,7 +188,8 @@ def render_pnl_chart(
     from matplotlib.figure import Figure
     from matplotlib.patches import Patch
 
-    labels, profits, equity = pnl_series(days, base_capital)
+    labels, profits, computed = pnl_series(days, base_capital)
+    equity = funds if funds else computed
     xs = list(range(len(equity)))
 
     fig = Figure(figsize=(8.4, 6.0), dpi=110)

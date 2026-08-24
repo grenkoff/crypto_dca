@@ -39,6 +39,7 @@ from tgbot.queries import (
     balance_snapshot,
     btc_daily_ohlc,
     daily_ohlc,
+    funds_curve,
     orders_snapshot,
     pnl_curve_data,
     pnl_snapshot,
@@ -155,9 +156,16 @@ async def cmd_pnl(message: Message) -> None:
         await message.answer(caption, parse_mode="Markdown")
         return
     ohlc = await daily_ohlc(dates)
+    funds = await funds_curve(dates)
     btc_ohlc = await btc_daily_ohlc(dates, ohlc)
     png = await asyncio.to_thread(
-        render_pnl_chart, days, base_capital, locked, ohlc, btc_ohlc
+        render_pnl_chart,
+        days,
+        base_capital,
+        locked,
+        ohlc,
+        btc_ohlc,
+        funds,
     )
     await message.answer_photo(
         BufferedInputFile(png, filename="pnl.png"),
