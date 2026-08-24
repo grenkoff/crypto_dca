@@ -6,8 +6,11 @@ from itertools import pairwise
 
 from tgbot.charts import (
     Bar,
+    _axis_badge,
+    _badges,
     _compact,
     _draw_volume,
+    _last,
     _moving_average,
     _smooth,
     pnl_series,
@@ -207,3 +210,55 @@ def test_smoothing_skips_gaps_and_short_series() -> None:
     xs, ys = _smooth([0.0, 1.0, 2.0], [1.0, math.nan, 3.0])
     assert ys == [1.0, 3.0]
     assert xs == [0.0, 2.0]
+
+
+def test_last_skips_trailing_gaps() -> None:
+    assert _last([1.0, 2.0, math.nan]) == 2.0
+    assert _last([math.nan, 5.0]) == 5.0
+    assert _last([math.nan, math.nan]) is None
+    assert _last([]) is None
+
+
+def test_axis_badge_pins_a_labelled_box_to_the_axis() -> None:
+    from matplotlib.figure import Figure
+
+    fig = Figure()
+    axis = fig.subplots()
+    _axis_badge(axis, 12.5, "#16a34a", "12.5", 0)
+    assert len(axis.texts) == 1
+    badge = axis.texts[0]
+    assert badge.get_text() == "12.5"
+    assert badge.get_bbox_patch() is not None
+
+
+def test_every_axis_gets_its_current_value() -> None:
+    from matplotlib.figure import Figure
+
+    fig = Figure()
+    ax, vol_ax = fig.subplots(2, 1)
+    funds_ax, bar_ax, price_ax = ax.twinx(), ax.twinx(), ax.twinx()
+    _badges(
+        (ax, funds_ax, bar_ax, price_ax, vol_ax),
+        [400.0, 410.0],
+        [590.0, 593.0],
+        [0.5, 0.84],
+        [(0.028, 0.0296, 0.0281, 0.0295, 33_400_000.0)],
+    )
+    texts = [
+        t.get_text()
+        for axis in (ax, funds_ax, bar_ax, price_ax, vol_ax)
+        for t in axis.texts
+    ]
+    assert texts == ["410", "593", "0.84", "0.02950", "33.4M"]
+
+
+def test_badges_are_skipped_when_there_is_nothing_to_show() -> None:
+    from matplotlib.figure import Figure
+
+    fig = Figure()
+    ax, vol_ax = fig.subplots(2, 1)
+    funds_ax, bar_ax, price_ax = ax.twinx(), ax.twinx(), ax.twinx()
+    _badges((ax, funds_ax, bar_ax, price_ax, vol_ax), [], [], [], [None])
+    assert not any(
+        axis.texts for axis in (ax, funds_ax, bar_ax, price_ax, vol_ax)
+    )
