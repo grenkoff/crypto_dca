@@ -20,11 +20,16 @@ from core.strategy.compensation import (
     account_load,
     compensation_share,
     plan_compensation,
+    plan_hole_fill,
     split_profit,
 )
 from core.strategy.grid import resting_buy_levels
 from core.strategy.pricing import compute_tp_price
-from core.strategy.types import CompensationContext, OpenPosition
+from core.strategy.types import (
+    CompensationContext,
+    CompensationDecision,
+    OpenPosition,
+)
 
 _SCALE = Decimal(100_000_000)
 
@@ -43,6 +48,9 @@ class BacktestConfig:
     compensation_moves: int = 1
     comp_share_min: Decimal = Decimal(1)
     comp_share_max: Decimal = Decimal(1)
+    deep_moves: bool = False
+    deep_cap: int = 20
+    hole_offset: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True)
@@ -262,28 +270,42 @@ class _Book:
         """
         for _ in range(max(self.cfg.compensation_moves, 1)):
             if not self._compensate_once(price):
-                return
+                break
+        if self.cfg.deep_moves:
+            for _ in range(max(self.cfg.deep_cap, 1)):
+                if not self._deep_once(price):
+                    break
 
-    def _compensate_once(self, price: Decimal) -> bool:
+    def _deep_once(self, price: Decimal) -> bool:
+        """Spend the whole pool pulling the furthest lot toward market."""
         if self.pool <= 0 or not self.lots:
             return False
-        decision = plan_compensation(
+        decision = plan_hole_fill(
             [lot.view() for lot in self.lots],
-            CompensationContext(
-                pool=self.pool,
-                maker_fee=self.cfg.maker_fee,
-                current_price=price,
-                tick_size=self.instrument.tick_size,
-                grid_step=self.cfg.grid_step,
-                tp_step=self.cfg.tp_step,
-                nearest_buy_price=(
-                    max(self.resting) if self.resting else Decimal(0)
-                ),
-                min_order_amt=self.instrument.min_order_amt,
-            ),
+            self._context(price),
+            offset=self.cfg.hole_offset,
         )
         if decision is None:
             return False
+        return self._apply_decision(decision)
+
+    def _context(self, price: Decimal) -> CompensationContext:
+        """Market and grid context for a compensation decision."""
+        return CompensationContext(
+            pool=self.pool,
+            maker_fee=self.cfg.maker_fee,
+            current_price=price,
+            tick_size=self.instrument.tick_size,
+            grid_step=self.cfg.grid_step,
+            tp_step=self.cfg.tp_step,
+            nearest_buy_price=(
+                max(self.resting) if self.resting else Decimal(0)
+            ),
+            min_order_amt=self.instrument.min_order_amt,
+        )
+
+    def _apply_decision(self, decision: CompensationDecision) -> bool:
+        """Move one lot's take-profit and charge the pool for it."""
         target = next(
             lot for lot in self.lots if lot.id == decision.target_position_id
         )
@@ -295,6 +317,16 @@ class _Book:
         self.pool -= decision.credit_drawn
         self.compensations += 1
         return True
+
+    def _compensate_once(self, price: Decimal) -> bool:
+        if self.pool <= 0 or not self.lots:
+            return False
+        decision = plan_compensation(
+            [lot.view() for lot in self.lots], self._context(price)
+        )
+        if decision is None:
+            return False
+        return self._apply_decision(decision)
 
 
 def _bar_day(ts_ms: int) -> date:

@@ -6,6 +6,7 @@ from core.strategy.compensation import (
     account_load,
     compensation_share,
     plan_compensation,
+    plan_hole_fill,
     slot_below,
     split_profit,
 )
@@ -242,3 +243,49 @@ def test_load_rises_as_cash_turns_into_lots() -> None:
         maker_fee=Decimal("0.000625"),
     )
     assert idle < loaded <= Decimal(1)
+
+
+def test_hole_fill_moves_the_dearest_lot_the_pool_affords() -> None:
+    cheap = _pos(1, "0.02900", entry="0.02000", qty="200")
+    dear = _pos(2, "0.05000", entry="0.04000", qty="200")
+    decision = plan_hole_fill(
+        [cheap, dear], _ctx(pool="1000", nearest_buy="0")
+    )
+    assert decision is not None
+    assert decision.target_position_id == 2
+    assert decision.credit_drawn > 0
+
+
+def test_hole_fill_skips_a_lot_the_pool_cannot_cover() -> None:
+    dear = _pos(1, "0.05000", entry="0.04000", qty="200")
+    assert plan_hole_fill([dear], _ctx(pool="0.0001", nearest_buy="0")) is None
+
+
+def test_hole_fill_needs_a_pool() -> None:
+    lot = _pos(1, "0.05000", entry="0.04000", qty="200")
+    assert plan_hole_fill([lot], _ctx(pool="0", nearest_buy="0")) is None
+
+
+def test_the_offset_holds_the_gap_above_market() -> None:
+    lot = _pos(1, "0.05000", entry="0.02000", qty="200")
+    near = plan_hole_fill([lot], _ctx(pool="1000", nearest_buy="0"))
+    far = plan_hole_fill(
+        [lot],
+        _ctx(pool="1000", nearest_buy="0"),
+        offset=Decimal("0.10"),
+    )
+    assert near is not None and far is not None
+    assert far.new_tp_price > near.new_tp_price
+
+
+def test_hole_fill_never_raises_a_take_profit() -> None:
+    lot = _pos(1, "0.02790", entry="0.02000", qty="200")
+    decision = plan_hole_fill(
+        [lot], _ctx(pool="1000", nearest_buy="0"), offset=Decimal("0.50")
+    )
+    assert decision is None
+
+
+def test_hole_fill_leaves_a_partly_sold_lot_alone() -> None:
+    lot = _pos(1, "0.05000", entry="0.04000", qty="200", filled="100")
+    assert plan_hole_fill([lot], _ctx(pool="1000", nearest_buy="0")) is None

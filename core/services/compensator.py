@@ -22,6 +22,7 @@ from core.strategy.compensation import (
     account_load,
     compensation_share,
     plan_compensation,
+    plan_hole_fill,
     split_profit,
 )
 from core.strategy.rounding import min_notional_price
@@ -105,7 +106,12 @@ class Compensator:
             budget=str(budget),
             pocket=str(pocket),
         )
-        await self._drain(positions, pool, current_price, source_position_id)
+        left = await self._drain(
+            positions, pool, current_price, source_position_id
+        )
+        await self._fill_hole(
+            positions, left, current_price, source_position_id
+        )
 
     async def _share(
         self, positions: list[OpenPosition], current_price: Decimal
@@ -133,7 +139,7 @@ class Compensator:
         pool: Decimal,
         current_price: Decimal,
         source_position_id: int,
-    ) -> None:
+    ) -> Decimal:
         """Spend the pool on TP moves until it stops funding one.
 
         ``_MAX_MOVES_PER_CLOSE`` caps the burst. It is 1 because replays
@@ -141,25 +147,61 @@ class Compensator:
         unloading is worth: over 181 days a second move per close cut
         realized profit by a third, and a third move by half.
         """
-        nearest_buy = await repository.highest_resting_buy()
+        nearest_buy = await self._nearest_buy()
         for _ in range(_MAX_MOVES_PER_CLOSE):
-            ctx = CompensationContext(
-                pool=pool,
-                maker_fee=self.config.maker_fee,
-                current_price=current_price,
-                tick_size=self.instrument.tick_size,
-                grid_step=self.config.grid_step,
-                tp_step=self.config.tp_step,
-                nearest_buy_price=nearest_buy,
-                min_order_amt=self.instrument.min_order_amt,
-            )
+            ctx = self._context(pool, current_price, nearest_buy)
             decision = plan_compensation(positions, ctx)
             if decision is None:
-                return
+                return pool
             if not await self._execute(decision, pool, source_position_id):
-                return
+                return pool
             pool -= decision.credit_drawn
             positions = _retagged(positions, decision)
+        return pool
+
+    async def _nearest_buy(self) -> Decimal:
+        """Price of the highest resting buy, or zero when the grid is bare."""
+        return await repository.highest_resting_buy()
+
+    def _context(
+        self, pool: Decimal, current_price: Decimal, nearest_buy: Decimal
+    ) -> CompensationContext:
+        """Market and grid context for a compensation decision."""
+        return CompensationContext(
+            pool=pool,
+            maker_fee=self.config.maker_fee,
+            current_price=current_price,
+            tick_size=self.instrument.tick_size,
+            grid_step=self.config.grid_step,
+            tp_step=self.config.tp_step,
+            nearest_buy_price=nearest_buy,
+            min_order_amt=self.instrument.min_order_amt,
+        )
+
+    async def _fill_hole(
+        self,
+        positions: list[OpenPosition],
+        pool: Decimal,
+        current_price: Decimal,
+        source_position_id: int,
+    ) -> None:
+        """Spend what is left pulling a stranded lot near the market.
+
+        The ordinary move only ever takes free steps, so without this the
+        pool would keep growing untouched. This drains it into the gap
+        nearest market, held ``comp_hole_offset`` above the price so the
+        lot is not sold into an immediate loss.
+        """
+        if pool <= 0:
+            return
+        decision = plan_hole_fill(
+            positions,
+            self._context(pool, current_price, await self._nearest_buy()),
+            offset=self.config.comp_hole_offset,
+        )
+        if decision is None:
+            return
+        await self._execute(decision, pool, source_position_id)
 
     async def _execute(
         self,
