@@ -4,42 +4,78 @@ from __future__ import annotations
 
 import io
 from decimal import Decimal
-from math import isnan
+from math import isnan, sqrt
 from typing import Any
 
 Bar = tuple[float, float, float, float, float]
 
 
-def _catmull(t: float, p0: float, p1: float, p2: float, p3: float) -> float:
-    """One Catmull-Rom interpolation between p1 and p2 at parameter t."""
+def _tangents(xs: list[float], ys: list[float]) -> list[float]:
+    """Fritsch-Carlson tangents: slopes that cannot overshoot the data.
+
+    Plain cubic interpolation dips below and climbs above its own points
+    around a step, which on a money line draws balances the account never
+    held. Limiting the tangents keeps every segment inside its endpoints.
+    """
+    n = len(xs)
+    deltas = [(ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]) for i in range(n - 1)]
+    tangents = [deltas[0]]
+    tangents += [(deltas[i - 1] + deltas[i]) / 2 for i in range(1, n - 1)]
+    tangents.append(deltas[-1])
+    for i, delta in enumerate(deltas):
+        if delta == 0:
+            tangents[i] = tangents[i + 1] = 0.0
+            continue
+        alpha = tangents[i] / delta
+        beta = tangents[i + 1] / delta
+        size = alpha * alpha + beta * beta
+        if size > 9:
+            scale = 3.0 / sqrt(size)
+            tangents[i] = scale * alpha * delta
+            tangents[i + 1] = scale * beta * delta
+    return tangents
+
+
+def _hermite(t: float, y0: float, y1: float, m0: float, m1: float) -> float:
+    """Cubic Hermite value between two points with given tangents."""
     t2 = t * t
     t3 = t2 * t
-    return 0.5 * (
-        2 * p1
-        + (-p0 + p2) * t
-        + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2
-        + (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+    return (
+        (2 * t3 - 3 * t2 + 1) * y0
+        + (t3 - 2 * t2 + t) * m0
+        + (-2 * t3 + 3 * t2) * y1
+        + (t3 - t2) * m1
     )
 
 
 def _smooth(
     xs: list[float], ys: list[float], samples: int = 18
 ) -> tuple[list[float], list[float]]:
-    """Catmull-Rom spline through the points (NaN skipped) for a soft curve."""
+    """Monotone spline through the points (NaN skipped) for a soft curve."""
     pts = [(x, y) for x, y in zip(xs, ys, strict=False) if not isnan(y)]
     if len(pts) < 3:
         return [p[0] for p in pts], [p[1] for p in pts]
-    ext = [pts[0], *pts, pts[-1]]
+    px = [p[0] for p in pts]
+    py = [p[1] for p in pts]
+    tangents = _tangents(px, py)
     ox: list[float] = []
     oy: list[float] = []
-    for i in range(1, len(ext) - 2):
-        seg = (ext[i - 1], ext[i], ext[i + 1], ext[i + 2])
+    for i in range(len(pts) - 1):
+        span = px[i + 1] - px[i]
         for s in range(samples):
             t = s / samples
-            ox.append(_catmull(t, *(p[0] for p in seg)))
-            oy.append(_catmull(t, *(p[1] for p in seg)))
-    ox.append(pts[-1][0])
-    oy.append(pts[-1][1])
+            ox.append(px[i] + t * span)
+            oy.append(
+                _hermite(
+                    t,
+                    py[i],
+                    py[i + 1],
+                    tangents[i] * span,
+                    tangents[i + 1] * span,
+                )
+            )
+    ox.append(px[-1])
+    oy.append(py[-1])
     return ox, oy
 
 
