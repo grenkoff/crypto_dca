@@ -132,6 +132,44 @@ _VOL_DOWN = "#f0a8a8"
 _MA_WINDOW = 10
 
 
+def _axis_badge(
+    axis: Any, value: float, colour: str, text: str, offset: float
+) -> None:
+    """Pin the current value to an axis, the way a ticker tape does.
+
+    ``offset`` is the spine's outward shift in points, so the badge lands
+    on the axis it belongs to rather than on the plot.
+    """
+    align = "left" if offset >= 0 else "right"
+    axis.annotate(
+        text,
+        xy=(1 if offset >= 0 else 0, value),
+        xycoords=("axes fraction", "data"),
+        xytext=(offset + (2 if offset >= 0 else -2), 0),
+        textcoords="offset points",
+        ha=align,
+        va="center",
+        fontsize=7,
+        color="white",
+        zorder=12,
+        annotation_clip=False,
+        bbox={
+            "boxstyle": "round,pad=0.25",
+            "facecolor": colour,
+            "edgecolor": "white",
+            "linewidth": 0.8,
+        },
+    )
+
+
+def _last(values: list[float]) -> float | None:
+    """The last value that is a real number, or None."""
+    for value in reversed(values):
+        if not isnan(value):
+            return value
+    return None
+
+
 def _draw_volume(axis: Any, ohlc: list[Bar | None]) -> None:
     """Fill the lower panel with per-day volume, tinted by candle direction."""
     from matplotlib.ticker import FuncFormatter, MaxNLocator
@@ -202,6 +240,32 @@ def _moving_average(values: list[Decimal], window: int) -> list[float]:
     return out
 
 
+def _badges(
+    axes: tuple[Any, Any, Any, Any, Any],
+    locked: list[float],
+    equity: list[float],
+    ma: list[float],
+    ohlc: list[Bar | None],
+) -> None:
+    """Tag every axis with the value it currently reads."""
+    ax, funds_ax, bar_ax, price_ax, vol_ax = axes
+    candles = [bar for bar in ohlc if bar is not None]
+    last_locked = _last(locked)
+    last_funds = _last(equity)
+    last_ma = _last(ma)
+    if last_locked is not None:
+        _axis_badge(ax, last_locked, _AMBER, f"{last_locked:,.0f}", -4)
+    if last_funds is not None:
+        _axis_badge(funds_ax, last_funds, _GREEN, f"{last_funds:,.2f}", 2)
+    if last_ma is not None:
+        _axis_badge(bar_ax, last_ma, _MA, f"{last_ma:.2f}", 34)
+    if candles:
+        close = candles[-1][3]
+        _axis_badge(price_ax, close, _INK, f"{close:.5f}", 68)
+        volume = candles[-1][4]
+        _axis_badge(vol_ax, volume, _GREY, _compact(volume), -4)
+
+
 def render_pnl_chart(
     days: list[tuple[str, Decimal]],
     base_capital: Decimal,
@@ -264,6 +328,13 @@ def render_pnl_chart(
         line_ax.patch.set_visible(False)
 
     _draw_volume(vol_ax, ohlc)
+    _badges(
+        (ax, funds_ax, bar_ax, price_ax, vol_ax),
+        [float(v) for v in locked],
+        [float(v) for v in equity],
+        _moving_average(profits, _MA_WINDOW),
+        ohlc,
+    )
 
     fig.suptitle("Funds & profit, USDT", y=0.965, fontsize=11)
     vol_ax.set_xlabel("days")
