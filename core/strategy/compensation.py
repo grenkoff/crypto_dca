@@ -19,6 +19,7 @@ from core.strategy.rounding import (
     min_notional_price,
     next_tick_above,
     round_down_to_tick,
+    round_up_to_tick,
 )
 from core.strategy.types import (
     CompensationContext,
@@ -95,6 +96,82 @@ def slot_below(tp_price: Decimal, grid_step: Decimal) -> Decimal:
     if snapped < tp_price:
         return snapped
     return tp_price - grid_step
+
+
+def plan_hole_fill(
+    open_positions: Sequence[OpenPosition],
+    ctx: CompensationContext,
+    *,
+    offset: Decimal = Decimal(0),
+) -> CompensationDecision | None:
+    """Fill the gap nearest market with the dearest lot the pool affords.
+
+    The ordinary move always drops the nearest take-profit one slot, and
+    that step is usually already profitable, so the pool never gets
+    spent. This picks the target first — the empty grid slot closest to
+    market — and then asks which stranded lot the pool can afford to move
+    into it, preferring the one that uses the pool most fully.
+
+    ``offset`` holds the search that fraction of the price above market,
+    so a lot lands near the price rather than on top of it and is not
+    sold into an immediate loss.
+    """
+    if ctx.pool <= 0 or ctx.grid_step <= 0 or not open_positions:
+        return None
+    occupied = {p.current_tp_price for p in open_positions}
+    hole = _nearest_hole(ctx, occupied, offset)
+    if hole is None:
+        return None
+    best: CompensationDecision | None = None
+    spent = Decimal(-1)
+    for lot in open_positions:
+        if lot.filled_qty > 0 or lot.current_tp_price <= hole:
+            continue
+        if ctx.min_order_amt > 0 and hole * lot.qty < ctx.min_order_amt:
+            continue
+        realized = (
+            hole * lot.qty * (Decimal(1) - ctx.maker_fee)
+            - lot.entry_price * lot.qty
+            - lot.fees_in
+        )
+        pair = realized + lot.compensation_credit
+        draw = Decimal(0) if pair > 0 else (-pair + _PROFIT_EPS)
+        if draw > ctx.pool or draw <= spent:
+            continue
+        spent = draw
+        best = CompensationDecision(
+            target_position_id=lot.id,
+            new_tp_price=hole,
+            new_credit=lot.compensation_credit + draw,
+            credit_drawn=draw,
+        )
+    return best
+
+
+def _nearest_hole(
+    ctx: CompensationContext,
+    occupied: set[Decimal],
+    offset: Decimal = Decimal(0),
+) -> Decimal | None:
+    """The empty grid slot closest to market, or None if the wall is solid."""
+    floor = _wall_floor(ctx) + ctx.current_price * max(offset, Decimal(0))
+    slot = round_up_to_tick(floor, ctx.grid_step)
+    highest = max(occupied) if occupied else slot
+    while slot in occupied:
+        slot += ctx.grid_step
+        if slot > highest:
+            return None
+    return slot
+
+
+def _wall_floor(ctx: CompensationContext) -> Decimal:
+    """Lowest price a resting take-profit may be moved onto."""
+    market_floor = next_tick_above(ctx.current_price, ctx.tick_size)
+    if ctx.nearest_buy_price <= 0:
+        return market_floor
+    return max(
+        market_floor, ctx.nearest_buy_price + ctx.tp_step + ctx.grid_step
+    )
 
 
 def plan_compensation(

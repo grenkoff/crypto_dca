@@ -140,6 +140,7 @@ def config() -> StrategyConfig:
         tp_step=Decimal("100"),  # BTC-scale absolute TP offset
         comp_share_min=Decimal("0.20"),
         comp_share_max=Decimal("0.80"),
+        comp_hole_offset=Decimal("0.03"),
     )
 
 

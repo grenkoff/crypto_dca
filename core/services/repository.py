@@ -756,7 +756,9 @@ async def load_config() -> StrategyConfig:
 
 
 _CFG_POSITIVE = frozenset({"grid_step", "tp_step", "order_qty_quote"})
-_CFG_SHARES = frozenset({"comp_share_min", "comp_share_max"})
+_CFG_SHARES = frozenset(
+    {"comp_share_min", "comp_share_max", "comp_hole_offset"}
+)
 _POCKET_FLOOR = Decimal("0.20")
 _CFG_NONNEG = frozenset({"min_profit_quote"})
 _CFG_FEES = frozenset({"maker_fee", "taker_fee"})
@@ -771,6 +773,10 @@ _CFG_FIELDS = (
 
 def _validate_share(key: str, value: Decimal) -> None:
     """Reject a share outside its band, keeping the pocket floor intact."""
+    if key == "comp_hole_offset":
+        if not 0 <= value < 1:
+            raise ValueError("comp_hole_offset must be in [0, 1)")
+        return
     if not 0 < value <= 1:
         raise ValueError(f"{key} must be in (0, 1]")
     if key == "comp_share_max" and value > Decimal(1) - _POCKET_FLOOR:

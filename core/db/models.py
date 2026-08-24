@@ -115,6 +115,9 @@ class StrategyConfig(Base):
     comp_share_max: Mapped[Decimal] = mapped_column(
         _FEE, default=Decimal("0.80")
     )
+    comp_hole_offset: Mapped[Decimal] = mapped_column(
+        _FEE, default=Decimal("0.03")
+    )
 
 
 class BotStatus(Base):
