@@ -996,6 +996,31 @@ async def upsert_grid_level(
         level.updated_at = _now()
 
 
+async def open_position_at_level(level_index: int) -> Position | None:
+    """The open position resting on a grid level, if there is one."""
+    async with new_session() as session:
+        found: Position | None = await session.scalar(
+            select(Position).where(
+                Position.level_index == level_index,
+                Position.status == _OPEN,
+            )
+        )
+        return found
+
+
+async def adopt_tp_order(position_id: int, order_id: str) -> None:
+    """Point a position at a take-profit order it already owns.
+
+    Used when a placement reached the exchange but its write did not, so
+    the order comes back into the books instead of resting unowned.
+    """
+    async with new_session() as session, session.begin():
+        pos = await session.get(Position, position_id, with_for_update=True)
+        if pos is None:
+            raise ValueError(f"position {position_id} vanished")
+        pos.tp_order_id = order_id
+
+
 async def find_level_by_order_id(order_id: str) -> GridLevel | None:
     """The grid level resting the given buy order id, or None."""
     async with new_session() as session:
