@@ -5,6 +5,7 @@ description = "Long-only grid DCA trading bot for Bybit spot with pairwise loss 
 requires-python = ">=3.12"
 dependencies = [
     "pybit>=5.17.0",
+    "requests>=2.32",
     "aiogram>=3.30.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",

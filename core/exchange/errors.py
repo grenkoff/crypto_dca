@@ -22,3 +22,10 @@ class InsufficientBalanceError(BybitError):
 
 class RateLimitedError(BybitError):
     """Request was rate-limited by the exchange."""
+
+
+class TransientNetworkError(BybitError):
+    """A request failed in transit; the exchange's answer is unknown."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(0, message)
