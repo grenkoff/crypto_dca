@@ -62,6 +62,9 @@ class FakeHTTP:
     def get_order_history(self, **kwargs: Any) -> dict[str, Any]:
         return self._respond("get_order_history", kwargs)
 
+    def get_transaction_log(self, **kwargs: Any) -> dict[str, Any]:
+        return self._respond("get_transaction_log", kwargs)
+
 
 def _ok(result: dict[str, Any]) -> dict[str, Any]:
     return {

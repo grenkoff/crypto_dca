@@ -135,3 +135,34 @@ def test_volume_panel_handles_no_candles_at_all() -> None:
     axis = fig.subplots()
     _draw_volume(axis, [None, None])
     assert list(axis.get_yticks()) == []
+
+
+def test_funds_line_overrides_the_computed_equity() -> None:
+    days = _days([("01.07", "1"), ("02.07", "2")])
+    ohlc: list[Bar | None] = [
+        (0.028, 0.0282, 0.0279, 0.0281, 5000.0),
+        (0.0281, 0.0284, 0.028, 0.0282, 5000.0),
+    ]
+    given = render_pnl_chart(
+        days,
+        Decimal("340"),
+        [Decimal("50"), Decimal("52")],
+        ohlc,
+        None,
+        [Decimal("900"), Decimal("950")],
+    )
+    computed = render_pnl_chart(
+        days, Decimal("340"), [Decimal("50"), Decimal("52")], ohlc
+    )
+    assert given[:8] == b"\x89PNG\r\n\x1a\n"
+    assert given != computed
+
+
+def test_an_empty_funds_line_falls_back_to_the_computed_one() -> None:
+    days = _days([("01.07", "1")])
+    ohlc: list[Bar | None] = [(0.028, 0.0282, 0.0279, 0.0281, 5000.0)]
+    fallback = render_pnl_chart(
+        days, Decimal("340"), [Decimal("50")], ohlc, None, []
+    )
+    plain = render_pnl_chart(days, Decimal("340"), [Decimal("50")], ohlc)
+    assert fallback == plain

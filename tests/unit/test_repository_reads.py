@@ -15,6 +15,7 @@ from core.db.models import (
     StrategyConfig,
 )
 from core.db.session import new_session
+from core.exchange.types import Transfer as BybitTransfer
 from core.services import repository
 from tests.conftest import add_rows
 
@@ -258,3 +259,76 @@ async def test_tp_projection_uses_the_tp_a_lot_carried_back_then() -> None:
 async def test_tp_projection_rejects_a_non_positive_window() -> None:
     with pytest.raises(ValueError, match="days must be positive"):
         await repository.tp_projection_series(Decimal("0"), 0)
+
+
+def _transfer(ext: str, amount: str, at: datetime) -> BybitTransfer:
+    return BybitTransfer(
+        external_id=ext, coin="USDT", amount=Decimal(amount), at=at
+    )
+
+
+async def test_transfers_are_stored_once_per_external_id() -> None:
+    now = datetime.now(tz=UTC)
+    rows = [_transfer("a", "50", now), _transfer("b", "-20", now)]
+    assert await repository.record_transfers(rows) == 2
+    assert await repository.record_transfers(rows) == 0
+    assert (
+        await repository.record_transfers([*rows, _transfer("c", "1", now)])
+        == 1
+    )
+
+
+async def test_last_transfer_at_reports_the_newest() -> None:
+    now = datetime.now(tz=UTC)
+    assert await repository.last_transfer_at() is None
+    await repository.record_transfers(
+        [
+            _transfer("old", "10", now - timedelta(days=3)),
+            _transfer("new", "10", now - timedelta(hours=1)),
+        ]
+    )
+    latest = await repository.last_transfer_at()
+    assert latest is not None
+    assert (now - latest).total_seconds() < 7200
+
+
+async def test_projection_rewinds_a_deposit_out_of_the_past() -> None:
+    now = datetime.now(tz=UTC)
+    await _cfg()
+    await _open(1, "0.02", "100", "0.03")
+    await repository.record_transfers(
+        [_transfer("dep", "40", now - timedelta(hours=2))]
+    )
+    series = await repository.tp_projection_series(Decimal("100"), 2)
+    yesterday, today = series[0][1], series[1][1]
+    assert today - yesterday == Decimal("40")
+
+
+async def test_account_value_adds_base_held_outside_positions() -> None:
+    await _cfg()
+    await _open(1, "0.02", "100", "0.03")
+    days = [datetime.now(tz=UTC).date()]
+    with_spare = await repository.account_value_series(
+        Decimal("10"), Decimal("500"), Decimal("0.03"), days
+    )
+    without = await repository.account_value_series(
+        Decimal("10"), Decimal(0), Decimal("0.03"), days
+    )
+    assert with_spare[0][1] - without[0][1] == Decimal("500") * Decimal("0.03")
+
+
+async def test_account_value_of_no_days_is_empty() -> None:
+    await _cfg()
+    assert (
+        await repository.account_value_series(
+            Decimal("10"), Decimal(0), Decimal("0.03"), []
+        )
+        == []
+    )
+
+
+async def test_open_base_qty_counts_only_unsold_coins() -> None:
+    await _cfg()
+    await _open(1, "0.02", "100", "0.03")
+    await _open(2, "0.021", "50", "0.031")
+    assert await repository.open_base_qty() == Decimal("150")

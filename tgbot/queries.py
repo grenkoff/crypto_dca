@@ -25,6 +25,7 @@ log = structlog.get_logger()
 Bar = tuple[float, float, float, float, float]
 
 _PROJECTION_DAYS = 10
+_TRANSFER_BACKFILL = 400
 
 
 async def status_snapshot() -> StatusSnapshot:
@@ -76,6 +77,53 @@ async def pnl_curve_data() -> tuple[
     day; ``dates`` are the UTC days (aligned to the others) for the price line.
     """
     return await repository.pnl_curve_data()
+
+
+async def funds_curve(dates: list[date]) -> list[Decimal]:
+    """Total account value in USDT for each chart day.
+
+    Cash plus every open lot at its take-profit plus base coin held
+    outside any position; funding movements are rewound with the trades.
+    Falls back to an empty curve if the exchange cannot be reached, so a
+    price hiccup never costs the whole chart.
+    """
+    if not dates:
+        return []
+    try:
+        client = BybitClient.from_settings()
+        symbol = await repository.symbol()
+        balances = await client.get_balances()
+        price = await client.get_last_price(symbol)
+        await _sync_transfers(client)
+    except Exception as exc:
+        log.warning("pnl.funds_curve_failed", error=str(exc)[:100])
+        return []
+    quote = balances.get("USDT")
+    base = balances.get(symbol.removesuffix("USDT"))
+    held = await repository.open_base_qty()
+    spare = (base.total - held) if base is not None else Decimal(0)
+    series = await repository.account_value_series(
+        quote.total if quote is not None else Decimal(0),
+        max(spare, Decimal(0)),
+        price,
+        dates,
+    )
+    return [value for _, value in series]
+
+
+async def _sync_transfers(client: BybitClient) -> None:
+    """Pull funding movements the database has not seen yet."""
+    last = await repository.last_transfer_at()
+    start = last or (datetime.now(tz=UTC) - timedelta(days=_TRANSFER_BACKFILL))
+    now = datetime.now(tz=UTC)
+    if start >= now:
+        return
+    rows = await client.get_transfers(
+        int(start.timestamp() * 1000), int(now.timestamp() * 1000)
+    )
+    stored = await repository.record_transfers(rows)
+    if stored:
+        log.info("pnl.transfers_recorded", count=stored)
 
 
 async def daily_ohlc(
