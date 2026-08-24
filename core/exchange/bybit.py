@@ -411,6 +411,7 @@ def _parse_order(item: dict[str, Any]) -> Order:
         status=OrderStatus(item["orderStatus"]),
         created_at=_ts(item["createdTime"]),
         updated_at=_ts(item["updatedTime"]),
+        order_link_id=str(item.get("orderLinkId") or ""),
     )
 
 

@@ -80,6 +80,7 @@ class Order(_Frozen):
     status: OrderStatus
     created_at: datetime
     updated_at: datetime
+    order_link_id: str = Field(default="")
 
 
 class Execution(_Frozen):
