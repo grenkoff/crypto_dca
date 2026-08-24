@@ -55,6 +55,8 @@ class BacktestResult:
     stuck_cost: Decimal
     max_drawdown: Decimal
     starved_share: Decimal
+    credit_drawn: Decimal
+    tp_descent: Decimal
     equity_curve: list[tuple[date, Decimal]] = field(default_factory=list)
 
     @property
@@ -63,6 +65,17 @@ class BacktestResult:
         if self.trades == 0:
             return Decimal(0)
         return self.realized / self.trades
+
+    @property
+    def descent_per_credit(self) -> Decimal:
+        """Wall descent bought per USDT drawn from the credit pool.
+
+        How much resting take-profit value the compensator pulled toward
+        market for each USDT it spent doing so.
+        """
+        if self.credit_drawn <= 0:
+            return Decimal(0)
+        return self.tp_descent / self.credit_drawn
 
 
 @dataclass
@@ -116,6 +129,8 @@ class _Book:
         self.compensations = 0
         self.realized = Decimal(0)
         self.deployed = Decimal(0)
+        self.credit_drawn = Decimal(0)
+        self.tp_descent = Decimal(0)
         self.band_price: Decimal | None = None
         self._next_id = 1
 
@@ -258,6 +273,8 @@ class _Book:
         target = next(
             lot for lot in self.lots if lot.id == decision.target_position_id
         )
+        self.tp_descent += (target.tp - decision.new_tp_price) * target.qty
+        self.credit_drawn += decision.credit_drawn
         target.retag(decision.new_tp_price, decision.new_credit)
         if self._low_tp is None or decision.new_tp_price < self._low_tp:
             self._low_tp = decision.new_tp_price
@@ -324,5 +341,7 @@ def run_backtest(
         stuck_cost=sum((lot.entry * lot.qty for lot in book.lots), Decimal(0)),
         max_drawdown=drawdown,
         starved_share=Decimal(starved) / len(bars),
+        credit_drawn=book.credit_drawn,
+        tp_descent=book.tp_descent,
         equity_curve=curve,
     )
