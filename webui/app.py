@@ -101,6 +101,8 @@ class ConfigUpdate(BaseModel):
     maker_fee: Decimal | None = None
     taker_fee: Decimal | None = None
     max_open_orders: int | None = None
+    comp_share_min: Decimal | None = None
+    comp_share_max: Decimal | None = None
     grid_mode: str | None = None
     symbol: str | None = None
 
@@ -154,6 +156,8 @@ def _read_routes(app: FastAPI) -> None:
                 "maker_fee": _num(cfg.maker_fee),
                 "taker_fee": _num(cfg.taker_fee),
                 "max_open_orders": cfg.max_open_orders,
+                "comp_share_min": _num(cfg.comp_share_min),
+                "comp_share_max": _num(cfg.comp_share_max),
             }
         )
 

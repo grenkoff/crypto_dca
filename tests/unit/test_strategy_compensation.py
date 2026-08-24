@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from core.strategy.compensation import plan_compensation, slot_below
+from core.strategy.compensation import (
+    account_load,
+    compensation_share,
+    plan_compensation,
+    slot_below,
+    split_profit,
+)
 from core.strategy.types import CompensationContext, OpenPosition
 
 
@@ -173,3 +179,66 @@ def test_partial_fill_still_occupies_its_slot() -> None:
         _pos(4, "0.02815"),
     ]
     assert plan_compensation(positions, _ctx()) is None
+
+
+def test_share_tracks_load_between_its_bounds() -> None:
+    low, high = Decimal("0.20"), Decimal("0.80")
+    assert compensation_share(Decimal("0.05"), low=low, high=high) == low
+    assert compensation_share(Decimal("0.50"), low=low, high=high) == Decimal(
+        "0.50"
+    )
+    assert compensation_share(Decimal("0.95"), low=low, high=high) == high
+
+
+def test_share_collapses_to_the_ceiling_when_bounds_cross() -> None:
+    assert compensation_share(
+        Decimal("0.9"), low=Decimal("0.8"), high=Decimal("0.3")
+    ) == Decimal("0.3")
+
+
+def test_split_always_adds_back_to_the_whole_profit() -> None:
+    profit = Decimal("0.123456789012345")
+    budget, pocket = split_profit(profit, Decimal("0.37"))
+    assert budget + pocket == profit
+    assert budget > 0 and pocket > 0
+
+
+def test_split_gives_a_zero_share_entirely_to_the_pocket() -> None:
+    budget, pocket = split_profit(Decimal("5"), Decimal(0))
+    assert budget == Decimal(0)
+    assert pocket == Decimal("5")
+
+
+def test_split_leaves_a_loss_out_of_the_budget() -> None:
+    budget, pocket = split_profit(Decimal("-2"), Decimal("0.8"))
+    assert budget == Decimal(0)
+    assert pocket == Decimal("-2")
+
+
+def test_load_is_zero_for_an_empty_book() -> None:
+    assert account_load(
+        [],
+        quote_total=Decimal("100"),
+        base_total=Decimal(0),
+        price=Decimal("0.03"),
+        maker_fee=Decimal("0.000625"),
+    ) == Decimal(0)
+
+
+def test_load_rises_as_cash_turns_into_lots() -> None:
+    lots = [_pos(1, "0.03", entry="0.02", qty="1000")]
+    idle = account_load(
+        lots,
+        quote_total=Decimal("1000"),
+        base_total=Decimal("1000"),
+        price=Decimal("0.03"),
+        maker_fee=Decimal("0.000625"),
+    )
+    loaded = account_load(
+        lots,
+        quote_total=Decimal("10"),
+        base_total=Decimal("1000"),
+        price=Decimal("0.03"),
+        maker_fee=Decimal("0.000625"),
+    )
+    assert idle < loaded <= Decimal(1)

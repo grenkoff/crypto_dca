@@ -17,6 +17,7 @@ from core.exchange.bybit import BybitClient
 from core.exchange.types import Execution as BybitExecution
 from core.exchange.types import Instrument, Side
 from core.services import repository
+from core.services.balances import BalanceCache
 from core.services.compensator import Compensator
 from core.services.events import EventBus
 from core.services.order_common import link_id
@@ -65,8 +66,13 @@ class OrderManager:
         self.instrument = instrument
         self.config = config
         self.bus = bus
+        self.balances = BalanceCache(client)
         self._compensator = Compensator(
-            client=client, instrument=instrument, config=config, bus=bus
+            balances=self.balances,
+            client=client,
+            instrument=instrument,
+            config=config,
+            bus=bus,
         )
 
     @property

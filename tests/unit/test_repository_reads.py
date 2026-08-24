@@ -332,3 +332,41 @@ async def test_open_base_qty_counts_only_unsold_coins() -> None:
     await _open(1, "0.02", "100", "0.03")
     await _open(2, "0.021", "50", "0.031")
     assert await repository.open_base_qty() == Decimal("150")
+
+
+async def test_accrue_split_grows_both_buckets_and_accumulates() -> None:
+    await add_rows(BotStatus(id=1))
+    pool = await repository.accrue_split(
+        pool_add=Decimal("3"), pocket_add=Decimal("2")
+    )
+    assert pool == Decimal("3")
+    pool = await repository.accrue_split(
+        pool_add=Decimal("1.5"), pocket_add=Decimal("0.5")
+    )
+    assert pool == Decimal("4.5")
+    async with new_session() as session:
+        bot = await session.get(BotStatus, 1)
+    assert bot is not None
+    assert bot.pending_credit == Decimal("4.5")
+    assert bot.pocket_credit == Decimal("2.5")
+
+
+async def test_a_share_above_the_pocket_floor_is_rejected() -> None:
+    await add_rows(StrategyConfig(id=1))
+    with pytest.raises(ValueError, match="pocket"):
+        await repository.update_config(
+            actor="t", updates={"comp_share_max": Decimal("0.9")}
+        )
+    cfg = await repository.update_config(
+        actor="t", updates={"comp_share_max": Decimal("0.5")}
+    )
+    assert cfg.comp_share_max == Decimal("0.5")
+
+
+async def test_a_share_outside_zero_to_one_is_rejected() -> None:
+    await add_rows(StrategyConfig(id=1))
+    for bad in (Decimal("0"), Decimal("-0.1"), Decimal("1.5")):
+        with pytest.raises(ValueError, match="comp_share_min"):
+            await repository.update_config(
+                actor="t", updates={"comp_share_min": bad}
+            )

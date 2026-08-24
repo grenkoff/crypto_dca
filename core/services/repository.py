@@ -722,6 +722,7 @@ async def digest_metrics() -> dict[str, Any]:
             ),
             "pnl_total": await _sum(session, Position.realized_pnl, closed),
             "compensations_24h": int(comp_24h or 0),
+            "pocket": (await _load_bot(session)).pocket_credit,
             "open_positions": await _count(session, Position.status == _OPEN),
             "deployed": deployed,
         }
@@ -755,14 +756,27 @@ async def load_config() -> StrategyConfig:
 
 
 _CFG_POSITIVE = frozenset({"grid_step", "tp_step", "order_qty_quote"})
+_CFG_SHARES = frozenset({"comp_share_min", "comp_share_max"})
+_POCKET_FLOOR = Decimal("0.20")
 _CFG_NONNEG = frozenset({"min_profit_quote"})
 _CFG_FEES = frozenset({"maker_fee", "taker_fee"})
 _CFG_FIELDS = (
     _CFG_POSITIVE
     | _CFG_NONNEG
     | _CFG_FEES
+    | _CFG_SHARES
     | frozenset({"max_open_orders", "grid_mode", "symbol"})
 )
+
+
+def _validate_share(key: str, value: Decimal) -> None:
+    """Reject a share outside its band, keeping the pocket floor intact."""
+    if not 0 < value <= 1:
+        raise ValueError(f"{key} must be in (0, 1]")
+    if key == "comp_share_max" and value > Decimal(1) - _POCKET_FLOOR:
+        raise ValueError(
+            f"comp_share_max must leave {_POCKET_FLOOR:%} for the pocket"
+        )
 
 
 def _validate_config_updates(updates: dict[str, Any]) -> None:
@@ -770,6 +784,8 @@ def _validate_config_updates(updates: dict[str, Any]) -> None:
     for key, value in updates.items():
         if key not in _CFG_FIELDS:
             raise ValueError(f"unknown config field: {key}")
+        if key in _CFG_SHARES:
+            _validate_share(key, value)
         if key in _CFG_POSITIVE and value <= 0:
             raise ValueError(f"{key} must be > 0")
         if key in _CFG_NONNEG and value < 0:
@@ -1156,16 +1172,18 @@ async def open_positions() -> list[Position]:
         return list(rows.all())
 
 
-async def load_pending() -> Decimal:
-    """The banked pending-compensation credit."""
-    async with new_session() as session, session.begin():
-        return (await _load_bot(session)).pending_credit
+async def accrue_split(*, pool_add: Decimal, pocket_add: Decimal) -> Decimal:
+    """Bank a close's profit into the pool and the pocket (atomic).
 
-
-async def bank_pending(value: Decimal) -> None:
-    """Persist the banked pending-compensation credit."""
+    Both halves land before any exchange call, so a crash mid-move can
+    lose a take-profit placement but never the profit itself. Returns the
+    pool available to spend right after the accrual.
+    """
     async with new_session() as session, session.begin():
-        (await _load_bot(session)).pending_credit = value
+        bot = await _load_bot(session)
+        bot.pending_credit += pool_add
+        bot.pocket_credit += pocket_add
+        return bot.pending_credit
 
 
 async def active_buy_order_ids() -> set[str]:
