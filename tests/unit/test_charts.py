@@ -8,6 +8,7 @@ from tgbot.charts import (
     _compact,
     _draw_volume,
     _moving_average,
+    _smooth,
     pnl_series,
     render_pnl_chart,
 )
@@ -166,3 +167,42 @@ def test_an_empty_funds_line_falls_back_to_the_computed_one() -> None:
     )
     plain = render_pnl_chart(days, Decimal("340"), [Decimal("50")], ohlc)
     assert fallback == plain
+
+
+def test_smoothing_never_leaves_the_data_range() -> None:
+    steps = [470.65, 470.65, 570.79, 571.11, 571.36]
+    _, ys = _smooth([float(i) for i in range(len(steps))], steps)
+    assert min(ys) >= min(steps) - 1e-9
+    assert max(ys) <= max(steps) + 1e-9
+
+
+def test_smoothing_keeps_a_rising_series_rising() -> None:
+    rising = [418.64, 424.22, 424.52, 445.40, 466.91]
+    _, ys = _smooth([float(i) for i in range(len(rising))], rising)
+    assert all(b >= a - 1e-9 for a, b in zip(ys, ys[1:]))
+
+
+def test_smoothing_keeps_a_falling_series_falling() -> None:
+    falling = [500.0, 480.0, 479.5, 400.0]
+    _, ys = _smooth([float(i) for i in range(len(falling))], falling)
+    assert all(b <= a + 1e-9 for a, b in zip(ys, ys[1:]))
+
+
+def test_smoothing_holds_a_flat_series_flat() -> None:
+    flat = [100.0, 100.0, 100.0, 100.0]
+    _, ys = _smooth([float(i) for i in range(len(flat))], flat)
+    assert all(abs(y - 100.0) < 1e-9 for y in ys)
+
+
+def test_smoothing_passes_through_every_point() -> None:
+    ys_in = [10.0, 30.0, 20.0, 25.0]
+    xs, ys = _smooth([float(i) for i in range(len(ys_in))], ys_in)
+    for i, expected in enumerate(ys_in):
+        nearest = min(range(len(xs)), key=lambda k: abs(xs[k] - i))
+        assert abs(ys[nearest] - expected) < 1e-6
+
+
+def test_smoothing_skips_gaps_and_short_series() -> None:
+    xs, ys = _smooth([0.0, 1.0, 2.0], [1.0, math.nan, 3.0])
+    assert ys == [1.0, 3.0]
+    assert xs == [0.0, 2.0]
