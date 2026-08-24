@@ -257,6 +257,37 @@ def _badges(
         _axis_badge(vol_ax, volume, tint, _compact(volume), -4)
 
 
+def _draw_legend(fig: Any, axes: tuple[Any, Any, Any], has_btc: bool) -> None:
+    """Lay the legend above the plot, funds first and volume last."""
+    from matplotlib.patches import Patch
+
+    ax, funds_ax, bar_ax = axes
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = funds_ax.get_legend_handles_labels()
+    h3, l3 = bar_ax.get_legend_handles_labels()
+    handles = [
+        *h2,
+        *h1,
+        *h3,
+        Patch(facecolor="white", edgecolor=_INK, label="KAS"),
+    ]
+    labels = [*l2, *l1, *l3, "KAS"]
+    if has_btc:
+        handles.append(Patch(facecolor="white", edgecolor=_GREY, label="BTC"))
+        labels.append("BTC")
+    handles.append(Patch(facecolor=_VOL_UP, edgecolor="none", label="volume"))
+    labels.append("volume")
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.945),
+        ncol=len(labels),
+        fontsize=8,
+        frameon=False,
+    )
+
+
 def render_pnl_chart(
     days: list[tuple[str, Decimal]],
     base_capital: Decimal,
@@ -277,7 +308,6 @@ def render_pnl_chart(
     ``matplotlib`` is imported lazily to keep start-up fast.
     """
     from matplotlib.figure import Figure
-    from matplotlib.patches import Patch
 
     labels, profits, computed = pnl_series(days, base_capital)
     equity = funds if funds else computed
@@ -337,25 +367,7 @@ def render_pnl_chart(
     ax.tick_params(axis="x", labelbottom=False)
     _apply_xticks(vol_ax, labels)
 
-    h1, l1 = ax.get_legend_handles_labels()
-    h2, l2 = funds_ax.get_legend_handles_labels()
-    h3, l3 = bar_ax.get_legend_handles_labels()
-    kas = Patch(facecolor="white", edgecolor=_INK, label="KAS")
-    volume = Patch(facecolor=_VOL_UP, edgecolor="none", label="volume")
-    handles = [*h1, *h2, *h3, kas, volume]
-    labels_all = [*l1, *l2, *l3, "KAS", "volume"]
-    if btc_ohlc is not None:
-        handles.append(Patch(facecolor="white", edgecolor=_GREY, label="BTC"))
-        labels_all.append("BTC")
-    fig.legend(
-        handles,
-        labels_all,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 0.945),
-        ncol=len(labels_all),
-        fontsize=8,
-        frameon=False,
-    )
+    _draw_legend(fig, (ax, funds_ax, bar_ax), btc_ohlc is not None)
     fig.subplots_adjust(
         left=0.065, right=0.80, top=0.875, bottom=0.135, hspace=0.07
     )
