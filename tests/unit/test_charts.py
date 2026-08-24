@@ -249,7 +249,7 @@ def test_every_axis_gets_its_current_value() -> None:
         for axis in (ax, funds_ax, bar_ax, price_ax, vol_ax)
         for t in axis.texts
     ]
-    assert texts == ["410", "593.00", "0.84", "0.02950", "33.4M"]
+    assert texts == ["410.00", "593.00", "0.84", "0.02950", "33.4M"]
 
 
 def test_badges_are_skipped_when_there_is_nothing_to_show() -> None:

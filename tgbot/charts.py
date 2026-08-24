@@ -105,16 +105,6 @@ def _apply_xticks(ax: Any, labels: list[str]) -> None:
     ax.set_xticklabels(labels[::step], fontsize=7, rotation=45)
 
 
-def _style_yaxis(
-    axis: Any, label: str, color: str, outward: float | None = None
-) -> None:
-    """Label and colour a y-axis, optionally pushing its spine outward."""
-    axis.set_ylabel(label, fontsize=8, color=color)
-    axis.tick_params(axis="y", labelcolor=color, labelsize=8)
-    if outward is not None:
-        axis.spines["right"].set_position(("outward", outward))
-
-
 def _style_right(axis: Any, color: str, outward: float) -> None:
     """Colour a right y-axis and offset its spine, with no vertical title."""
     axis.tick_params(axis="y", labelcolor=color, labelsize=8)
@@ -254,7 +244,7 @@ def _badges(
     last_funds = _last(equity)
     last_ma = _last(ma)
     if last_locked is not None:
-        _axis_badge(ax, last_locked, _AMBER, f"{last_locked:,.0f}", -4)
+        _axis_badge(ax, last_locked, _AMBER, f"{last_locked:,.2f}", -4)
     if last_funds is not None:
         _axis_badge(funds_ax, last_funds, _GREEN, f"{last_funds:,.2f}", 2)
     if last_ma is not None:
@@ -263,7 +253,39 @@ def _badges(
         close = candles[-1][3]
         _axis_badge(price_ax, close, _INK, f"{close:.5f}", 68)
         volume = candles[-1][4]
-        _axis_badge(vol_ax, volume, _GREY, _compact(volume), -4)
+        tint = _VOL_UP if candles[-1][3] >= candles[-1][0] else _VOL_DOWN
+        _axis_badge(vol_ax, volume, tint, _compact(volume), -4)
+
+
+def _draw_legend(fig: Any, axes: tuple[Any, Any, Any], has_btc: bool) -> None:
+    """Lay the legend above the plot, funds first and volume last."""
+    from matplotlib.patches import Patch
+
+    ax, funds_ax, bar_ax = axes
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = funds_ax.get_legend_handles_labels()
+    h3, l3 = bar_ax.get_legend_handles_labels()
+    handles = [
+        *h2,
+        *h1,
+        *h3,
+        Patch(facecolor="white", edgecolor=_INK, label="KAS"),
+    ]
+    labels = [*l2, *l1, *l3, "KAS"]
+    if has_btc:
+        handles.append(Patch(facecolor="white", edgecolor=_GREY, label="BTC"))
+        labels.append("BTC")
+    handles.append(Patch(facecolor=_VOL_UP, edgecolor="none", label="volume"))
+    labels.append("volume")
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.945),
+        ncol=len(labels),
+        fontsize=8,
+        frameon=False,
+    )
 
 
 def render_pnl_chart(
@@ -286,7 +308,6 @@ def render_pnl_chart(
     ``matplotlib`` is imported lazily to keep start-up fast.
     """
     from matplotlib.figure import Figure
-    from matplotlib.patches import Patch
 
     labels, profits, computed = pnl_series(days, base_capital)
     equity = funds if funds else computed
@@ -338,7 +359,7 @@ def render_pnl_chart(
 
     fig.suptitle("Funds & profit, USDT", y=0.965, fontsize=11)
     vol_ax.set_xlabel("days")
-    _style_yaxis(ax, "locked, USDT", _AMBER)
+    ax.tick_params(axis="y", labelcolor=_AMBER, labelsize=8)
     _style_right(funds_ax, _GREEN, outward=0)
     _style_right(bar_ax, _MA, outward=34)
     _style_right(price_ax, _INK, outward=68)
@@ -346,27 +367,9 @@ def render_pnl_chart(
     ax.tick_params(axis="x", labelbottom=False)
     _apply_xticks(vol_ax, labels)
 
-    h1, l1 = ax.get_legend_handles_labels()
-    h2, l2 = funds_ax.get_legend_handles_labels()
-    h3, l3 = bar_ax.get_legend_handles_labels()
-    kas = Patch(facecolor="white", edgecolor=_INK, label="KAS price")
-    volume = Patch(facecolor=_VOL_UP, edgecolor="none", label="volume")
-    handles = [*h1, *h2, *h3, kas, volume]
-    labels_all = [*l1, *l2, *l3, "KAS price", "volume"]
-    if btc_ohlc is not None:
-        handles.append(Patch(facecolor="white", edgecolor=_GREY, label="BTC"))
-        labels_all.append("BTC price")
-    fig.legend(
-        handles,
-        labels_all,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 0.945),
-        ncol=len(labels_all),
-        fontsize=8,
-        frameon=False,
-    )
+    _draw_legend(fig, (ax, funds_ax, bar_ax), btc_ohlc is not None)
     fig.subplots_adjust(
-        left=0.085, right=0.80, top=0.875, bottom=0.135, hspace=0.07
+        left=0.065, right=0.80, top=0.875, bottom=0.135, hspace=0.07
     )
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
