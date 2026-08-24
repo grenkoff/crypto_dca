@@ -256,7 +256,7 @@ def _badges(
     if last_locked is not None:
         _axis_badge(ax, last_locked, _AMBER, f"{last_locked:,.0f}", -4)
     if last_funds is not None:
-        _axis_badge(funds_ax, last_funds, _GREEN, f"{last_funds:,.0f}", 2)
+        _axis_badge(funds_ax, last_funds, _GREEN, f"{last_funds:,.2f}", 2)
     if last_ma is not None:
         _axis_badge(bar_ax, last_ma, _MA, f"{last_ma:.2f}", 34)
     if candles:
