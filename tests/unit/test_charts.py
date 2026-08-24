@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from decimal import Decimal
+from itertools import pairwise
 
 from tgbot.charts import (
     Bar,
@@ -179,13 +180,13 @@ def test_smoothing_never_leaves_the_data_range() -> None:
 def test_smoothing_keeps_a_rising_series_rising() -> None:
     rising = [418.64, 424.22, 424.52, 445.40, 466.91]
     _, ys = _smooth([float(i) for i in range(len(rising))], rising)
-    assert all(b >= a - 1e-9 for a, b in zip(ys, ys[1:]))
+    assert all(b >= a - 1e-9 for a, b in pairwise(ys))
 
 
 def test_smoothing_keeps_a_falling_series_falling() -> None:
     falling = [500.0, 480.0, 479.5, 400.0]
     _, ys = _smooth([float(i) for i in range(len(falling))], falling)
-    assert all(b <= a + 1e-9 for a, b in zip(ys, ys[1:]))
+    assert all(b <= a + 1e-9 for a, b in pairwise(ys))
 
 
 def test_smoothing_holds_a_flat_series_flat() -> None:
