@@ -95,6 +95,8 @@ max-returns = 7
 "tests/**" = ["S", "D", "C901", "PLR09", "SLF"]  # tests may poke internals
 "**/migrations/*" = ["E501", "RUF012", "I001", "D"]  # alembic-generated
 "**/__init__.py" = ["D104"]  # keep package __init__ files empty
+# urlopen targets are pinned to the Bybit dump host and prefix-checked
+"backtest/history.py" = ["S310"]
 "**/forms.py" = ["RUF012"]
 "**/admin.py" = ["RUF012"]
 
@@ -147,7 +149,7 @@ show_missing = true
 
 [tool.importlinter]
 # Enforces the separation-of-concerns layering documented in CLAUDE.md.
-root_packages = ["core", "tgbot", "trader", "cli", "webui"]
+root_packages = ["core", "tgbot", "trader", "cli", "webui", "backtest"]
 
 [[tool.importlinter.contracts]]
 name = "core layers: services > exchange > strategy"
@@ -166,7 +168,7 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "core does not import the entrypoints (tgbot / trader / cli / webui)"
+name = "core does not import the entrypoints (tgbot / trader / cli / webui / backtest)"
 type = "forbidden"
 source_modules = ["core"]
-forbidden_modules = ["tgbot", "trader", "cli", "webui"]
+forbidden_modules = ["tgbot", "trader", "cli", "webui", "backtest"]

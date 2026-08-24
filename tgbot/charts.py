@@ -7,6 +7,8 @@ from decimal import Decimal
 from math import isnan
 from typing import Any
 
+Bar = tuple[float, float, float, float, float]
+
 
 def _catmull(t: float, p0: float, p1: float, p2: float, p3: float) -> float:
     """One Catmull-Rom interpolation between p1 and p2 at parameter t."""
@@ -89,12 +91,41 @@ _BAR = "#7dd3fc"
 _MA = "#2563eb"
 _INK = "black"
 _GREY = "#b8b8b8"
+_VOL_UP = "#8fd3b6"
+_VOL_DOWN = "#f0a8a8"
 _MA_WINDOW = 10
+
+
+def _draw_volume(axis: Any, ohlc: list[Bar | None]) -> None:
+    """Fill the lower panel with per-day volume, tinted by candle direction."""
+    from matplotlib.ticker import FuncFormatter, MaxNLocator
+
+    xs = [i for i, bar in enumerate(ohlc) if bar is not None]
+    bars = [bar for bar in ohlc if bar is not None]
+    if not bars:
+        axis.set_yticks([])
+        return
+    colours = [_VOL_UP if bar[3] >= bar[0] else _VOL_DOWN for bar in bars]
+    axis.bar(xs, [bar[4] for bar in bars], color=colours, width=0.7)
+    axis.tick_params(axis="y", labelsize=7, labelcolor=_GREY)
+    axis.yaxis.set_major_locator(MaxNLocator(nbins=2))
+    axis.yaxis.set_major_formatter(FuncFormatter(_compact))
+    for side in ("top", "right"):
+        axis.spines[side].set_visible(False)
+    axis.grid(visible=True, axis="y", alpha=0.2)
+
+
+def _compact(value: float, _pos: int = 0) -> str:
+    """Abbreviate a volume tick as 1.2K / 3.4M."""
+    for cut, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(value) >= cut:
+            return f"{value / cut:.1f}{suffix}"
+    return f"{value:.0f}"
 
 
 def _draw_candles(
     axis: Any,
-    ohlc: list[tuple[float, float, float, float] | None],
+    ohlc: list[Bar | None],
     *,
     color: str = _INK,
     zorder: int = 3,
@@ -106,7 +137,7 @@ def _draw_candles(
     for i, bar in enumerate(ohlc):
         if bar is None:
             continue
-        op, hi, lo, cl = bar
+        op, hi, lo, cl = bar[:4]
         face = "white" if cl >= op else color
         axis.plot([i, i], [lo, hi], color=color, linewidth=0.7, zorder=zorder)
         height = abs(cl - op) or (hi - lo) * 0.02
@@ -139,8 +170,8 @@ def render_pnl_chart(
     days: list[tuple[str, Decimal]],
     base_capital: Decimal,
     locked: list[Decimal],
-    ohlc: list[tuple[float, float, float, float] | None],
-    btc_ohlc: list[tuple[float, float, float, float] | None] | None = None,
+    ohlc: list[Bar | None],
+    btc_ohlc: list[Bar | None] | None = None,
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
@@ -148,6 +179,7 @@ def render_pnl_chart(
     profit (bars + MA), and the KAS price (daily candlesticks) each get their
     own right axis. ``btc_ohlc`` (already rescaled to KAS units) is drawn as
     lighter grey candles on the same price axis to gauge BTC correlation.
+    KAS volume sits in its own panel below, above the date axis.
     ``matplotlib`` is imported lazily to keep start-up fast.
     """
     from matplotlib.figure import Figure
@@ -156,8 +188,14 @@ def render_pnl_chart(
     labels, profits, equity = pnl_series(days, base_capital)
     xs = list(range(len(equity)))
 
-    fig = Figure(figsize=(8.4, 5.4), dpi=110)
-    ax = fig.subplots()
+    fig = Figure(figsize=(8.4, 6.0), dpi=110)
+    ax, vol_ax = fig.subplots(
+        2,
+        1,
+        sharex=True,
+        height_ratios=(4, 1),
+        gridspec_kw={"hspace": 0.06},
+    )
     funds_ax = ax.twinx()
     bar_ax = ax.twinx()
     price_ax = ax.twinx()
@@ -185,21 +223,25 @@ def render_pnl_chart(
         line_ax.set_zorder(bar_ax.get_zorder() + 1)
         line_ax.patch.set_visible(False)
 
+    _draw_volume(vol_ax, ohlc)
+
     fig.suptitle("Funds & profit, USDT", y=0.965, fontsize=11)
-    ax.set_xlabel("days")
+    vol_ax.set_xlabel("days")
     _style_yaxis(ax, "locked, USDT", _AMBER)
     _style_right(funds_ax, _GREEN, outward=0)
     _style_right(bar_ax, _MA, outward=34)
     _style_right(price_ax, _INK, outward=68)
     ax.grid(visible=True, alpha=0.3)
-    _apply_xticks(ax, labels)
+    ax.tick_params(axis="x", labelbottom=False)
+    _apply_xticks(vol_ax, labels)
 
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = funds_ax.get_legend_handles_labels()
     h3, l3 = bar_ax.get_legend_handles_labels()
     kas = Patch(facecolor="white", edgecolor=_INK, label="KAS price")
-    handles = [*h1, *h2, *h3, kas]
-    labels_all = [*l1, *l2, *l3, "KAS price"]
+    volume = Patch(facecolor=_VOL_UP, edgecolor="none", label="volume")
+    handles = [*h1, *h2, *h3, kas, volume]
+    labels_all = [*l1, *l2, *l3, "KAS price", "volume"]
     if btc_ohlc is not None:
         handles.append(Patch(facecolor="white", edgecolor=_GREY, label="BTC"))
         labels_all.append("BTC price")
@@ -207,12 +249,14 @@ def render_pnl_chart(
         handles,
         labels_all,
         loc="upper center",
-        bbox_to_anchor=(0.5, 0.90),
+        bbox_to_anchor=(0.5, 0.945),
         ncol=len(labels_all),
         fontsize=8,
         frameon=False,
     )
-    fig.tight_layout(rect=(0, 0, 0.99, 0.86))
+    fig.subplots_adjust(
+        left=0.085, right=0.80, top=0.875, bottom=0.135, hspace=0.07
+    )
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     return buf.getvalue()

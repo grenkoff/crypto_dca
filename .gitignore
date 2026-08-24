@@ -47,3 +47,6 @@ htmlcov/
 dist/
 build/
 logs/
+
+# backtest data (tick dumps and bar caches)
+data/
