@@ -109,6 +109,12 @@ class StrategyConfig(Base):
     taker_fee: Mapped[Decimal] = mapped_column(
         _FEE, default=Decimal("0.00075")
     )
+    comp_share_min: Mapped[Decimal] = mapped_column(
+        _FEE, default=Decimal("0.20")
+    )
+    comp_share_max: Mapped[Decimal] = mapped_column(
+        _FEE, default=Decimal("0.80")
+    )
 
 
 class BotStatus(Base):
@@ -128,6 +134,7 @@ class BotStatus(Base):
     pending_credit: Mapped[Decimal] = mapped_column(
         _AMOUNT, default=Decimal(0)
     )
+    pocket_credit: Mapped[Decimal] = mapped_column(_AMOUNT, default=Decimal(0))
 
 
 class NotificationSettings(Base):

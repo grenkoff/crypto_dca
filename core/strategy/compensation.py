@@ -12,7 +12,8 @@ buy's TP sits ``tp_step`` above it, and the next resting buy is one
 
 from __future__ import annotations
 
-from decimal import Decimal
+from collections.abc import Sequence
+from decimal import ROUND_DOWN, Decimal
 
 from core.strategy.rounding import (
     min_notional_price,
@@ -26,6 +27,62 @@ from core.strategy.types import (
 )
 
 _PROFIT_EPS = Decimal("1E-10")
+_SPLIT_SCALE = Decimal("1E-12")
+
+
+def account_load(
+    positions: Sequence[OpenPosition],
+    *,
+    quote_total: Decimal,
+    base_total: Decimal,
+    price: Decimal,
+    maker_fee: Decimal,
+) -> Decimal:
+    """Share of the account tied up in open lots, 0 when it is idle.
+
+    Value is measured the way the funds line is: cash, every lot at the
+    take-profit it currently carries, and base coin held outside any lot.
+    """
+    locked = Decimal(0)
+    held = Decimal(0)
+    exit_value = Decimal(0)
+    for lot in positions:
+        remaining = max(lot.qty - lot.filled_qty, Decimal(0))
+        locked += lot.entry_price * lot.qty + lot.fees_in
+        held += remaining
+        exit_value += remaining * lot.current_tp_price
+    spare = max(base_total - held, Decimal(0))
+    funds = quote_total + exit_value * (Decimal(1) - maker_fee) + spare * price
+    if funds <= 0:
+        return Decimal(0)
+    return locked / funds
+
+
+def compensation_share(
+    load_ratio: Decimal, *, low: Decimal, high: Decimal
+) -> Decimal:
+    """Share of a close's profit that may fund compensation.
+
+    The share tracks how loaded the account is, but never leaves the
+    ``low``..``high`` band: some profit always compensates, and some
+    always stays in the pocket.
+    """
+    if high <= low:
+        return max(high, Decimal(0))
+    return min(max(load_ratio, low), high)
+
+
+def split_profit(profit: Decimal, share: Decimal) -> tuple[Decimal, Decimal]:
+    """Split a close's profit into (compensation budget, pocket).
+
+    The budget rounds down to the stored scale and the pocket takes the
+    remainder, so the two halves always add back to ``profit`` exactly.
+    """
+    if profit <= 0:
+        return Decimal(0), profit
+    budget = (profit * share).quantize(_SPLIT_SCALE, rounding=ROUND_DOWN)
+    budget = min(max(budget, Decimal(0)), profit)
+    return budget, profit - budget
 
 
 def slot_below(tp_price: Decimal, grid_step: Decimal) -> Decimal:

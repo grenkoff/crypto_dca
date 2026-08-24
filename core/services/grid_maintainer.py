@@ -51,7 +51,7 @@ class GridMaintainer:
         if step <= 0 or price <= 0 or per_order <= 0:
             return
 
-        balances = await self._om.client.get_balances()
+        balances = await self._om.balances.snapshot()
         quote = balances.get(self._om.instrument.quote_coin)
         free = quote.free if quote is not None else Decimal(0)
         locked = quote.locked if quote is not None else Decimal(0)

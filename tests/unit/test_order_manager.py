@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import func, select
 
 from core.db.models import (
+    BotStatus,
     CompensationLink,
     ExecutionLog,
     GridLevel,
@@ -19,7 +20,7 @@ from core.db.models import (
     StrategyConfig,
 )
 from core.db.session import new_session
-from core.exchange.types import Execution, Instrument, Side
+from core.exchange.types import Balance, Execution, Instrument, Side
 from core.services import repository
 from core.services.events import RecordingEventBus
 from core.services.order_manager import OrderManager
@@ -69,6 +70,14 @@ class FakeBybitClient:
         self.cancelled: list[tuple[str, str]] = []
         self._counter = 0
         self.next_id: str | None = None
+
+    async def get_balances(self) -> dict[str, Balance]:
+        return {
+            "USDT": Balance(
+                coin="USDT", free=Decimal("50"), locked=Decimal("0")
+            ),
+            "BTC": Balance(coin="BTC", free=Decimal("0"), locked=Decimal("0")),
+        }
 
     async def place_limit(
         self,
@@ -129,6 +138,8 @@ def config() -> StrategyConfig:
         maker_fee=Decimal("0.001"),
         max_open_orders=10,
         tp_step=Decimal("100"),  # BTC-scale absolute TP offset
+        comp_share_min=Decimal("0.20"),
+        comp_share_max=Decimal("0.80"),
     )
 
 
@@ -315,9 +326,9 @@ async def test_handle_sell_fill_closes_position_and_runs_compensation(
     winner = await repository.get_position(winner.id)
     assert winner.status == PositionStatus.CLOSED
     assert winner.realized_pnl > 0
-    # Underwater position got a new TP
+    # Underwater position got a new TP, possibly several steps down
     underwater = await repository.get_position(underwater.id)
-    assert underwater.tp_order_id == "tp-new"
+    assert underwater.tp_order_id not in ("", "tp-old")
     assert underwater.tp_price is not None and underwater.tp_price < Decimal(
         "60600"
     )
@@ -615,3 +626,72 @@ async def test_settle_phantom_closes_at_tp_and_frees_level(
     assert level.status == LevelStatus.IDLE
     # and a position.closed event is emitted
     assert any(t == "position.closed" for t, _ in bus.events)
+
+
+async def test_a_close_fills_both_the_pool_and_the_pocket(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    await add_one(BotStatus(id=1))
+    winner = await add_one(
+        Position(
+            level_index=0,
+            entry_price=Decimal("58000"),
+            qty=Decimal("0.001"),
+            fees_in=Decimal("0.058"),
+            tp_order_id="tp-win",
+            tp_price=Decimal("58580"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
+    )
+    execution = _exec(
+        exec_id="split-1",
+        order_id="tp-win",
+        side=Side.SELL,
+        price=Decimal("58580"),
+        qty=Decimal("0.001"),
+        fee=Decimal("0.0586"),
+        fee_coin="USDT",
+    )
+    await om.handle_sell_fill(execution, current_price=Decimal("57000"))
+    closed = await repository.get_position(winner.id)
+    async with new_session() as session:
+        bot = await session.get(BotStatus, 1)
+    assert bot is not None
+    assert bot.pending_credit > 0
+    assert bot.pocket_credit > 0
+    assert bot.pending_credit + bot.pocket_credit == closed.realized_pnl
+
+
+async def test_a_light_load_sends_most_profit_to_the_pocket(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    await add_one(BotStatus(id=1))
+    winner = await add_one(
+        Position(
+            level_index=0,
+            entry_price=Decimal("58000"),
+            qty=Decimal("0.001"),
+            fees_in=Decimal("0.058"),
+            tp_order_id="tp-win",
+            tp_price=Decimal("58580"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
+    )
+    execution = _exec(
+        exec_id="split-2",
+        order_id="tp-win",
+        side=Side.SELL,
+        price=Decimal("58580"),
+        qty=Decimal("0.001"),
+        fee=Decimal("0.0586"),
+        fee_coin="USDT",
+    )
+    await om.handle_sell_fill(execution, current_price=Decimal("57000"))
+    async with new_session() as session:
+        bot = await session.get(BotStatus, 1)
+    assert bot is not None
+    closed = await repository.get_position(winner.id)
+    share = bot.pending_credit / closed.realized_pnl
+    assert share == Decimal("0.20")

@@ -16,7 +16,12 @@ from decimal import Decimal
 from backtest.history import Bars
 from core.exchange.types import Instrument
 from core.services.order_manager import compute_buy_qty
-from core.strategy.compensation import plan_compensation
+from core.strategy.compensation import (
+    account_load,
+    compensation_share,
+    plan_compensation,
+    split_profit,
+)
 from core.strategy.grid import resting_buy_levels
 from core.strategy.pricing import compute_tp_price
 from core.strategy.types import CompensationContext, OpenPosition
@@ -36,6 +41,8 @@ class BacktestConfig:
     start_usdt: Decimal
     min_profit_quote: Decimal = Decimal(0)
     compensation_moves: int = 1
+    comp_share_min: Decimal = Decimal(1)
+    comp_share_max: Decimal = Decimal(1)
 
 
 @dataclass(frozen=True)
@@ -56,6 +63,7 @@ class BacktestResult:
     starved_share: Decimal
     credit_drawn: Decimal
     tp_descent: Decimal
+    pocket: Decimal
     equity_curve: list[tuple[date, Decimal]] = field(default_factory=list)
 
     @property
@@ -119,6 +127,7 @@ class _Book:
         self.deployed = Decimal(0)
         self.credit_drawn = Decimal(0)
         self.tp_descent = Decimal(0)
+        self.pocket = Decimal(0)
         self.band_price: Decimal | None = None
         self._next_id = 1
 
@@ -224,8 +233,25 @@ class _Book:
             self.held.discard(lot.entry)
             self._low_stale = True
             self.trades += 1
-            self.pool += realized
+            if realized > 0:
+                self.pool += self._allocate(realized, price)
             self.compensate(price)
+
+    def _allocate(self, profit: Decimal, price: Decimal) -> Decimal:
+        """Bank a close's profit, returning the compensation budget."""
+        ratio = account_load(
+            [lot.view() for lot in self.lots],
+            quote_total=self.usdt,
+            base_total=self.base,
+            price=price,
+            maker_fee=self.cfg.maker_fee,
+        )
+        share = compensation_share(
+            ratio, low=self.cfg.comp_share_min, high=self.cfg.comp_share_max
+        )
+        budget, pocket = split_profit(profit, share)
+        self.pocket += pocket
+        return budget
 
     def compensate(self, price: Decimal) -> None:
         """Spend the credit pool on take-profit moves after a close.
@@ -330,5 +356,6 @@ def run_backtest(
         starved_share=Decimal(starved) / len(bars),
         credit_drawn=book.credit_drawn,
         tp_descent=book.tp_descent,
+        pocket=book.pocket,
         equity_curve=curve,
     )
