@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from requests.exceptions import RequestException
 
 from core.exchange.bybit import BybitClient
 from core.exchange.errors import (
@@ -13,6 +14,7 @@ from core.exchange.errors import (
     InsufficientBalanceError,
     OrderRejectedError,
     RateLimitedError,
+    TransientNetworkError,
 )
 from core.exchange.types import OrderStatus, Side
 
@@ -56,6 +58,9 @@ class FakeHTTP:
 
     def get_executions(self, **kwargs: Any) -> dict[str, Any]:
         return self._respond("get_executions", kwargs)
+
+    def get_order_history(self, **kwargs: Any) -> dict[str, Any]:
+        return self._respond("get_order_history", kwargs)
 
 
 def _ok(result: dict[str, Any]) -> dict[str, Any]:
@@ -257,3 +262,118 @@ async def test_error_mapping(
         await client.place_limit(
             "BTCUSDT", Side.BUY, Decimal("0.001"), Decimal("60000")
         )
+
+
+class _Dropped(RequestException):
+    """Stands in for a connection killed mid-flight."""
+
+
+def _drop_then(http: FakeHTTP, later: dict[str, Any] | None) -> None:
+    """Make place_order drop the connection on its first call."""
+    state = {"calls": 0}
+
+    def place(**kwargs: Any) -> dict[str, Any]:
+        http.calls.append(("place_order", kwargs))
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise _Dropped("Connection aborted")
+        if later is None:
+            raise _Dropped("Connection aborted")
+        return later
+
+    http.place_order = place  # type: ignore[method-assign]
+
+
+async def test_a_dropped_place_adopts_the_order_that_landed(
+    http: FakeHTTP, client: BybitClient
+) -> None:
+    _drop_then(http, None)
+    http.responses["get_open_orders"] = _ok(
+        {"list": [{"orderId": "landed-1"}]}
+    )
+    order_id = await client.place_limit(
+        "KASUSDT",
+        Side.SELL,
+        Decimal("100"),
+        Decimal("0.03"),
+        order_link_id="grid-tp-7-1",
+    )
+    assert order_id == "landed-1"
+    placed = [c for c in http.calls if c[0] == "place_order"]
+    assert len(placed) == 1
+
+
+async def test_a_dropped_place_retries_when_nothing_landed(
+    http: FakeHTTP, client: BybitClient
+) -> None:
+    _drop_then(http, _ok({"orderId": "second-try"}))
+    http.responses["get_open_orders"] = _ok({"list": []})
+    http.responses["get_order_history"] = _ok({"list": []})
+    order_id = await client.place_limit(
+        "KASUSDT",
+        Side.SELL,
+        Decimal("100"),
+        Decimal("0.03"),
+        order_link_id="grid-tp-7-1",
+    )
+    assert order_id == "second-try"
+    placed = [c for c in http.calls if c[0] == "place_order"]
+    assert len(placed) == 2
+
+
+async def test_a_drop_without_a_link_id_is_not_retried(
+    http: FakeHTTP, client: BybitClient
+) -> None:
+    _drop_then(http, _ok({"orderId": "would-duplicate"}))
+    with pytest.raises(RequestException):
+        await client.place_limit(
+            "KASUSDT", Side.SELL, Decimal("100"), Decimal("0.03")
+        )
+    placed = [c for c in http.calls if c[0] == "place_order"]
+    assert len(placed) == 1
+
+
+async def test_giving_up_reports_a_transient_failure(
+    http: FakeHTTP, client: BybitClient
+) -> None:
+    _drop_then(http, None)
+    http.responses["get_open_orders"] = _ok({"list": []})
+    http.responses["get_order_history"] = _ok({"list": []})
+    with pytest.raises(TransientNetworkError, match="gave up"):
+        await client.place_limit(
+            "KASUSDT",
+            Side.SELL,
+            Decimal("100"),
+            Decimal("0.03"),
+            order_link_id="grid-tp-7-1",
+        )
+
+
+async def test_lookup_falls_back_to_order_history(
+    http: FakeHTTP, client: BybitClient
+) -> None:
+    http.responses["get_open_orders"] = _ok({"list": []})
+    http.responses["get_order_history"] = _ok(
+        {"list": [{"orderId": "filled-fast"}]}
+    )
+    found = await client.find_order_by_link_id("KASUSDT", "grid-tp-7-1")
+    assert found == "filled-fast"
+
+
+async def test_a_rejection_is_raised_not_retried(
+    http: FakeHTTP, client: BybitClient
+) -> None:
+    http.responses["place_order"] = {
+        "retCode": 170131,
+        "retMsg": "Insufficient balance",
+        "result": {},
+    }
+    with pytest.raises(InsufficientBalanceError):
+        await client.place_limit(
+            "KASUSDT",
+            Side.SELL,
+            Decimal("100"),
+            Decimal("0.03"),
+            order_link_id="grid-tp-7-1",
+        )
+    assert len([c for c in http.calls if c[0] == "place_order"]) == 1

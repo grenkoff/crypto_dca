@@ -7,12 +7,15 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Protocol, cast
 
+import structlog
+
 from core.config.settings import bybit_settings
 from core.exchange.errors import (
     BybitError,
     InsufficientBalanceError,
     OrderRejectedError,
     RateLimitedError,
+    TransientNetworkError,
 )
 from core.exchange.types import (
     Balance,
@@ -23,7 +26,24 @@ from core.exchange.types import (
     Side,
 )
 
+log = structlog.get_logger()
+
 CATEGORY = "spot"
+
+
+_RETRIES = 3
+_BACKOFF_SECONDS = 0.5
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Whether a failed call may still have reached the exchange.
+
+    Connection resets, dropped keep-alives and timeouts leave the outcome
+    unknown; the request may or may not have been executed.
+    """
+    from requests.exceptions import RequestException
+
+    return isinstance(exc, RequestException)
 
 
 class _HTTP(Protocol):
@@ -36,6 +56,7 @@ class _HTTP(Protocol):
     def cancel_all_orders(self, **kwargs: Any) -> dict[str, Any]: ...
     def get_open_orders(self, **kwargs: Any) -> dict[str, Any]: ...
     def get_executions(self, **kwargs: Any) -> dict[str, Any]: ...
+    def get_order_history(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 def _raise_for_ret(response: dict[str, Any]) -> dict[str, Any]:
@@ -171,6 +192,23 @@ class BybitClient:
                 )
         return balances
 
+    async def find_order_by_link_id(
+        self, symbol: str, link_id: str
+    ) -> str | None:
+        """Order id carrying ``link_id``, searching open orders then
+        history."""
+        for fetch in (
+            self._http.get_open_orders,
+            self._http.get_order_history,
+        ):
+            resp = await asyncio.to_thread(
+                fetch, category=CATEGORY, symbol=symbol, orderLinkId=link_id
+            )
+            rows = _raise_for_ret(resp).get("list") or []
+            if rows:
+                return str(rows[0]["orderId"])
+        return None
+
     async def place_limit(
         self,
         symbol: str,
@@ -181,7 +219,14 @@ class BybitClient:
         order_link_id: str | None = None,
         post_only: bool = True,
     ) -> str:
-        """Place a limit order and return its order id."""
+        """Place a limit order and return its order id.
+
+        A dropped connection hides whether the exchange accepted the
+        order, and a blind retry would double it. With an
+        ``order_link_id`` the retry first looks the order up by that id
+        and adopts it if it landed; without one it cannot, so the error
+        is raised instead of risking a duplicate.
+        """
         kwargs: dict[str, Any] = {
             "category": CATEGORY,
             "symbol": symbol,
@@ -193,9 +238,42 @@ class BybitClient:
         }
         if order_link_id:
             kwargs["orderLinkId"] = order_link_id
-        resp = await asyncio.to_thread(self._http.place_order, **kwargs)
-        result = _raise_for_ret(resp)
-        return str(result["orderId"])
+        last = ""
+        for attempt in range(_RETRIES):
+            try:
+                resp = await asyncio.to_thread(
+                    self._http.place_order, **kwargs
+                )
+            except Exception as exc:
+                if not _is_transient(exc) or not order_link_id:
+                    raise
+                last = str(exc)
+                log.warning(
+                    "bybit.place_interrupted",
+                    attempt=attempt + 1,
+                    link_id=order_link_id,
+                    error=last[:120],
+                )
+                landed = await self._adopt_after_drop(symbol, order_link_id)
+                if landed is not None:
+                    return landed
+                await asyncio.sleep(_BACKOFF_SECONDS * (attempt + 1))
+                continue
+            return str(_raise_for_ret(resp)["orderId"])
+        raise TransientNetworkError(
+            f"place_limit gave up after {_RETRIES} attempts: {last[:120]}"
+        )
+
+    async def _adopt_after_drop(self, symbol: str, link_id: str) -> str | None:
+        """Order id if the dropped request actually reached the exchange."""
+        try:
+            found = await self.find_order_by_link_id(symbol, link_id)
+        except Exception as exc:
+            log.warning("bybit.lookup_failed", error=str(exc)[:120])
+            return None
+        if found is not None:
+            log.info("bybit.place_adopted", link_id=link_id, order_id=found)
+        return found
 
     async def cancel_order(self, symbol: str, order_id: str) -> None:
         """Cancel a single order by id."""
