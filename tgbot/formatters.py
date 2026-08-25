@@ -227,31 +227,40 @@ def _dec(value: Any) -> Decimal:
 
 
 def _format_closed(payload: dict[str, Any]) -> str:
-    """Render a position.closed event, flagging compensated closes.
+    """Render a close together with the compensations it paid for.
 
-    A compensated lot's own realized is small-negative by design; showing the
-    pair (realized + credit) makes clear the paired result stays in profit.
+    A compensated lot's own realized is small-negative by design; showing
+    the pair (realized + credit) makes clear the paired result stays in
+    profit. Take-profit moves funded by this close are listed underneath,
+    so one close is one message however many moves it bought.
     """
     realized = _dec(payload.get("realized"))
     credit = _dec(payload.get("compensation_credit"))
     price = _price5(payload.get("price"))
     if credit > 0:
         pair = realized + credit
-        return (
+        head = (
             f"💊 `{price}` → `{_signed(realized)}` USDT "
             f"(compensated, pair `{_signed(pair)}`)"
         )
-    emoji = "💰" if realized >= 0 else "🔴"
-    return f"{emoji} `{price}` → `{_signed(realized)}` USDT"
+    else:
+        emoji = "💰" if realized >= 0 else "🔴"
+        head = f"{emoji} `{price}` → `{_signed(realized)}` USDT"
+    moves = payload.get("compensations") or []
+    if not isinstance(moves, list) or not moves:
+        return head
+    lines = [head]
+    lines += [_format_move(move) for move in moves if isinstance(move, dict)]
+    return "\n".join(lines)
 
 
-def _format_compensation(payload: dict[str, Any]) -> str:
-    """Render a compensation.applied event, showing the TP move old -> new."""
-    new_tp = _price5(payload.get("new_tp"))
-    old = payload.get("old_tp")
+def _format_move(move: dict[str, Any]) -> str:
+    """One take-profit move inside a close message."""
+    new_tp = _price5(move.get("new_tp"))
+    old = move.get("old_tp")
     if old:
-        return f"💊 TP `{_price5(old)}` ↓ `{new_tp}`"
-    return f"💊 TP↓ `{new_tp}`"
+        return f"   ↓ TP `{_price5(old)}` → `{new_tp}`"
+    return f"   ↓ TP `{new_tp}`"
 
 
 def build_digest(snap: DigestSnapshot) -> str:
@@ -301,8 +310,6 @@ def format_event(event: dict[str, Any]) -> str:
         )
     if etype == "position.closed":
         return _format_closed(payload)
-    if etype == "compensation.applied":
-        return _format_compensation(payload)
     if etype == "error":
         return f"❌ Error: {payload.get('message', '?')}"
     return f"📨 {etype}: `{payload}`"

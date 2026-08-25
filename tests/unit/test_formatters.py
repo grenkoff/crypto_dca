@@ -222,35 +222,56 @@ def test_format_event_position_closed_compensated() -> None:
     )
 
 
-def test_format_event_compensation() -> None:
+def test_a_close_lists_the_moves_it_paid_for() -> None:
     text = format_event(
         {
-            "type": "compensation.applied",
+            "type": "position.closed",
             "payload": {
-                "target_position": 179,
-                "source_position": 3,
-                "old_tp": "0.0295",
-                "new_tp": "0.0294",
-                "profit": "0.0108603075",
+                "price": "0.02870",
+                "realized": "0.0288",
+                "compensation_credit": "0",
+                "compensations": [
+                    {"old_tp": "0.02885", "new_tp": "0.02880"},
+                    {"old_tp": "0.03035", "new_tp": "0.03015"},
+                ],
             },
         }
     )
-    assert text == "💊 TP `0.02950` ↓ `0.02940`"
+    lines = text.splitlines()
+    assert len(lines) == 3
+    assert lines[0].startswith("💰")
+    assert lines[1] == "   ↓ TP `0.02885` → `0.02880`"
+    assert lines[2] == "   ↓ TP `0.03035` → `0.03015`"
 
 
-def test_format_event_compensation_without_old_tp() -> None:
+def test_a_close_without_moves_stays_one_line() -> None:
     text = format_event(
         {
-            "type": "compensation.applied",
+            "type": "position.closed",
             "payload": {
-                "target_position": 179,
-                "source_position": 3,
-                "new_tp": "0.0294",
-                "profit": "0.0108603075",
+                "price": "0.02870",
+                "realized": "0.0288",
+                "compensation_credit": "0",
+                "compensations": [],
             },
         }
     )
-    assert text == "💊 TP↓ `0.02940`"
+    assert "\n" not in text
+
+
+def test_a_move_without_a_previous_price_still_renders() -> None:
+    text = format_event(
+        {
+            "type": "position.closed",
+            "payload": {
+                "price": "0.02870",
+                "realized": "0.0288",
+                "compensation_credit": "0",
+                "compensations": [{"new_tp": "0.0294"}],
+            },
+        }
+    )
+    assert text.splitlines()[1] == "   ↓ TP `0.02940`"
 
 
 def test_format_event_unknown_falls_back_to_raw() -> None:
