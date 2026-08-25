@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+from typing import Any
 
 import structlog
 from aiogram import Bot
@@ -28,6 +29,8 @@ async def run_subscriber(
                 break
             if not await event_enabled(event.get("type", "")):
                 continue
+            if not await event_enabled("compensation.applied"):
+                _strip_compensations(event)
             chat_ids = await repository.admin_chat_ids()
             text = format_event(event)
             await _broadcast(bot, chat_ids, text)
@@ -35,6 +38,13 @@ async def run_subscriber(
         raise
     except Exception as exc:
         log.exception("tgbot.subscriber_crashed", error=str(exc))
+
+
+def _strip_compensations(event: dict[str, Any]) -> None:
+    """Drop the take-profit moves when the operator muted them."""
+    payload = event.get("payload")
+    if isinstance(payload, dict):
+        payload.pop("compensations", None)
 
 
 async def _broadcast(bot: Bot, chats: Iterable[int], text: str) -> None:

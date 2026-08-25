@@ -92,8 +92,12 @@ class Compensator:
         profit: Decimal,
         source_position_id: int,
         current_price: Decimal,
-    ) -> None:
-        """Split ``profit``, bank both halves, then spend the budget."""
+    ) -> list[dict[str, str]]:
+        """Split ``profit``, bank both halves, then spend the budget.
+
+        Returns the take-profit moves made, so the caller can report the
+        close and its compensations as one event instead of several.
+        """
         positions = [_as_open(p) for p in await repository.open_positions()]
         share = await self._share(positions, current_price)
         budget, pocket = split_profit(profit, share)
@@ -106,12 +110,13 @@ class Compensator:
             budget=str(budget),
             pocket=str(pocket),
         )
-        left = await self._drain(
+        moves, left = await self._drain(
             positions, pool, current_price, source_position_id
         )
-        await self._fill_hole(
+        filled = await self._fill_hole(
             positions, left, current_price, source_position_id
         )
+        return moves + filled
 
     async def _share(
         self, positions: list[OpenPosition], current_price: Decimal
@@ -139,7 +144,7 @@ class Compensator:
         pool: Decimal,
         current_price: Decimal,
         source_position_id: int,
-    ) -> Decimal:
+    ) -> tuple[list[dict[str, str]], Decimal]:
         """Spend the pool on TP moves until it stops funding one.
 
         ``_MAX_MOVES_PER_CLOSE`` caps the burst. It is 1 because replays
@@ -148,16 +153,19 @@ class Compensator:
         realized profit by a third, and a third move by half.
         """
         nearest_buy = await self._nearest_buy()
+        moves: list[dict[str, str]] = []
         for _ in range(_MAX_MOVES_PER_CLOSE):
             ctx = self._context(pool, current_price, nearest_buy)
             decision = plan_compensation(positions, ctx)
             if decision is None:
-                return pool
-            if not await self._execute(decision, pool, source_position_id):
-                return pool
+                return moves, pool
+            move = await self._execute(decision, pool, source_position_id)
+            if move is None:
+                return moves, pool
+            moves.append(move)
             pool -= decision.credit_drawn
             positions = _retagged(positions, decision)
-        return pool
+        return moves, pool
 
     async def _nearest_buy(self) -> Decimal:
         """Price of the highest resting buy, or zero when the grid is bare."""
@@ -184,7 +192,7 @@ class Compensator:
         pool: Decimal,
         current_price: Decimal,
         source_position_id: int,
-    ) -> None:
+    ) -> list[dict[str, str]]:
         """Spend what is left pulling a stranded lot near the market.
 
         The ordinary move only ever takes free steps, so without this the
@@ -193,43 +201,44 @@ class Compensator:
         lot is not sold into an immediate loss.
         """
         if pool <= 0:
-            return
+            return []
         decision = plan_hole_fill(
             positions,
             self._context(pool, current_price, await self._nearest_buy()),
             offset=self.config.comp_hole_offset,
         )
         if decision is None:
-            return
-        await self._execute(decision, pool, source_position_id)
+            return []
+        move = await self._execute(decision, pool, source_position_id)
+        return [move] if move is not None else []
 
     async def _execute(
         self,
         decision: CompensationDecision,
         pool: Decimal,
         source_position_id: int,
-    ) -> bool:
-        """Do the exchange move and persist it; return True if applied."""
+    ) -> dict[str, str] | None:
+        """Do the exchange move and persist it; report it if applied."""
         symbol = str(self.config.symbol)
         target = await repository.get_position(decision.target_position_id)
         old_tp = target.tp_price
         if not target.tp_order_id:
             log.warning("compensation.target_has_no_tp", id=target.id)
-            return False
+            return None
         if decision.new_tp_price * target.qty < self.instrument.min_order_amt:
             log.warning(
                 "compensation.skip_below_min_notional",
                 id=target.id,
                 new_tp=str(decision.new_tp_price),
             )
-            return False
+            return None
         try:
             await self.client.cancel_order(symbol, target.tp_order_id)
         except Exception as exc:
             log.warning(
                 "compensation.cancel_failed", id=target.id, error=str(exc)
             )
-            return False
+            return None
         try:
             new_tp_order_id = await self.client.place_limit(
                 symbol,
@@ -240,7 +249,7 @@ class Compensator:
             )
         except Exception as exc:
             await self._restore_protection(target, exc)
-            return False
+            return None
         await repository.record_compensation(
             target=target,
             new_tp_price=decision.new_tp_price,
@@ -256,17 +265,12 @@ class Compensator:
             new_tp=str(decision.new_tp_price),
             drawn=str(decision.credit_drawn),
         )
-        await self.bus.publish(
-            "compensation.applied",
-            {
-                "target_position": target.id,
-                "source_position": source_position_id,
-                "old_tp": str(old_tp) if old_tp is not None else "",
-                "new_tp": str(decision.new_tp_price),
-                "profit": str(decision.credit_drawn),
-            },
-        )
-        return True
+        return {
+            "target_position": str(target.id),
+            "old_tp": str(old_tp) if old_tp is not None else "",
+            "new_tp": str(decision.new_tp_price),
+            "drawn": str(decision.credit_drawn),
+        }
 
     async def _restore_protection(
         self, target: Position, place_error: Exception

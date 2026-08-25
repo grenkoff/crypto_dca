@@ -347,10 +347,11 @@ async def test_handle_sell_fill_closes_position_and_runs_compensation(
     # Events
     kinds = [e[0] for e in bus.events]
     assert "position.closed" in kinds
-    assert "compensation.applied" in kinds
-    comp = next(p for k, p in bus.events if k == "compensation.applied")
-    assert Decimal(comp["old_tp"]) == Decimal("60600")
-    assert Decimal(comp["new_tp"]) < Decimal("60600")
+    closed = [e for e in bus.events if e[0] == "position.closed"]
+    assert closed and closed[0][1]["compensations"]
+    move = closed[0][1]["compensations"][0]
+    assert Decimal(move["old_tp"]) == Decimal("60600")
+    assert Decimal(move["new_tp"]) < Decimal("60600")
 
 
 async def _open_pos() -> Position:

@@ -228,6 +228,13 @@ class OrderManager:
             realized=str(result.realized),
             qty=str(result.filled_qty),
         )
+        moves: list[dict[str, str]] = []
+        if result.realized > 0:
+            moves = await self._compensator.apply(
+                profit=result.realized,
+                source_position_id=position.id,
+                current_price=current_price,
+            )
         await self.bus.publish(
             "position.closed",
             {
@@ -236,12 +243,7 @@ class OrderManager:
                 "price": str(position.tp_price),
                 "position_id": position.id,
                 "compensation_credit": str(position.compensation_credit),
+                "compensations": moves,
             },
         )
-        if result.realized > 0:
-            await self._compensator.apply(
-                profit=result.realized,
-                source_position_id=position.id,
-                current_price=current_price,
-            )
         return int(position.level_index)
