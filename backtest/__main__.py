@@ -49,7 +49,7 @@ _INSTRUMENT = Instrument(
     tick_size=Decimal("0.00001"),
     lot_size=Decimal("0.01"),
     min_order_qty=Decimal("0.01"),
-    min_order_amt=Decimal("1"),
+    min_order_amt=Decimal("5"),
 )
 
 
