@@ -7,7 +7,7 @@ load earns; the rest goes to the pocket and is never spent here.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from decimal import Decimal
 
 import structlog
@@ -33,6 +33,16 @@ from core.strategy.types import (
 )
 
 log = structlog.get_logger()
+
+
+@dataclass(frozen=True)
+class CompensationOutcome:
+    """What one close's profit bought: the moves, the split, the rest."""
+
+    moves: list[dict[str, str]]
+    share: Decimal
+    pool_left: Decimal
+
 
 _MAX_MOVES_PER_CLOSE = 12
 _MOVE_PAUSE_SECONDS = 0.05
@@ -93,11 +103,12 @@ class Compensator:
         profit: Decimal,
         source_position_id: int,
         current_price: Decimal,
-    ) -> list[dict[str, str]]:
+    ) -> CompensationOutcome:
         """Split ``profit``, bank both halves, then spend the budget.
 
-        Returns the take-profit moves made, so the caller can report the
-        close and its compensations as one event instead of several.
+        Reports the moves made along with the split that funded them, so
+        the caller can show a close, its compensations and the state of
+        the pool as one message.
         """
         positions = [_as_open(p) for p in await repository.open_positions()]
         share = await self._share(positions, current_price)
@@ -111,8 +122,13 @@ class Compensator:
             budget=str(budget),
             pocket=str(pocket),
         )
-        return await self._drain(
+        moves = await self._drain(
             positions, pool, current_price, source_position_id
+        )
+        return CompensationOutcome(
+            moves=moves,
+            share=share,
+            pool_left=await repository.pending_credit(),
         )
 
     async def drain_pool(

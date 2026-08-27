@@ -18,7 +18,10 @@ from core.exchange.types import Execution as BybitExecution
 from core.exchange.types import Instrument, Side
 from core.services import repository
 from core.services.balances import BalanceCache
-from core.services.compensator import Compensator
+from core.services.compensator import (
+    CompensationOutcome,
+    Compensator,
+)
 from core.services.events import EventBus
 from core.services.order_common import link_id
 from core.strategy.pricing import compute_tp_price
@@ -228,9 +231,9 @@ class OrderManager:
             realized=str(result.realized),
             qty=str(result.filled_qty),
         )
-        moves: list[dict[str, str]] = []
+        outcome: CompensationOutcome | None = None
         if result.realized > 0:
-            moves = await self._compensator.apply(
+            outcome = await self._compensator.apply(
                 profit=result.realized,
                 source_position_id=position.id,
                 current_price=current_price,
@@ -243,7 +246,9 @@ class OrderManager:
                 "price": str(position.tp_price),
                 "position_id": position.id,
                 "compensation_credit": str(position.compensation_credit),
-                "compensations": moves,
+                "compensations": outcome.moves if outcome else [],
+                "share": str(outcome.share) if outcome else "",
+                "pool": str(outcome.pool_left) if outcome else "",
             },
         )
         return int(position.level_index)
