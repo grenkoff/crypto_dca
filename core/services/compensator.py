@@ -6,6 +6,7 @@ load earns; the rest goes to the pocket and is never spent here.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from decimal import Decimal
 
@@ -21,7 +22,6 @@ from core.services.order_common import link_id
 from core.strategy.compensation import (
     account_load,
     compensation_share,
-    plan_compensation,
     plan_hole_fill,
     split_profit,
 )
@@ -34,7 +34,8 @@ from core.strategy.types import (
 
 log = structlog.get_logger()
 
-_MAX_MOVES_PER_CLOSE = 1
+_MAX_MOVES_PER_CLOSE = 12
+_MOVE_PAUSE_SECONDS = 0.05
 
 
 def _as_open(position: Position) -> OpenPosition:
@@ -110,13 +111,24 @@ class Compensator:
             budget=str(budget),
             pocket=str(pocket),
         )
-        moves, left = await self._drain(
+        return await self._drain(
             positions, pool, current_price, source_position_id
         )
-        filled = await self._fill_hole(
-            positions, left, current_price, source_position_id
+
+    async def drain_pool(
+        self, current_price: Decimal, source_position_id: int
+    ) -> list[dict[str, str]]:
+        """Spend the banked pool without a fresh close to fund it.
+
+        The trader only ever compensates on a profitable close; this is
+        the manual entry point for spending what has already been
+        banked.
+        """
+        positions = [_as_open(p) for p in await repository.open_positions()]
+        pool = await repository.pending_credit()
+        return await self._drain(
+            positions, pool, current_price, source_position_id
         )
-        return moves + filled
 
     async def _share(
         self, positions: list[OpenPosition], current_price: Decimal
@@ -138,35 +150,6 @@ class Compensator:
         )
         return compensation_share(ratio, low=low, high=high)
 
-    async def _drain(
-        self,
-        positions: list[OpenPosition],
-        pool: Decimal,
-        current_price: Decimal,
-        source_position_id: int,
-    ) -> tuple[list[dict[str, str]], Decimal]:
-        """Spend the pool on TP moves until it stops funding one.
-
-        ``_MAX_MOVES_PER_CLOSE`` caps the burst. It is 1 because replays
-        show each extra move costs far more profit than the faster
-        unloading is worth: over 181 days a second move per close cut
-        realized profit by a third, and a third move by half.
-        """
-        nearest_buy = await self._nearest_buy()
-        moves: list[dict[str, str]] = []
-        for _ in range(_MAX_MOVES_PER_CLOSE):
-            ctx = self._context(pool, current_price, nearest_buy)
-            decision = plan_compensation(positions, ctx)
-            if decision is None:
-                return moves, pool
-            move = await self._execute(decision, pool, source_position_id)
-            if move is None:
-                return moves, pool
-            moves.append(move)
-            pool -= decision.credit_drawn
-            positions = _retagged(positions, decision)
-        return moves, pool
-
     async def _nearest_buy(self) -> Decimal:
         """Price of the highest resting buy, or zero when the grid is bare."""
         return await repository.highest_resting_buy()
@@ -186,31 +169,40 @@ class Compensator:
             min_order_amt=self.instrument.min_order_amt,
         )
 
-    async def _fill_hole(
+    async def _drain(
         self,
         positions: list[OpenPosition],
         pool: Decimal,
         current_price: Decimal,
         source_position_id: int,
     ) -> list[dict[str, str]]:
-        """Spend what is left pulling a stranded lot near the market.
+        """Spend the pool filling gaps nearest market, one lot per gap.
 
-        The ordinary move only ever takes free steps, so without this the
-        pool would keep growing untouched. This drains it into the gap
-        nearest market, held ``comp_hole_offset`` above the price so the
-        lot is not sold into an immediate loss.
+        Each move takes the furthest-stranded lot that fits, so a wall
+        walks down in one move instead of a cascade of single steps —
+        same cost, a fraction of the traffic. Moves continue while the
+        pool funds them; the cap only guards against a runaway burst.
         """
-        if pool <= 0:
-            return []
-        decision = plan_hole_fill(
-            positions,
-            self._context(pool, current_price, await self._nearest_buy()),
-            offset=self.config.comp_hole_offset,
-        )
-        if decision is None:
-            return []
-        move = await self._execute(decision, pool, source_position_id)
-        return [move] if move is not None else []
+        moves: list[dict[str, str]] = []
+        nearest_buy = await self._nearest_buy()
+        for _ in range(_MAX_MOVES_PER_CLOSE):
+            if pool <= 0:
+                return moves
+            decision = plan_hole_fill(
+                positions,
+                self._context(pool, current_price, nearest_buy),
+                offset=self.config.comp_hole_offset,
+            )
+            if decision is None:
+                return moves
+            move = await self._execute(decision, pool, source_position_id)
+            if move is None:
+                return moves
+            moves.append(move)
+            pool -= decision.credit_drawn
+            positions = _retagged(positions, decision)
+            await asyncio.sleep(_MOVE_PAUSE_SECONDS)
+        return moves
 
     async def _execute(
         self,

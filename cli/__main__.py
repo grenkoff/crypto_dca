@@ -7,6 +7,7 @@ Django-free replacements for the old management commands. Run with
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 
 import typer
 
@@ -117,6 +118,64 @@ async def _consolidate(*, commit: bool) -> None:
             f"merged @ {g.price_key}: #{g.survivor_id} now {g.combined_qty}"
         )
     typer.echo(f"\nConsolidated {len(done)} group(s).")
+
+
+async def _compensate(commit: bool) -> None:
+    """Report, and optionally make, the moves the pool can fund."""
+    from core.config.bootstrap import bootstrap
+    from core.services.balances import BalanceCache
+    from core.services.compensator import Compensator
+    from core.services.events import NoOpEventBus
+
+    bootstrap()
+    pool = await repository.pending_credit()
+    source = await repository.last_closed_position_id()
+    if pool <= 0 or source is None:
+        typer.echo(f"pool {pool}, nothing to spend")
+        return
+    _paused, _open, _started, beat = await repository.status_data()
+    if beat is not None:
+        age = (datetime.now(tz=UTC) - beat).total_seconds()
+        if age < 90:
+            typer.echo(
+                f"trader is live (heartbeat {age:.0f}s ago) — stop it"
+                " first, otherwise both will move the same orders",
+                err=True,
+            )
+            raise typer.Exit(1)
+    config = await repository.get_config()
+    client = BybitClient.from_settings()
+    symbol = str(config.symbol)
+    instrument = await client.get_instrument(symbol)
+    price = await client.get_last_price(symbol)
+    typer.echo(f"pool {pool} · price {price} · source position {source}")
+    if not commit:
+        typer.echo("dry run — pass --commit to move the take-profits")
+        return
+    compensator = Compensator(
+        client=client,
+        instrument=instrument,
+        config=config,
+        bus=NoOpEventBus(),
+        balances=BalanceCache(client),
+    )
+    moves = await compensator.drain_pool(price, source)
+    for move in moves:
+        typer.echo(
+            f"  {move['old_tp']} -> {move['new_tp']} (drew {move['drawn']})"
+        )
+    left = await repository.pending_credit()
+    typer.echo(f"{len(moves)} move(s), pool now {left}")
+
+
+@app.command()
+def compensate(
+    commit: bool = typer.Option(
+        False, help="Move the take-profits (default: dry-run)."
+    ),
+) -> None:
+    """Spend the banked compensation pool without waiting for a close."""
+    asyncio.run(_compensate(commit))
 
 
 if __name__ == "__main__":

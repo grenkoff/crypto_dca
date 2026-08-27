@@ -5,7 +5,6 @@ from decimal import Decimal
 from core.strategy.compensation import (
     account_load,
     compensation_share,
-    plan_compensation,
     plan_hole_fill,
     slot_below,
     split_profit,
@@ -78,15 +77,16 @@ def test_fills_nearest_hole_above_the_wall() -> None:
         _pos(2, "0.02800"),
         _pos(1, "0.02810"),
     ]
-    decision = plan_compensation(positions, _ctx())
+    decision = plan_hole_fill(positions, _ctx())
     assert decision is not None
     assert decision.target_position_id == 1
     assert decision.new_tp_price == Decimal("0.02805")
     assert decision.credit_drawn == Decimal("0")  # winner moves for free
 
 
-def test_isolated_tp_steps_down_one_grid_step() -> None:
-    # contiguous 02795..02810, isolated 02830 -> it steps to 02825
+def test_a_move_stops_at_the_slot_above_a_taken_one() -> None:
+    # contiguous 02795..02810, isolated 02830 -> it slides down onto 02815,
+    # the first free slot above the wall, rather than stepping once
     positions = [
         _pos(1, "0.02795"),
         _pos(2, "0.02800"),
@@ -94,37 +94,61 @@ def test_isolated_tp_steps_down_one_grid_step() -> None:
         _pos(4, "0.02810"),
         _pos(5, "0.02830"),
     ]
-    decision = plan_compensation(positions, _ctx())
+    decision = plan_hole_fill(positions, _ctx())
     assert decision is not None
     assert decision.target_position_id == 5
-    assert decision.new_tp_price == Decimal("0.02825")
+    assert decision.new_tp_price == Decimal("0.02815")
 
 
 def test_off_grid_tp_is_pulled_onto_the_lattice() -> None:
     positions = [_pos(1, "0.02836")]
-    decision = plan_compensation(positions, _ctx(nearest_buy="0"))
+    assert plan_hole_fill(positions, _ctx(nearest_buy="0", pool="0")) is None
+    decision = plan_hole_fill(
+        positions, _ctx(nearest_buy="0", pool="0.000001")
+    )
     assert decision is not None
-    assert decision.new_tp_price == Decimal("0.02835")
+    assert decision.new_tp_price % Decimal("0.00005") == 0
+    assert decision.new_tp_price < Decimal("0.02836")
+
+
+def test_one_deep_move_costs_the_same_as_walking_there() -> None:
+    lot = _pos(1, "0.02900", entry="0.03000", qty="200")
+    direct = plan_hole_fill([lot], _ctx(nearest_buy="0", pool="1000"))
+    assert direct is not None
+    walked = Decimal(0)
+    current = lot
+    while current.current_tp_price > direct.new_tp_price:
+        step = plan_hole_fill([current], _ctx(nearest_buy="0", pool="1000"))
+        assert step is not None
+        walked += step.credit_drawn
+        current = _pos(
+            1,
+            str(step.new_tp_price),
+            entry="0.03000",
+            qty="200",
+            credit=str(step.new_credit),
+        )
+    assert abs(direct.credit_drawn - walked) < Decimal("0.0001")
 
 
 def test_bottom_tp_not_pushed_below_wall_floor() -> None:
     # wall_floor = nearest_buy 0.02760 + tp_step 0.0001 + grid_step 0.00005
     #            = 0.02775; a TP already there cannot move lower
     positions = [_pos(1, "0.02775")]
-    assert plan_compensation(positions, _ctx(nearest_buy="0.02760")) is None
+    assert plan_hole_fill(positions, _ctx(nearest_buy="0.02760")) is None
 
 
 def test_tp_one_step_above_floor_moves_down_to_the_floor() -> None:
     # floor 0.02775; a TP one grid_step above it settles onto it
     positions = [_pos(1, "0.02780")]
-    decision = plan_compensation(positions, _ctx(nearest_buy="0.02760"))
+    decision = plan_hole_fill(positions, _ctx(nearest_buy="0.02760"))
     assert decision is not None
     assert decision.new_tp_price == Decimal("0.02775")
 
 
 def test_underwater_move_draws_credit_and_keeps_pair_positive() -> None:
     victim = _pos(1, "0.02810", entry="0.03000", qty="200")
-    decision = plan_compensation([victim], _ctx(nearest_buy="0"))
+    decision = plan_hole_fill([victim], _ctx(nearest_buy="0", pool="0.4"))
     assert decision is not None
     assert decision.new_tp_price == Decimal("0.02805")
     assert decision.credit_drawn > 0
@@ -138,9 +162,7 @@ def test_underwater_move_draws_credit_and_keeps_pair_positive() -> None:
 
 def test_underwater_move_skipped_when_pool_too_small() -> None:
     victim = _pos(1, "0.02810", entry="0.03000", qty="200")
-    assert (
-        plan_compensation([victim], _ctx(pool="0.10", nearest_buy="0")) is None
-    )
+    assert plan_hole_fill([victim], _ctx(pool="0.10", nearest_buy="0")) is None
 
 
 def test_occupied_slot_below_is_skipped_for_next_victim() -> None:
@@ -150,13 +172,13 @@ def test_occupied_slot_below_is_skipped_for_next_victim() -> None:
         _pos(2, "0.02800"),
         _pos(3, "0.02810"),
     ]
-    decision = plan_compensation(positions, _ctx())
+    decision = plan_hole_fill(positions, _ctx())
     assert decision is not None and decision.target_position_id == 3
 
 
 def test_no_move_when_pool_nonpositive_or_empty() -> None:
-    assert plan_compensation([_pos(1, "0.02810")], _ctx(pool="0")) is None
-    assert plan_compensation([], _ctx()) is None
+    assert plan_hole_fill([_pos(1, "0.02810")], _ctx(pool="0")) is None
+    assert plan_hole_fill([], _ctx()) is None
 
 
 def test_partially_filled_victim_is_skipped() -> None:
@@ -167,19 +189,21 @@ def test_partially_filled_victim_is_skipped() -> None:
         _pos(2, "0.02800"),
         _pos(3, "0.02810", filled="35"),
     ]
-    assert plan_compensation(positions, _ctx()) is None
+    assert plan_hole_fill(positions, _ctx()) is None
 
 
-def test_partial_fill_still_occupies_its_slot() -> None:
-    # 02810 is partially filled (never a victim), but its TP still blocks
-    # 02815 from descending onto the occupied 02810 slot.
+def test_a_partly_filled_lot_is_never_the_one_moved() -> None:
+    # 02810 is partially filled, so the gap at 02805 is filled by 02815
     positions = [
         _pos(1, "0.02795"),
         _pos(2, "0.02800"),
         _pos(3, "0.02810", filled="35"),
         _pos(4, "0.02815"),
     ]
-    assert plan_compensation(positions, _ctx()) is None
+    decision = plan_hole_fill(positions, _ctx())
+    assert decision is not None
+    assert decision.target_position_id == 4
+    assert decision.new_tp_price == Decimal("0.02805")
 
 
 def test_share_tracks_load_between_its_bounds() -> None:
@@ -256,9 +280,14 @@ def test_hole_fill_moves_the_dearest_lot_the_pool_affords() -> None:
     assert decision.credit_drawn > 0
 
 
-def test_hole_fill_skips_a_lot_the_pool_cannot_cover() -> None:
+def test_a_thin_pool_falls_back_to_a_single_step() -> None:
     dear = _pos(1, "0.05000", entry="0.04000", qty="200")
-    assert plan_hole_fill([dear], _ctx(pool="0.0001", nearest_buy="0")) is None
+    rich = plan_hole_fill([dear], _ctx(pool="1000", nearest_buy="0"))
+    thin = plan_hole_fill([dear], _ctx(pool="0.0001", nearest_buy="0"))
+    assert rich is not None and thin is not None
+    # the rich pool reaches the gap by the market; the thin one only nudges
+    assert rich.new_tp_price < thin.new_tp_price
+    assert thin.new_tp_price == Decimal("0.04995")
 
 
 def test_hole_fill_needs_a_pool() -> None:

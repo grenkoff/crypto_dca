@@ -1203,6 +1203,24 @@ async def open_positions() -> list[Position]:
         return list(rows.all())
 
 
+async def pending_credit() -> Decimal:
+    """The compensation pool as it stands right now."""
+    async with new_session() as session:
+        return (await _load_bot(session)).pending_credit
+
+
+async def last_closed_position_id() -> int | None:
+    """Id of the most recently closed position, if any."""
+    async with new_session() as session:
+        found: int | None = await session.scalar(
+            select(Position.id)
+            .where(Position.status == _CLOSED)
+            .order_by(Position.closed_at.desc())
+            .limit(1)
+        )
+        return found
+
+
 async def accrue_split(*, pool_add: Decimal, pocket_add: Decimal) -> Decimal:
     """Bank a close's profit into the pool and the pocket (atomic).
 
