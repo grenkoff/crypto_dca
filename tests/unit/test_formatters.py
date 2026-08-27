@@ -325,3 +325,56 @@ def test_sparkline_stays_flat_when_values_do_not_move() -> None:
 
 def test_sparkline_of_nothing_is_empty() -> None:
     assert _sparkline([]) == ""
+
+
+def test_a_close_shows_the_pool_share_and_what_is_left() -> None:
+    text = format_event(
+        {
+            "type": "position.closed",
+            "payload": {
+                "price": "0.02865",
+                "realized": "0.0289",
+                "compensation_credit": "0",
+                "share": "0.7934",
+                "pool": "0.5743",
+                "compensations": [{"old_tp": "0.02890", "new_tp": "0.02865"}],
+            },
+        }
+    )
+    lines = text.splitlines()
+    assert len(lines) == 3
+    assert lines[2] == "🏦 Pool `79%` · `0.5743`"
+
+
+def test_the_pool_line_appears_without_any_moves() -> None:
+    text = format_event(
+        {
+            "type": "position.closed",
+            "payload": {
+                "price": "0.02880",
+                "realized": "0.0024",
+                "compensation_credit": "0",
+                "share": "0.20",
+                "pool": "0.0038",
+                "compensations": [],
+            },
+        }
+    )
+    assert text.splitlines()[1] == "🏦 Pool `20%` · `0.0038`"
+
+
+def test_a_close_without_a_split_omits_the_pool_line() -> None:
+    text = format_event(
+        {
+            "type": "position.closed",
+            "payload": {
+                "price": "0.02880",
+                "realized": "-0.05",
+                "compensation_credit": "0",
+                "share": "",
+                "pool": "",
+            },
+        }
+    )
+    assert "Pool" not in text
+    assert "\n" not in text
