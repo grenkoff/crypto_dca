@@ -14,7 +14,7 @@ from hypothesis import strategies as st
 
 from core.exchange.types import Instrument
 from core.services.order_manager import compute_buy_qty
-from core.strategy.compensation import plan_compensation
+from core.strategy.compensation import plan_hole_fill
 from core.strategy.grid import (
     buys_to_prune,
     fundable_targets,
@@ -272,7 +272,7 @@ def test_compensation_decision_invariants(
         nearest_buy_price=nearest_buy,
         min_order_amt=Decimal(0),
     )
-    decision = plan_compensation(positions, ctx)
+    decision = plan_hole_fill(positions, ctx)
     if decision is None:
         return
     victim = next(p for p in positions if p.id == decision.target_position_id)

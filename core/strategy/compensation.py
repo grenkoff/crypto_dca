@@ -16,7 +16,6 @@ from collections.abc import Sequence
 from decimal import ROUND_DOWN, Decimal
 
 from core.strategy.rounding import (
-    min_notional_price,
     next_tick_above,
     round_down_to_tick,
     round_up_to_tick,
@@ -29,6 +28,7 @@ from core.strategy.types import (
 
 _PROFIT_EPS = Decimal("1E-10")
 _SPLIT_SCALE = Decimal("1E-12")
+_MAX_HOLES_SCANNED = 40
 
 
 def account_load(
@@ -104,13 +104,13 @@ def plan_hole_fill(
     *,
     offset: Decimal = Decimal(0),
 ) -> CompensationDecision | None:
-    """Fill the gap nearest market with the dearest lot the pool affords.
+    """Fill the gap nearest market with the lot stranded furthest away.
 
-    The ordinary move always drops the nearest take-profit one slot, and
-    that step is usually already profitable, so the pool never gets
-    spent. This picks the target first — the empty grid slot closest to
-    market — and then asks which stranded lot the pool can afford to move
-    into it, preferring the one that uses the pool most fully.
+    Walking the wall down slot by slot costs exactly what one long move
+    costs — five lots giving up one step each is the same USDT as one lot
+    giving up five — but it spends a cancel and a place per step. So the
+    gap is filled in a single move by the highest take-profit that fits,
+    which leaves the same wall behind for a fifth of the traffic.
 
     ``offset`` holds the search that fraction of the price above market,
     so a lot lands near the price rather than on top of it and is not
@@ -119,13 +119,64 @@ def plan_hole_fill(
     if ctx.pool <= 0 or ctx.grid_step <= 0 or not open_positions:
         return None
     occupied = {p.current_tp_price for p in open_positions}
-    hole = _nearest_hole(ctx, occupied, offset)
-    if hole is None:
-        return None
-    best: CompensationDecision | None = None
-    spent = Decimal(-1)
+    for hole in _holes(ctx, occupied, offset):
+        decision = _fill_one(open_positions, ctx, hole)
+        if decision is not None:
+            return decision
+    return _step_down(open_positions, ctx, occupied, offset)
+
+
+def _step_down(
+    open_positions: Sequence[OpenPosition],
+    ctx: CompensationContext,
+    occupied: set[Decimal],
+    offset: Decimal,
+) -> CompensationDecision | None:
+    """Nudge the nearest lot one slot, when no long move is affordable.
+
+    Reaching the gap by the market can cost more than the pool holds. A
+    single step down is the cheap fallback: it compacts the wall a little
+    instead of leaving the profit unspent.
+    """
+    floor = _wall_floor(ctx) + ctx.current_price * max(offset, Decimal(0))
+    for lot in sorted(open_positions, key=lambda p: p.current_tp_price):
+        if lot.filled_qty > 0:
+            continue
+        target = slot_below(lot.current_tp_price, ctx.grid_step)
+        if target in occupied or target < floor:
+            continue
+        if ctx.min_order_amt > 0 and target * lot.qty < ctx.min_order_amt:
+            continue
+        realized = (
+            target * lot.qty * (Decimal(1) - ctx.maker_fee)
+            - lot.entry_price * lot.qty
+            - lot.fees_in
+        )
+        pair = realized + lot.compensation_credit
+        draw = Decimal(0) if pair > 0 else (-pair + _PROFIT_EPS)
+        if draw > ctx.pool:
+            return None
+        return CompensationDecision(
+            target_position_id=lot.id,
+            new_tp_price=target,
+            new_credit=lot.compensation_credit + draw,
+            credit_drawn=draw,
+        )
+    return None
+
+
+def _fill_one(
+    open_positions: Sequence[OpenPosition],
+    ctx: CompensationContext,
+    hole: Decimal,
+) -> CompensationDecision | None:
+    """The furthest lot the pool can afford to drop into ``hole``."""
+    best: OpenPosition | None = None
+    best_draw = Decimal(0)
     for lot in open_positions:
         if lot.filled_qty > 0 or lot.current_tp_price <= hole:
+            continue
+        if best is not None and lot.current_tp_price <= best.current_tp_price:
             continue
         if ctx.min_order_amt > 0 and hole * lot.qty < ctx.min_order_amt:
             continue
@@ -136,32 +187,37 @@ def plan_hole_fill(
         )
         pair = realized + lot.compensation_credit
         draw = Decimal(0) if pair > 0 else (-pair + _PROFIT_EPS)
-        if draw > ctx.pool or draw <= spent:
+        if draw > ctx.pool:
             continue
-        spent = draw
-        best = CompensationDecision(
-            target_position_id=lot.id,
-            new_tp_price=hole,
-            new_credit=lot.compensation_credit + draw,
-            credit_drawn=draw,
-        )
-    return best
+        best, best_draw = lot, draw
+    if best is None:
+        return None
+    return CompensationDecision(
+        target_position_id=best.id,
+        new_tp_price=hole,
+        new_credit=best.compensation_credit + best_draw,
+        credit_drawn=best_draw,
+    )
 
 
-def _nearest_hole(
-    ctx: CompensationContext,
-    occupied: set[Decimal],
-    offset: Decimal = Decimal(0),
-) -> Decimal | None:
-    """The empty grid slot closest to market, or None if the wall is solid."""
+def _holes(
+    ctx: CompensationContext, occupied: set[Decimal], offset: Decimal
+) -> list[Decimal]:
+    """Empty grid slots from market upward, nearest first.
+
+    The nearest gap is the most useful one to fill, but reaching it can
+    cost more than the pool holds; the ones above it are cheaper, so the
+    planner walks outward until it finds a move it can pay for.
+    """
     floor = _wall_floor(ctx) + ctx.current_price * max(offset, Decimal(0))
     slot = round_up_to_tick(floor, ctx.grid_step)
     highest = max(occupied) if occupied else slot
-    while slot in occupied:
+    found: list[Decimal] = []
+    while slot <= highest and len(found) < _MAX_HOLES_SCANNED:
+        if slot not in occupied:
+            found.append(slot)
         slot += ctx.grid_step
-        if slot > highest:
-            return None
-    return slot
+    return found
 
 
 def _wall_floor(ctx: CompensationContext) -> Decimal:
@@ -172,62 +228,3 @@ def _wall_floor(ctx: CompensationContext) -> Decimal:
     return max(
         market_floor, ctx.nearest_buy_price + ctx.tp_step + ctx.grid_step
     )
-
-
-def plan_compensation(
-    open_positions: list[OpenPosition], ctx: CompensationContext
-) -> CompensationDecision | None:
-    """Plan the next TP compaction move, or None to keep banking the pool.
-
-    Picks the nearest-to-market TP whose grid slot directly below is empty
-    and at or above the wall floor (``nearest_buy + tp_step + grid_step``,
-    market, min notional), then moves it there if the pool funds a
-    strictly-positive pair. If that nearest gap can't be funded yet, returns
-    None so the profit keeps accumulating.
-    """
-    if ctx.pool <= 0 or ctx.grid_step <= 0 or not open_positions:
-        return None
-
-    market_floor = next_tick_above(ctx.current_price, ctx.tick_size)
-    wall_floor = (
-        ctx.nearest_buy_price + ctx.tp_step + ctx.grid_step
-        if ctx.nearest_buy_price > 0
-        else market_floor
-    )
-    floor = max(market_floor, wall_floor)
-
-    occupied = {p.current_tp_price for p in open_positions}
-    for victim in sorted(open_positions, key=lambda p: p.current_tp_price):
-        if victim.filled_qty > 0:
-            continue
-        if victim.current_tp_price <= floor:
-            continue
-        target = slot_below(victim.current_tp_price, ctx.grid_step)
-        if target in occupied:
-            continue
-        victim_floor = floor
-        if ctx.min_order_amt > 0:
-            victim_floor = max(
-                victim_floor,
-                min_notional_price(
-                    ctx.min_order_amt, victim.qty, ctx.tick_size
-                ),
-            )
-        if target < victim_floor:
-            continue
-        realized = (
-            target * victim.qty * (Decimal(1) - ctx.maker_fee)
-            - victim.entry_price * victim.qty
-            - victim.fees_in
-        )
-        pair = realized + victim.compensation_credit
-        draw = Decimal(0) if pair > 0 else (-pair + _PROFIT_EPS)
-        if draw > ctx.pool:
-            return None
-        return CompensationDecision(
-            target_position_id=victim.id,
-            new_tp_price=target,
-            new_credit=victim.compensation_credit + draw,
-            credit_drawn=draw,
-        )
-    return None

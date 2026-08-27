@@ -19,7 +19,6 @@ from core.services.order_manager import compute_buy_qty
 from core.strategy.compensation import (
     account_load,
     compensation_share,
-    plan_compensation,
     plan_hole_fill,
     split_profit,
 )
@@ -48,8 +47,6 @@ class BacktestConfig:
     compensation_moves: int = 1
     comp_share_min: Decimal = Decimal(1)
     comp_share_max: Decimal = Decimal(1)
-    deep_moves: bool = False
-    deep_cap: int = 20
     hole_offset: Decimal = Decimal(0)
 
 
@@ -269,25 +266,8 @@ class _Book:
         still funds them, which is the variant under test.
         """
         for _ in range(max(self.cfg.compensation_moves, 1)):
-            if not self._compensate_once(price):
+            if self.pool <= 0 or not self._compensate_once(price):
                 break
-        if self.cfg.deep_moves:
-            for _ in range(max(self.cfg.deep_cap, 1)):
-                if not self._deep_once(price):
-                    break
-
-    def _deep_once(self, price: Decimal) -> bool:
-        """Spend the whole pool pulling the furthest lot toward market."""
-        if self.pool <= 0 or not self.lots:
-            return False
-        decision = plan_hole_fill(
-            [lot.view() for lot in self.lots],
-            self._context(price),
-            offset=self.cfg.hole_offset,
-        )
-        if decision is None:
-            return False
-        return self._apply_decision(decision)
 
     def _context(self, price: Decimal) -> CompensationContext:
         """Market and grid context for a compensation decision."""
@@ -321,8 +301,10 @@ class _Book:
     def _compensate_once(self, price: Decimal) -> bool:
         if self.pool <= 0 or not self.lots:
             return False
-        decision = plan_compensation(
-            [lot.view() for lot in self.lots], self._context(price)
+        decision = plan_hole_fill(
+            [lot.view() for lot in self.lots],
+            self._context(price),
+            offset=self.cfg.hole_offset,
         )
         if decision is None:
             return False
