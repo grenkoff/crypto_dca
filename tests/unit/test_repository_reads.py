@@ -10,6 +10,7 @@ from core.db.models import (
     BotStatus,
     CompensationLink,
     ExecutionLog,
+    GridLevel,
     Position,
     PositionStatus,
     StrategyConfig,
@@ -370,3 +371,60 @@ async def test_a_share_outside_zero_to_one_is_rejected() -> None:
             await repository.update_config(
                 actor="t", updates={"comp_share_min": bad}
             )
+
+
+async def test_close_positions_at_market_closes_both_and_drains_pool() -> None:
+    await add_rows(BotStatus(id=1, pending_credit=Decimal("5")))
+    await add_rows(
+        GridLevel(
+            level_index=1,
+            target_buy_price=Decimal("0.05"),
+            current_buy_order_id="b-1",
+        )
+    )
+    await add_rows(
+        GridLevel(
+            level_index=2,
+            target_buy_price=Decimal("0.02"),
+            current_buy_order_id="b-2",
+        )
+    )
+    await _open(1, "0.05", "100", "0.0502")
+    await _open(2, "0.02", "100", "0.0202")
+    async with new_session() as session:
+        ids = list(
+            await session.scalars(select(Position.id).order_by(Position.id))
+        )
+    realized = await repository.close_positions_at_market(
+        position_ids=ids,
+        price=Decimal("0.03"),
+        fee_rate=Decimal("0.001"),
+        credit_drawn=Decimal("2"),
+        source_position_id=ids[1],
+        new_pending=Decimal("3"),
+    )
+    # lot 1: 3.0 - 0.003 - 5.0 = -2.003; lot 2: 3.0 - 0.003 - 2.0 = 0.997
+    assert realized == Decimal("-1.006")
+    async with new_session() as session:
+        rows = list(
+            await session.scalars(select(Position).order_by(Position.id))
+        )
+        levels = list(
+            await session.scalars(select(GridLevel).order_by(GridLevel.id))
+        )
+        bot = await session.get(BotStatus, 1)
+        links = list(await session.scalars(select(CompensationLink)))
+    assert [row.status for row in rows] == [
+        PositionStatus.CLOSED,
+        PositionStatus.CLOSED,
+    ]
+    assert all(row.filled_qty == row.qty for row in rows)
+    assert all(row.tp_order_id == "" for row in rows)
+    assert all(level.current_buy_order_id == "" for level in levels)
+    assert bot is not None
+    assert bot.pending_credit == Decimal("3")
+    # the whole draw is attributed to the stranded lot, not to its partner
+    assert sorted(link.profit_applied for link in links) == [
+        Decimal("0"),
+        Decimal("2"),
+    ]

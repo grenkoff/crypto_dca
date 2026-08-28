@@ -46,6 +46,16 @@ class CompensationContext:
     tp_step: Decimal
     nearest_buy_price: Decimal
     min_order_amt: Decimal = Decimal(0)
+    taker_fee: Decimal = Decimal(0)
+
+
+@dataclass(frozen=True)
+class MarketExitDecision:
+    """Lots to sell together at market, and what the pool pays for it."""
+
+    position_ids: tuple[int, ...]
+    qty: Decimal
+    credit_drawn: Decimal
 
 
 @dataclass(frozen=True)

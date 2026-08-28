@@ -292,6 +292,45 @@ class BybitClient:
         }
         if order_link_id:
             kwargs["orderLinkId"] = order_link_id
+        return await self._submit(kwargs, symbol, order_link_id, "place_limit")
+
+    async def place_market(
+        self,
+        symbol: str,
+        side: Side,
+        qty: Decimal,
+        *,
+        order_link_id: str,
+    ) -> str:
+        """Place a market order in base coin and return its order id.
+
+        A market order must never be replayed blindly — a retry after a
+        dropped connection would trade twice — so the link id is
+        mandatory here and a failed attempt is resolved by looking it up
+        before anything is sent again.
+        """
+        kwargs: dict[str, Any] = {
+            "category": CATEGORY,
+            "symbol": symbol,
+            "side": side.value,
+            "orderType": "Market",
+            "qty": str(qty),
+            "marketUnit": "baseCoin",
+            "orderLinkId": order_link_id,
+        }
+        return await self._submit(
+            kwargs, symbol, order_link_id, "place_market"
+        )
+
+    async def _submit(
+        self,
+        kwargs: dict[str, Any],
+        symbol: str,
+        link: str | None,
+        what: str,
+    ) -> str:
+        """Send an order, adopting it if a dropped attempt
+        already placed it."""
         last = ""
         for attempt in range(_RETRIES):
             try:
@@ -299,23 +338,23 @@ class BybitClient:
                     self._http.place_order, **kwargs
                 )
             except Exception as exc:
-                if not _is_transient(exc) or not order_link_id:
+                if not _is_transient(exc) or not link:
                     raise
                 last = str(exc)
                 log.warning(
                     "bybit.place_interrupted",
                     attempt=attempt + 1,
-                    link_id=order_link_id,
+                    link_id=link,
                     error=last[:120],
                 )
-                landed = await self._adopt_after_drop(symbol, order_link_id)
+                landed = await self._adopt_after_drop(symbol, link)
                 if landed is not None:
                     return landed
                 await asyncio.sleep(_BACKOFF_SECONDS * (attempt + 1))
                 continue
             return str(_raise_for_ret(resp)["orderId"])
         raise TransientNetworkError(
-            f"place_limit gave up after {_RETRIES} attempts: {last[:120]}"
+            f"{what} gave up after {_RETRIES} attempts: {last[:120]}"
         )
 
     async def _adopt_after_drop(self, symbol: str, link_id: str) -> str | None:

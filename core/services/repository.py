@@ -1281,6 +1281,63 @@ async def close_at_price(
         return realized
 
 
+async def close_positions_at_market(
+    *,
+    position_ids: Sequence[int],
+    price: Decimal,
+    fee_rate: Decimal,
+    credit_drawn: Decimal,
+    source_position_id: int,
+    new_pending: Decimal,
+) -> Decimal:
+    """Close lots sold together at market and charge the pool (atomic).
+
+    The whole draw is attributed to the first id — the stranded lot the
+    sale was for; any partner rides along only to clear the exchange
+    minimum. Returns the combined realized result.
+    """
+    total = Decimal(0)
+    async with new_session() as session, session.begin():
+        for index, position_id in enumerate(position_ids):
+            pos = await session.get(
+                Position, position_id, with_for_update=True
+            )
+            if pos is None:
+                raise ValueError(f"position {position_id} vanished")
+            remaining = pos.remaining_qty
+            sell_value = pos.sell_value + price * remaining
+            fees_out = pos.fees_out + price * remaining * fee_rate
+            realized = (
+                sell_value - fees_out - pos.entry_price * pos.qty - pos.fees_in
+            )
+            pos.filled_qty = pos.qty
+            pos.sell_value = sell_value
+            pos.fees_out = fees_out
+            pos.realized_pnl = realized
+            pos.status = _CLOSED
+            pos.closed_at = _now()
+            pos.tp_order_id = ""
+            total += realized
+            session.add(
+                CompensationLink(
+                    profitable_position_id=source_position_id,
+                    compensated_position_id=pos.id,
+                    profit_applied=credit_drawn if index == 0 else Decimal(0),
+                    new_tp_price=price,
+                    created_at=_now(),
+                )
+            )
+            await session.execute(
+                update(GridLevel)
+                .where(GridLevel.level_index == pos.level_index)
+                .values(
+                    status=_IDLE, current_buy_order_id="", updated_at=_now()
+                )
+            )
+        (await _load_bot(session)).pending_credit = new_pending
+    return total
+
+
 async def record_compensation(
     *,
     target: Position,
