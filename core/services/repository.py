@@ -325,16 +325,19 @@ async def pnl_curve_data() -> tuple[
     """
     async with new_session() as session:
         closed_rows = await session.execute(
-            select(Position.closed_at, Position.realized_pnl).where(
+            select(
+                Position.closed_at,
+                func.coalesce(Position.pocket_delta, Position.realized_pnl),
+            ).where(
                 Position.status == _CLOSED, Position.closed_at.is_not(None)
             )
         )
         daily: dict[date, Decimal] = {}
-        for closed_at, realized in closed_rows.all():
+        for closed_at, stayed in closed_rows.all():
             if closed_at is None:
                 continue
             day = closed_at.date()
-            daily[day] = daily.get(day, Decimal(0)) + realized
+            daily[day] = daily.get(day, Decimal(0)) + stayed
         sorted_dates = _fill_day_gaps(daily)[-_MAX_CHART_DAYS:]
         days = [
             (d.strftime("%d.%m"), daily.get(d, Decimal(0)))
@@ -1152,6 +1155,7 @@ async def apply_sell_fill(
                 - pos.fees_in
             )
             pos.realized_pnl = realized
+            pos.pocket_delta = Decimal(0)
             pos.status = _CLOSED
             pos.closed_at = execution.executed_at
         else:
@@ -1221,17 +1225,24 @@ async def last_closed_position_id() -> int | None:
         return found
 
 
-async def accrue_split(*, pool_add: Decimal, pocket_add: Decimal) -> Decimal:
+async def accrue_split(
+    *, pool_add: Decimal, pocket_add: Decimal, position_id: int
+) -> Decimal:
     """Bank a close's profit into the pool and the pocket (atomic).
 
     Both halves land before any exchange call, so a crash mid-move can
-    lose a take-profit placement but never the profit itself. Returns the
-    pool available to spend right after the accrual.
+    lose a take-profit placement but never the profit itself. The
+    pocket half is also stamped on the close that earned it, which is
+    what the profit-per-day chart sums. Returns the pool available to
+    spend right after the accrual.
     """
     async with new_session() as session, session.begin():
         bot = await _load_bot(session)
         bot.pending_credit += pool_add
         bot.pocket_credit += pocket_add
+        pos = await session.get(Position, position_id, with_for_update=True)
+        if pos is not None:
+            pos.pocket_delta = pocket_add
         return bot.pending_credit
 
 
@@ -1271,6 +1282,7 @@ async def close_at_price(
         pos.sell_value = sell_value
         pos.fees_out = fees_out
         pos.realized_pnl = realized
+        pos.pocket_delta = Decimal(0)
         pos.status = _CLOSED
         pos.closed_at = _now()
         await session.execute(
@@ -1314,6 +1326,7 @@ async def close_positions_at_market(
             pos.sell_value = sell_value
             pos.fees_out = fees_out
             pos.realized_pnl = realized
+            pos.pocket_delta = Decimal(0)
             pos.status = _CLOSED
             pos.closed_at = _now()
             pos.tp_order_id = ""
