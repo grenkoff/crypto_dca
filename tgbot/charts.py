@@ -114,12 +114,14 @@ def _style_right(axis: Any, color: str, outward: float) -> None:
 _GREEN = "#16a34a"
 _AMBER = "#f59e0b"
 _BAR = "#7dd3fc"
+_POOL = "#ef4444"
 _MA = "#2563eb"
 _INK = "black"
 _GREY = "#b8b8b8"
 _VOL_UP = "#8fd3b6"
 _VOL_DOWN = "#f0a8a8"
 _MA_WINDOW = 10
+_POOL_SHIFT = 0.25
 
 
 def _axis_badge(
@@ -236,6 +238,7 @@ def _badges(
     equity: list[float],
     ma: list[float],
     ohlc: list[Bar | None],
+    pool: list[float],
 ) -> None:
     """Tag every axis with the value it currently reads."""
     ax, funds_ax, bar_ax, price_ax, vol_ax = axes
@@ -249,6 +252,9 @@ def _badges(
         _axis_badge(funds_ax, last_funds, _GREEN, f"{last_funds:,.2f}", 2)
     if last_ma is not None:
         _axis_badge(bar_ax, last_ma, _MA, f"{last_ma:.2f}", 34)
+    last_pool = _last(pool)
+    if last_pool is not None:
+        _axis_badge(bar_ax, last_pool, _POOL, f"{last_pool:.2f}", 34)
     if candles:
         close = candles[-1][3]
         _axis_badge(price_ax, close, _INK, f"{close:.5f}", 68)
@@ -295,16 +301,20 @@ def render_pnl_chart(
     ohlc: list[Bar | None],
     btc_ohlc: list[Bar | None] | None = None,
     funds: list[Decimal] | None = None,
+    pool: list[Decimal] | None = None,
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
-    Locked USDT (amber) sits on the left axis; funds (green), daily realized
-    profit (bars + MA), and the KAS price (daily candlesticks) each get their
-    own right axis. ``funds`` is the whole account's worth per day when
-    given; without it the line falls back to cost basis plus realized
-    profit. ``btc_ohlc`` (already rescaled to KAS units) is drawn as
-    lighter grey candles on the same price axis to gauge BTC correlation.
-    KAS volume sits in its own panel below, above the date axis.
+    Locked USDT (amber) sits on the left axis; funds (green), daily
+    profit (bars + MA), and the KAS price (daily candlesticks) each get
+    their own right axis. The profit bars show what stays in the pocket;
+    ``pool`` draws the compensation share beside them in red, on the
+    same axis and slightly offset so both read at once. ``funds`` is the
+    whole account's worth per day when given; without it the line falls
+    back to cost basis plus realized profit. ``btc_ohlc`` (already
+    rescaled to KAS units) is drawn as lighter grey candles on the same
+    price axis to gauge BTC correlation. KAS volume sits in its own
+    panel below, above the date axis.
     ``matplotlib`` is imported lazily to keep start-up fast.
     """
     from matplotlib.figure import Figure
@@ -332,6 +342,15 @@ def render_pnl_chart(
         width=0.7,
         label="profit/day",
     )
+    pooled = [float(v) for v in pool] if pool else [0.0] * len(xs)
+    bar_ax.bar(
+        [x + _POOL_SHIFT for x in xs],
+        pooled,
+        color=_POOL,
+        width=0.7,
+        alpha=0.75,
+        label="pool/day",
+    )
     fxs = [float(x) for x in xs]
     ma_x, ma_y = _smooth(fxs, _moving_average(profits, _MA_WINDOW))
     bar_ax.plot(
@@ -355,6 +374,7 @@ def render_pnl_chart(
         [float(v) for v in equity],
         _moving_average(profits, _MA_WINDOW),
         ohlc,
+        pooled,
     )
 
     fig.suptitle("Funds & profit, USDT", y=0.965, fontsize=11)

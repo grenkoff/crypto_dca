@@ -147,7 +147,7 @@ async def cmd_balance(message: Message) -> None:
 async def cmd_pnl(message: Message) -> None:
     """Reply with realized PnL and a funds-and-profit chart."""
     snap = await pnl_snapshot()
-    days, base_capital, locked, dates = await pnl_curve_data()
+    days, base_capital, locked, dates, pool = await pnl_curve_data()
     unlock_days, _ = await unlock_estimate()
     caption = (
         build_pnl(snap) + "\n\n" + build_unlock(base_capital, unlock_days)
@@ -166,6 +166,7 @@ async def cmd_pnl(message: Message) -> None:
         ohlc,
         btc_ohlc,
         funds,
+        pool,
     )
     await message.answer_photo(
         BufferedInputFile(png, filename="pnl.png"),

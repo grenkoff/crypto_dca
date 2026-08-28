@@ -316,9 +316,13 @@ def _locked_by_day(
 
 
 async def pnl_curve_data() -> tuple[
-    list[tuple[str, Decimal]], Decimal, list[Decimal], list[date]
+    list[tuple[str, Decimal]],
+    Decimal,
+    list[Decimal],
+    list[date],
+    list[Decimal],
 ]:
-    """Chart inputs: daily realized profit, base, locked USDT, and dates.
+    """Chart inputs: daily profit kept and pooled, base, locked, dates.
 
     Capped to the most recent ``_MAX_CHART_DAYS`` days so the chart stays
     readable as history grows.
@@ -328,21 +332,25 @@ async def pnl_curve_data() -> tuple[
             select(
                 Position.closed_at,
                 func.coalesce(Position.pocket_delta, Position.realized_pnl),
+                Position.realized_pnl,
             ).where(
                 Position.status == _CLOSED, Position.closed_at.is_not(None)
             )
         )
         daily: dict[date, Decimal] = {}
-        for closed_at, stayed in closed_rows.all():
+        pooled: dict[date, Decimal] = {}
+        for closed_at, stayed, realized in closed_rows.all():
             if closed_at is None:
                 continue
             day = closed_at.date()
             daily[day] = daily.get(day, Decimal(0)) + stayed
+            pooled[day] = pooled.get(day, Decimal(0)) + (realized - stayed)
         sorted_dates = _fill_day_gaps(daily)[-_MAX_CHART_DAYS:]
         days = [
             (d.strftime("%d.%m"), daily.get(d, Decimal(0)))
             for d in sorted_dates
         ]
+        pool = [pooled.get(d, Decimal(0)) for d in sorted_dates]
 
         base_rows = await session.execute(
             select(Position.entry_price, Position.qty, Position.fees_in).where(
@@ -363,7 +371,7 @@ async def pnl_curve_data() -> tuple[
             )
         )
         locked = _locked_by_day(all_rows.all(), sorted_dates)
-    return days, base_capital, locked, sorted_dates
+    return days, base_capital, locked, sorted_dates, pool
 
 
 async def unlock_from_db(

@@ -92,7 +92,13 @@ async def test_pnl_curve_data_buckets_by_day() -> None:
     await _closed("0.02", "4", day)
     await _closed("0.02", "6", day + timedelta(hours=2))
     await _open(1, "0.02", "100", "0.03")
-    days, base_capital, locked, dates = await repository.pnl_curve_data()
+    (
+        days,
+        base_capital,
+        locked,
+        dates,
+        _pool,
+    ) = await repository.pnl_curve_data()
     assert days == [("20.07", Decimal("10"))]
     assert base_capital == Decimal("2")
     assert len(locked) == len(dates) == 1
@@ -101,7 +107,7 @@ async def test_pnl_curve_data_buckets_by_day() -> None:
 async def test_pnl_curve_data_fills_gap_days_with_zero() -> None:
     await _closed("0.02", "5", datetime(2026, 7, 20, 12, 0, tzinfo=UTC))
     await _closed("0.02", "5", datetime(2026, 7, 23, 12, 0, tzinfo=UTC))
-    days, _base, locked, dates = await repository.pnl_curve_data()
+    days, _base, locked, dates, _pool = await repository.pnl_curve_data()
     assert [label for label, _ in days] == [
         "20.07",
         "21.07",
@@ -156,7 +162,7 @@ async def test_pnl_curve_data_caps_at_100_days() -> None:
             for i in range(130)
         ]
     )
-    days, _base, locked, dates = await repository.pnl_curve_data()
+    days, _base, locked, dates, _pool = await repository.pnl_curve_data()
     assert len(days) == len(dates) == len(locked) == 100
     assert dates[0] == (base + timedelta(days=30)).date()
     assert dates[-1] == (base + timedelta(days=129)).date()
@@ -472,7 +478,7 @@ async def test_profit_per_day_counts_pocket_then_realized() -> None:
             closed_at=datetime(2026, 7, 3, tzinfo=UTC),
         ),
     )
-    days, _base, _locked, _dates = await repository.pnl_curve_data()
+    days, _base, _locked, _dates, _pool = await repository.pnl_curve_data()
     by_day = dict(days)
     assert by_day["02.07"] == Decimal("2.5")
     # 0.2 stayed, and the pool-funded loss does not claw it back
