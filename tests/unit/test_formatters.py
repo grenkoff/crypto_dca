@@ -378,3 +378,33 @@ def test_a_close_without_a_split_omits_the_pool_line() -> None:
     )
     assert "Pool" not in text
     assert "\n" not in text
+
+
+def test_close_message_shows_a_retirement_with_its_pool_cost() -> None:
+    text = format_event(
+        {
+            "type": "position.closed",
+            "payload": {
+                "realized": "0.0123",
+                "price": "0.02870",
+                "compensation_credit": "0",
+                "share": "0.80",
+                "pool": "0.0560",
+                "compensations": [
+                    {
+                        "kind": "exit",
+                        "positions": "43,71",
+                        "old_tp": "0.05326",
+                        "price": "0.02809",
+                        "qty": "177.94",
+                        "drawn": "2.3597",
+                    }
+                ],
+            },
+        }
+    )
+    assert "✂️" in text
+    assert "0.05326" in text
+    assert "x2" in text
+    assert "-2.3597" in text
+    assert "Pool" in text

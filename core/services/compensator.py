@@ -23,12 +23,14 @@ from core.strategy.compensation import (
     account_load,
     compensation_share,
     plan_hole_fill,
+    plan_market_exit,
     split_profit,
 )
 from core.strategy.rounding import min_notional_price
 from core.strategy.types import (
     CompensationContext,
     CompensationDecision,
+    MarketExitDecision,
     OpenPosition,
 )
 
@@ -46,6 +48,8 @@ class CompensationOutcome:
 
 _MAX_MOVES_PER_CLOSE = 12
 _MOVE_PAUSE_SECONDS = 0.05
+_SETTLE_ATTEMPTS = 4
+_SETTLE_PAUSE_SECONDS = 0.3
 
 
 def _as_open(position: Position) -> OpenPosition:
@@ -183,6 +187,7 @@ class Compensator:
             tp_step=self.config.tp_step,
             nearest_buy_price=nearest_buy,
             min_order_amt=self.instrument.min_order_amt,
+            taker_fee=self.config.taker_fee,
         )
 
     async def _drain(
@@ -204,21 +209,137 @@ class Compensator:
         for _ in range(_MAX_MOVES_PER_CLOSE):
             if pool <= 0:
                 return moves
-            decision = plan_hole_fill(
-                positions,
-                self._context(pool, current_price, nearest_buy),
-                offset=self.config.comp_hole_offset,
-            )
-            if decision is None:
+            ctx = self._context(pool, current_price, nearest_buy)
+            step = await self._step(positions, ctx, pool, source_position_id)
+            if step is None:
                 return moves
-            move = await self._execute(decision, pool, source_position_id)
-            if move is None:
-                return moves
+            move, pool, positions = step
             moves.append(move)
-            pool -= decision.credit_drawn
-            positions = _retagged(positions, decision)
             await asyncio.sleep(_MOVE_PAUSE_SECONDS)
         return moves
+
+    async def _step(
+        self,
+        positions: list[OpenPosition],
+        ctx: CompensationContext,
+        pool: Decimal,
+        source_position_id: int,
+    ) -> tuple[dict[str, str], Decimal, list[OpenPosition]] | None:
+        """Retire a stranded lot if the pool can, else move a take-profit.
+
+        Retiring comes first: a lot the market has left far behind will
+        never sell on its own, so freeing its capital beats nudging a
+        take-profit that was going to fill anyway.
+        """
+        plan = plan_market_exit(positions, ctx)
+        if plan is not None:
+            move = await self._exit_at_market(plan, pool, source_position_id)
+            if move is None:
+                return None
+            gone = set(plan.position_ids)
+            rest = [lot for lot in positions if lot.id not in gone]
+            return move, pool - plan.credit_drawn, rest
+        decision = plan_hole_fill(
+            positions, ctx, offset=self.config.comp_hole_offset
+        )
+        if decision is None:
+            return None
+        move = await self._execute(decision, pool, source_position_id)
+        if move is None:
+            return None
+        return (
+            move,
+            pool - decision.credit_drawn,
+            _retagged(positions, decision),
+        )
+
+    async def _exit_at_market(
+        self,
+        plan: MarketExitDecision,
+        pool: Decimal,
+        source_position_id: int,
+    ) -> dict[str, str] | None:
+        """Cancel the lots' take-profits, sell them at market, book it."""
+        symbol = str(self.config.symbol)
+        targets = [
+            await repository.get_position(pid) for pid in plan.position_ids
+        ]
+        if any(not target.tp_order_id for target in targets):
+            log.warning("exit.target_has_no_tp", ids=str(plan.position_ids))
+            return None
+        cancelled: list[Position] = []
+        for target in targets:
+            try:
+                await self.client.cancel_order(symbol, target.tp_order_id)
+            except Exception as exc:
+                log.warning("exit.cancel_failed", id=target.id, error=str(exc))
+                await self._restore_all(cancelled, exc)
+                return None
+            cancelled.append(target)
+        try:
+            order_id = await self.client.place_market(
+                symbol,
+                Side.SELL,
+                plan.qty,
+                order_link_id=link_id("grid-exit", targets[0].level_index),
+            )
+            price, fee_rate = await self._settle(symbol, order_id)
+        except Exception as exc:
+            await self._restore_all(cancelled, exc)
+            return None
+        old_tp = targets[0].tp_price
+        realized = await repository.close_positions_at_market(
+            position_ids=plan.position_ids,
+            price=price,
+            fee_rate=fee_rate,
+            credit_drawn=plan.credit_drawn,
+            source_position_id=source_position_id,
+            new_pending=pool - plan.credit_drawn,
+        )
+        log.info(
+            "compensation.retired",
+            ids=str(plan.position_ids),
+            qty=str(plan.qty),
+            price=str(price),
+            realized=str(realized),
+            drawn=str(plan.credit_drawn),
+        )
+        return {
+            "kind": "exit",
+            "positions": ",".join(str(t.id) for t in targets),
+            "old_tp": str(old_tp) if old_tp is not None else "",
+            "price": str(price),
+            "qty": str(plan.qty),
+            "drawn": str(plan.credit_drawn),
+        }
+
+    async def _settle(
+        self, symbol: str, order_id: str
+    ) -> tuple[Decimal, Decimal]:
+        """Average fill price and fee rate of a completed market sale.
+
+        The fills can lag the order acknowledgement by a moment, so the
+        lookup is retried before the sale is treated as unsettled.
+        """
+        for attempt in range(_SETTLE_ATTEMPTS):
+            fills = await self.client.get_order_executions(symbol, order_id)
+            qty = sum((fill.qty for fill in fills), Decimal(0))
+            if qty > 0:
+                value = sum(
+                    (fill.qty * fill.price for fill in fills), Decimal(0)
+                )
+                fee = sum((fill.fee for fill in fills), Decimal(0))
+                return value / qty, fee / value
+            if attempt + 1 < _SETTLE_ATTEMPTS:
+                await asyncio.sleep(_SETTLE_PAUSE_SECONDS)
+        raise ValueError(f"market order {order_id} reported no fills")
+
+    async def _restore_all(
+        self, targets: list[Position], place_error: Exception
+    ) -> None:
+        """Re-protect every lot whose take-profit was already cancelled."""
+        for target in targets:
+            await self._restore_protection(target, place_error)
 
     async def _execute(
         self,

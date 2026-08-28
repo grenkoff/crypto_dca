@@ -6,6 +6,7 @@ from core.strategy.compensation import (
     account_load,
     compensation_share,
     plan_hole_fill,
+    plan_market_exit,
     slot_below,
     split_profit,
 )
@@ -42,6 +43,7 @@ def _ctx(
     tick: str = "0.00001",
     maker_fee: str = "0.000625",
     min_order_amt: str = "0",
+    taker_fee: str = "0.00075",
 ) -> CompensationContext:
     return CompensationContext(
         pool=Decimal(pool),
@@ -52,6 +54,7 @@ def _ctx(
         tp_step=Decimal(tp_step),
         nearest_buy_price=Decimal(nearest_buy),
         min_order_amt=Decimal(min_order_amt),
+        taker_fee=Decimal(taker_fee),
     )
 
 
@@ -318,3 +321,91 @@ def test_hole_fill_never_raises_a_take_profit() -> None:
 def test_hole_fill_leaves_a_partly_sold_lot_alone() -> None:
     lot = _pos(1, "0.05000", entry="0.04000", qty="200", filled="100")
     assert plan_hole_fill([lot], _ctx(pool="1000", nearest_buy="0")) is None
+
+
+def test_market_exit_sells_top_alone_when_it_clears_the_minimum() -> None:
+    # 200 x 0.02768 = 5.54 -> above the 5.00 minimum, no partner needed
+    lots = [
+        _pos(1, "0.05300", entry="0.05290", qty="200"),
+        _pos(2, "0.02800", entry="0.02790", qty="200"),
+    ]
+    plan = plan_market_exit(lots, _ctx(pool="1000", min_order_amt="5"))
+    assert plan is not None
+    assert plan.position_ids == (1,)
+    assert plan.qty == Decimal("200")
+    assert plan.credit_drawn > 0
+
+
+def test_market_exit_pairs_with_the_smallest_affordable_partner() -> None:
+    # top is worth 2.49 at market, so it needs a partner to reach 5.00;
+    # the smallest of the eligible lots is the one that comes along
+    lots = [
+        _pos(1, "0.05300", entry="0.05290", qty="90"),
+        _pos(2, "0.02800", entry="0.02790", qty="300"),
+        _pos(3, "0.02810", entry="0.02800", qty="120"),
+    ]
+    plan = plan_market_exit(lots, _ctx(pool="1000", min_order_amt="5"))
+    assert plan is not None
+    assert plan.position_ids == (1, 3)
+    assert plan.qty == Decimal("210")
+
+
+def test_market_exit_skips_a_partner_the_pool_cannot_cover() -> None:
+    # lot 3 is the smallest partner but is itself deep underwater, so a
+    # thin pool cannot buy the pair; the planner falls through to lot 2,
+    # which is bigger yet costs almost nothing to close
+    lots = [
+        _pos(1, "0.05300", entry="0.05290", qty="90"),
+        _pos(2, "0.02800", entry="0.02790", qty="300"),
+        _pos(3, "0.05020", entry="0.05000", qty="100"),
+    ]
+    plan = plan_market_exit(lots, _ctx(pool="2.5", min_order_amt="5"))
+    assert plan is not None
+    assert plan.position_ids == (1, 2)
+
+
+def test_market_exit_returns_none_when_the_pool_is_too_thin() -> None:
+    lots = [
+        _pos(1, "0.05300", entry="0.05290", qty="90"),
+        _pos(2, "0.02800", entry="0.02790", qty="300"),
+    ]
+    assert (
+        plan_market_exit(lots, _ctx(pool="0.001", min_order_amt="5")) is None
+    )
+
+
+def test_market_exit_walks_down_when_the_top_cannot_be_paired() -> None:
+    # the two highest are stranded far too deep for this pool; the scan
+    # keeps going and retires the cheapest one it can actually afford
+    lots = [
+        _pos(1, "0.09000", entry="0.08990", qty="60"),
+        _pos(2, "0.05300", entry="0.05290", qty="90"),
+        _pos(3, "0.02800", entry="0.02790", qty="300"),
+    ]
+    plan = plan_market_exit(lots, _ctx(pool="0.5", min_order_amt="5"))
+    assert plan is not None
+    assert plan.position_ids == (3,)
+
+
+def test_market_exit_never_retires_a_lot_already_in_profit() -> None:
+    # market is above this lot's entry, so it will sell at its own
+    # take-profit; retiring it would throw the remaining step away
+    lots = [_pos(1, "0.02900", entry="0.02700", qty="300")]
+    assert plan_market_exit(lots, _ctx(pool="1000", min_order_amt="5")) is None
+
+
+def test_market_exit_ignores_partially_filled_lots() -> None:
+    lots = [_pos(1, "0.05300", entry="0.05290", qty="200", filled="50")]
+    assert plan_market_exit(lots, _ctx(pool="1000", min_order_amt="5")) is None
+
+
+def test_market_exit_draw_covers_fees_so_the_pair_clears_zero() -> None:
+    lots = [_pos(1, "0.05300", entry="0.05290", qty="200")]
+    ctx = _ctx(pool="1000", min_order_amt="5")
+    plan = plan_market_exit(lots, ctx)
+    assert plan is not None
+    proceeds = (
+        Decimal("200") * ctx.current_price * (Decimal(1) - ctx.taker_fee)
+    )
+    cost = Decimal("0.05290") * Decimal("200")
+    assert plan.credit_drawn >= cost - proceeds

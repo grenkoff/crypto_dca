@@ -70,6 +70,9 @@ class FakeBybitClient:
         self.cancelled: list[tuple[str, str]] = []
         self._counter = 0
         self.next_id: str | None = None
+        self.sold: list[dict[str, Any]] = []
+        self.fills: dict[str, Decimal] = {}
+        self.market_price = Decimal("40000")
 
     async def get_balances(self) -> dict[str, Balance]:
         return {
@@ -104,6 +107,38 @@ class FakeBybitClient:
         )
         return order_id
 
+    async def place_market(
+        self,
+        symbol: str,
+        side: Side,
+        qty: Decimal,
+        *,
+        order_link_id: str,
+    ) -> str:
+        self._counter += 1
+        order_id = f"mkt-{self._counter}"
+        self.sold.append({"symbol": symbol, "side": side, "qty": qty})
+        self.fills[order_id] = qty
+        return order_id
+
+    async def get_order_executions(
+        self, symbol: str, order_id: str, *, limit: int = 50
+    ) -> list[Execution]:
+        qty = self.fills[order_id]
+        return [
+            Execution(
+                exec_id=f"x-{order_id}",
+                order_id=order_id,
+                symbol=symbol,
+                side=Side.SELL,
+                price=self.market_price,
+                qty=qty,
+                fee=self.market_price * qty * Decimal("0.00075"),
+                fee_coin="USDT",
+                executed_at=datetime(2026, 7, 4, tzinfo=UTC),
+            )
+        ]
+
     async def cancel_order(self, symbol: str, order_id: str) -> None:
         self.cancelled.append((symbol, order_id))
 
@@ -136,6 +171,7 @@ def config() -> StrategyConfig:
         order_qty_quote=Decimal("20"),
         min_profit_quote=Decimal("0.05"),
         maker_fee=Decimal("0.001"),
+        taker_fee=Decimal("0.00075"),
         max_open_orders=10,
         tp_step=Decimal("100"),  # BTC-scale absolute TP offset
         comp_share_min=Decimal("0.20"),
@@ -697,3 +733,60 @@ async def test_a_light_load_sends_most_profit_to_the_pocket(
     closed = await repository.get_position(winner.id)
     share = bot.pending_credit / closed.realized_pnl
     assert share == Decimal("0.20")
+
+
+async def test_drain_pool_stays_quiet_when_the_pool_is_empty(
+    om: OrderManager, bus: RecordingEventBus
+) -> None:
+    await add_one(BotStatus(id=1, pending_credit=Decimal("0")))
+    await om.drain_pool(Decimal("40000"))
+    assert bus.events == []
+
+
+async def test_drain_pool_retires_a_stranded_lot_with_no_close(
+    om: OrderManager, bus: RecordingEventBus, client: FakeBybitClient
+) -> None:
+    # a lot stranded far above market, plus a fresh one to carry the
+    # order over the exchange minimum, and a pool that covers both
+    await add_one(BotStatus(id=1, pending_credit=Decimal("6000")))
+    stranded = await add_one(
+        Position(
+            level_index=900,
+            entry_price=Decimal("60000"),
+            qty=Decimal("0.0005"),
+            tp_order_id="tp-stranded",
+            tp_price=Decimal("60100"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+        )
+    )
+    await add_one(
+        Position(
+            level_index=901,
+            entry_price=Decimal("40000"),
+            qty=Decimal("0.0005"),
+            tp_order_id="tp-fresh",
+            tp_price=Decimal("40100"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime(2026, 7, 2, tzinfo=UTC),
+        )
+    )
+    closed = await add_one(
+        Position(
+            level_index=902,
+            entry_price=Decimal("40000"),
+            qty=Decimal("0.0005"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 2, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 3, tzinfo=UTC),
+        )
+    )
+    assert closed.id is not None
+    await om.drain_pool(Decimal("40000"))
+    kinds = [event_type for event_type, _ in bus.events]
+    assert "pool.drained" in kinds
+    async with new_session() as session:
+        again = await session.get(Position, stranded.id)
+    assert again is not None
+    assert again.status == PositionStatus.CLOSED
+    assert await repository.pending_credit() < Decimal("6000")

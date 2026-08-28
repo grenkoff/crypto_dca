@@ -23,12 +23,14 @@ from core.strategy.rounding import (
 from core.strategy.types import (
     CompensationContext,
     CompensationDecision,
+    MarketExitDecision,
     OpenPosition,
 )
 
 _PROFIT_EPS = Decimal("1E-10")
 _SPLIT_SCALE = Decimal("1E-12")
 _MAX_HOLES_SCANNED = 40
+_MAX_EXITS_SCANNED = 40
 
 
 def account_load(
@@ -84,6 +86,105 @@ def split_profit(profit: Decimal, share: Decimal) -> tuple[Decimal, Decimal]:
     budget = (profit * share).quantize(_SPLIT_SCALE, rounding=ROUND_DOWN)
     budget = min(max(budget, Decimal(0)), profit)
     return budget, profit - budget
+
+
+def plan_market_exit(
+    open_positions: Sequence[OpenPosition], ctx: CompensationContext
+) -> MarketExitDecision | None:
+    """Retire the take-profit furthest from market, funded by the pool.
+
+    A lot stranded far above market never sells and its capital is dead;
+    selling it outright turns that back into working cash. The exchange
+    minimum applies to that sale, so a lot too small to meet it alone
+    leaves paired with the smallest lot that closes the gap and that the
+    pool can still afford.
+    """
+    if ctx.pool <= 0 or ctx.current_price <= 0:
+        return None
+    lots = [lot for lot in open_positions if lot.filled_qty == 0]
+    ranked = sorted(lots, key=lambda lot: lot.current_tp_price, reverse=True)
+    for candidate in ranked[:_MAX_EXITS_SCANNED]:
+        plan = _exit_for(candidate, lots, ctx)
+        if plan is not None:
+            return plan
+    return None
+
+
+def _exit_for(
+    top: OpenPosition,
+    lots: Sequence[OpenPosition],
+    ctx: CompensationContext,
+) -> MarketExitDecision | None:
+    """Retire ``top`` alone or with a partner, if the pool can pay.
+
+    A lot that would sell at market for a profit is not stranded — it is
+    simply waiting for its own take-profit, and retiring it would throw
+    that away. Only a lot the pool has to rescue is a candidate.
+    """
+    draw = _exit_draw((top,), ctx)
+    if draw <= 0:
+        return None
+    if _market_value(top, ctx) >= ctx.min_order_amt:
+        return _exit_decision((top,), draw) if draw <= ctx.pool else None
+    return _paired_exit(top, lots, ctx)
+
+
+def _paired_exit(
+    top: OpenPosition,
+    lots: Sequence[OpenPosition],
+    ctx: CompensationContext,
+) -> MarketExitDecision | None:
+    """Smallest partner that clears the minimum and that the pool covers.
+
+    Smallest first keeps the collateral damage down: a big healthy lot
+    would have sold at its own take-profit for a profit, so it is the
+    last thing that should be spent making up an order size.
+    """
+    top_value = _market_value(top, ctx)
+    partners = sorted(
+        (lot for lot in lots if lot.id != top.id),
+        key=lambda lot: _market_value(lot, ctx),
+    )
+    for partner in partners:
+        if top_value + _market_value(partner, ctx) < ctx.min_order_amt:
+            continue
+        draw = _exit_draw((top, partner), ctx)
+        if draw <= ctx.pool:
+            return _exit_decision((top, partner), draw)
+    return None
+
+
+def _market_value(lot: OpenPosition, ctx: CompensationContext) -> Decimal:
+    """What the lot's coins fetch at the current price, before fees."""
+    return lot.qty * ctx.current_price
+
+
+def _exit_draw(
+    lots: tuple[OpenPosition, ...], ctx: CompensationContext
+) -> Decimal:
+    """Pool needed to keep a market sale of ``lots`` out of loss."""
+    pair = sum(
+        (
+            lot.qty * ctx.current_price * (Decimal(1) - ctx.taker_fee)
+            - lot.entry_price * lot.qty
+            - lot.fees_in
+            + lot.compensation_credit
+            for lot in lots
+        ),
+        Decimal(0),
+    )
+    return Decimal(0) if pair > 0 else -pair + _PROFIT_EPS
+
+
+def _exit_decision(
+    lots: tuple[OpenPosition, ...], draw: Decimal
+) -> MarketExitDecision:
+    """Bundle ``lots`` into one sale charged ``draw`` against the pool."""
+    return MarketExitDecision(
+        position_ids=tuple(lot.id for lot in lots),
+        qty=sum((lot.qty for lot in lots), Decimal(0)),
+        credit_drawn=draw,
+    )
 
 
 def slot_below(tp_price: Decimal, grid_step: Decimal) -> Decimal:

@@ -200,6 +200,30 @@ class OrderManager:
         )
         return int(level.level_index)
 
+    async def drain_pool(self, current_price: Decimal) -> None:
+        """Spend the banked pool without waiting for a profitable close.
+
+        The pool only ever grew on a close, so a lot it could already
+        afford to retire sat idle until an unrelated trade happened to
+        finish. Running the same spending on the reconcile cycle acts
+        the moment the money is there.
+        """
+        if await repository.pending_credit() <= 0:
+            return
+        source = await repository.last_closed_position_id()
+        if source is None:
+            return
+        moves = await self._compensator.drain_pool(current_price, source)
+        if not moves:
+            return
+        await self.bus.publish(
+            "pool.drained",
+            {
+                "compensations": moves,
+                "pool": str(await repository.pending_credit()),
+            },
+        )
+
     async def handle_sell_fill(
         self, execution: BybitExecution, current_price: Decimal
     ) -> int | None:

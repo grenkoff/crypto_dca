@@ -268,12 +268,41 @@ def _format_pool(payload: dict[str, Any]) -> str:
 
 
 def _format_move(move: dict[str, Any]) -> str:
-    """One take-profit move inside a close message."""
+    """One take-profit move — or one retirement — in a close message."""
+    if move.get("kind") == "exit":
+        return _format_exit(move)
     new_tp = _price5(move.get("new_tp"))
     old = move.get("old_tp")
     if old:
         return f"   ↓ TP `{_price5(old)}` → `{new_tp}`"
     return f"   ↓ TP `{new_tp}`"
+
+
+def _format_drained(payload: dict[str, Any]) -> str:
+    """Compensations bought by the pool with no close to trigger them."""
+    lines = ["🏦 Pool spent"]
+    moves = payload.get("compensations") or []
+    if isinstance(moves, list):
+        lines += [
+            _format_move(move) for move in moves if isinstance(move, dict)
+        ]
+    pool = payload.get("pool")
+    if pool:
+        lines.append(f"   left `{_q(_dec(pool), '0.0001')}`")
+    return "\n".join(lines)
+
+
+def _format_exit(move: dict[str, Any]) -> str:
+    """A stranded lot sold at market, paid for out of the pool."""
+    lots = len(
+        [part for part in (move.get("positions") or "").split(",") if part]
+    )
+    tail = f" x{lots}" if lots > 1 else ""
+    drawn = _q(_dec(move.get("drawn")), "0.0001")
+    return (
+        f"   ✂️ TP `{_price5(move.get('old_tp'))}`{tail} sold at "
+        f"`{_price5(move.get('price'))}` (`-{drawn}`)"
+    )
 
 
 def build_digest(snap: DigestSnapshot) -> str:
@@ -323,6 +352,8 @@ def format_event(event: dict[str, Any]) -> str:
         )
     if etype == "position.closed":
         return _format_closed(payload)
+    if etype == "pool.drained":
+        return _format_drained(payload)
     if etype == "error":
         return f"❌ Error: {payload.get('message', '?')}"
     return f"📨 {etype}: `{payload}`"

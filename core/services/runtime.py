@@ -87,6 +87,7 @@ class TraderRuntime:
         )
         await self._grid.rebuild_on_param_change()
         await self._grid.ensure(self._current_price)
+        await self._om.drain_pool(self._current_price)
 
     async def run(self) -> None:
         """Open the WS and run the event and reconcile loops."""
@@ -160,6 +161,7 @@ class TraderRuntime:
                 await reconcile_once(self._client, self._om.symbol)
                 await self._healer.heal(self._current_price)
                 await self._grid.ensure(self._current_price)
+                await self._om.drain_pool(self._current_price)
             except Exception as exc:
                 log.exception("reconcile.error", error=str(exc))
             try:
