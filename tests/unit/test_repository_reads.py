@@ -18,7 +18,7 @@ from core.db.models import (
 from core.db.session import new_session
 from core.exchange.types import Transfer as BybitTransfer
 from core.services import repository
-from tests.conftest import add_rows
+from tests.conftest import add_one, add_rows
 
 pytestmark = pytest.mark.db
 
@@ -37,8 +37,8 @@ async def _closed(entry: str, pnl: str, closed_at: datetime) -> None:
     )
 
 
-async def _open(level: int, entry: str, qty: str, tp: str | None) -> None:
-    await add_rows(
+async def _open(level: int, entry: str, qty: str, tp: str | None) -> Position:
+    return await add_one(
         Position(
             level_index=level,
             entry_price=Decimal(entry),
@@ -92,7 +92,13 @@ async def test_pnl_curve_data_buckets_by_day() -> None:
     await _closed("0.02", "4", day)
     await _closed("0.02", "6", day + timedelta(hours=2))
     await _open(1, "0.02", "100", "0.03")
-    days, base_capital, locked, dates = await repository.pnl_curve_data()
+    (
+        days,
+        base_capital,
+        locked,
+        dates,
+        _pool,
+    ) = await repository.pnl_curve_data()
     assert days == [("20.07", Decimal("10"))]
     assert base_capital == Decimal("2")
     assert len(locked) == len(dates) == 1
@@ -101,7 +107,7 @@ async def test_pnl_curve_data_buckets_by_day() -> None:
 async def test_pnl_curve_data_fills_gap_days_with_zero() -> None:
     await _closed("0.02", "5", datetime(2026, 7, 20, 12, 0, tzinfo=UTC))
     await _closed("0.02", "5", datetime(2026, 7, 23, 12, 0, tzinfo=UTC))
-    days, _base, locked, dates = await repository.pnl_curve_data()
+    days, _base, locked, dates, _pool = await repository.pnl_curve_data()
     assert [label for label, _ in days] == [
         "20.07",
         "21.07",
@@ -156,7 +162,7 @@ async def test_pnl_curve_data_caps_at_100_days() -> None:
             for i in range(130)
         ]
     )
-    days, _base, locked, dates = await repository.pnl_curve_data()
+    days, _base, locked, dates, _pool = await repository.pnl_curve_data()
     assert len(days) == len(dates) == len(locked) == 100
     assert dates[0] == (base + timedelta(days=30)).date()
     assert dates[-1] == (base + timedelta(days=129)).date()
@@ -337,12 +343,16 @@ async def test_open_base_qty_counts_only_unsold_coins() -> None:
 
 async def test_accrue_split_grows_both_buckets_and_accumulates() -> None:
     await add_rows(BotStatus(id=1))
+    stamped = await _open(7, "0.02", "100", "0.03")
+    assert stamped.id is not None
     pool = await repository.accrue_split(
-        pool_add=Decimal("3"), pocket_add=Decimal("2")
+        pool_add=Decimal("3"), pocket_add=Decimal("2"), position_id=stamped.id
     )
     assert pool == Decimal("3")
     pool = await repository.accrue_split(
-        pool_add=Decimal("1.5"), pocket_add=Decimal("0.5")
+        pool_add=Decimal("1.5"),
+        pocket_add=Decimal("0.5"),
+        position_id=stamped.id,
     )
     assert pool == Decimal("4.5")
     async with new_session() as session:
@@ -350,6 +360,10 @@ async def test_accrue_split_grows_both_buckets_and_accumulates() -> None:
     assert bot is not None
     assert bot.pending_credit == Decimal("4.5")
     assert bot.pocket_credit == Decimal("2.5")
+    async with new_session() as session:
+        pos = await session.get(Position, stamped.id)
+    assert pos is not None
+    assert pos.pocket_delta == Decimal("0.5")
 
 
 async def test_a_share_above_the_pocket_floor_is_rejected() -> None:
@@ -428,3 +442,44 @@ async def test_close_positions_at_market_closes_both_and_drains_pool() -> None:
         Decimal("0"),
         Decimal("2"),
     ]
+
+
+async def test_profit_per_day_counts_pocket_then_realized() -> None:
+    # a close from before the split has no pocket stamp, so its realized
+    # result stands in; a stamped close contributes only what stayed
+    await add_rows(
+        Position(
+            level_index=10,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("2.5"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 2, tzinfo=UTC),
+        ),
+        Position(
+            level_index=11,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("1.0"),
+            pocket_delta=Decimal("0.2"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 3, tzinfo=UTC),
+        ),
+        Position(
+            level_index=12,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("-2.3"),
+            pocket_delta=Decimal("0"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 3, tzinfo=UTC),
+        ),
+    )
+    days, _base, _locked, _dates, _pool = await repository.pnl_curve_data()
+    by_day = dict(days)
+    assert by_day["02.07"] == Decimal("2.5")
+    # 0.2 stayed, and the pool-funded loss does not claw it back
+    assert by_day["03.07"] == Decimal("0.2")

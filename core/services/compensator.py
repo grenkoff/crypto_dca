@@ -118,7 +118,9 @@ class Compensator:
         share = await self._share(positions, current_price)
         budget, pocket = split_profit(profit, share)
         pool = await repository.accrue_split(
-            pool_add=budget, pocket_add=pocket
+            pool_add=budget,
+            pocket_add=pocket,
+            position_id=source_position_id,
         )
         log.info(
             "compensation.split",

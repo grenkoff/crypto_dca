@@ -67,14 +67,19 @@ async def pnl_snapshot() -> PnlSnapshot:
 
 
 async def pnl_curve_data() -> tuple[
-    list[tuple[str, Decimal]], Decimal, list[Decimal], list[date]
+    list[tuple[str, Decimal]],
+    Decimal,
+    list[Decimal],
+    list[date],
+    list[Decimal],
 ]:
-    """Chart inputs: daily realized profit, base, locked USDT, and dates.
+    """Chart inputs: daily profit kept and pooled, base, locked, dates.
 
-    Realized PnL of closed trades is bucketed by UTC day (label, sum) to
-    match the /pnl caption; ``base_capital`` is the cost basis of the open
-    inventory; ``locked`` is the open-inventory cost basis at the end of each
-    day; ``dates`` are the UTC days (aligned to the others) for the price line.
+    Closes are bucketed by UTC day: ``days`` is the share that stays in
+    the pocket, ``pool`` the share that funds compensation and the
+    payouts it later makes. ``base_capital`` is the cost basis of the
+    open inventory; ``locked`` is that basis at the end of each day;
+    ``dates`` are the UTC days for the price line.
     """
     return await repository.pnl_curve_data()
 

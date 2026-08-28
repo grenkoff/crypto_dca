@@ -243,13 +243,21 @@ def test_every_axis_gets_its_current_value() -> None:
         [590.0, 593.0],
         [0.5, 0.84],
         [(0.028, 0.0296, 0.0281, 0.0295, 33_400_000.0)],
+        [1.2, 2.34],
     )
     texts = [
         t.get_text()
         for axis in (ax, funds_ax, bar_ax, price_ax, vol_ax)
         for t in axis.texts
     ]
-    assert texts == ["410.00", "593.00", "0.84", "0.02950", "33.4M"]
+    assert texts == [
+        "410.00",
+        "593.00",
+        "0.84",
+        "2.34",
+        "0.02950",
+        "33.4M",
+    ]
 
 
 def test_badges_are_skipped_when_there_is_nothing_to_show() -> None:
@@ -258,7 +266,49 @@ def test_badges_are_skipped_when_there_is_nothing_to_show() -> None:
     fig = Figure()
     ax, vol_ax = fig.subplots(2, 1)
     funds_ax, bar_ax, price_ax = ax.twinx(), ax.twinx(), ax.twinx()
-    _badges((ax, funds_ax, bar_ax, price_ax, vol_ax), [], [], [], [None])
+    _badges((ax, funds_ax, bar_ax, price_ax, vol_ax), [], [], [], [None], [])
     assert not any(
         axis.texts for axis in (ax, funds_ax, bar_ax, price_ax, vol_ax)
     )
+
+
+def test_pool_bars_share_the_profit_axis_and_sit_beside_it() -> None:
+    png = render_pnl_chart(
+        [("01.07", Decimal("0.4")), ("02.07", Decimal("0.2"))],
+        Decimal("100"),
+        [Decimal("400"), Decimal("410")],
+        [None, None],
+        None,
+        None,
+        [Decimal("1.6"), Decimal("-2.4")],
+    )
+    assert png.startswith(b"\x89PNG")
+
+
+def test_pool_badge_reads_the_last_pool_value() -> None:
+    from matplotlib.colors import to_hex
+    from matplotlib.figure import Figure
+
+    from tgbot.charts import _POOL, _badges
+
+    fig = Figure()
+    ax = fig.subplots()
+    funds_ax, bar_ax, price_ax, vol_ax = (
+        ax.twinx(),
+        ax.twinx(),
+        ax.twinx(),
+        ax.twinx(),
+    )
+    _badges(
+        (ax, funds_ax, bar_ax, price_ax, vol_ax),
+        [400.0],
+        [590.0],
+        [0.5],
+        [None],
+        [1.6, -2.44],
+    )
+    badge = [t for t in bar_ax.texts if t.get_text() == "-2.44"]
+    assert badge, [t.get_text() for t in bar_ax.texts]
+    patch = badge[0].get_bbox_patch()
+    assert patch is not None
+    assert to_hex(patch.get_facecolor()) == _POOL
