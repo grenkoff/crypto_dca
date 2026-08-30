@@ -11,9 +11,13 @@
 # remain, then launches exactly one fresh detached instance and checks it is up.
 #
 # Usage:
-#   scripts/restart.sh              # restart both trader and tgbot
+#   scripts/restart.sh              # restart both tgbot and trader
 #   scripts/restart.sh tgbot        # restart only tgbot
-#   scripts/restart.sh trader tgbot # restart both, explicitly
+#   scripts/restart.sh tgbot trader # restart both, explicitly
+#
+# tgbot goes first on purpose: the trader spends the credit pool during
+# bootstrap and reports it on the bus, and Redis pub/sub keeps nothing
+# for a subscriber that is not listening yet.
 #
 set -uo pipefail
 
@@ -83,7 +87,7 @@ start() {
 
 main() {
   local svcs=("$@")
-  if [ ${#svcs[@]} -eq 0 ]; then svcs=(trader tgbot); fi
+  if [ ${#svcs[@]} -eq 0 ]; then svcs=(tgbot trader); fi
   local rc=0
   for s in "${svcs[@]}"; do
     case "$s" in
