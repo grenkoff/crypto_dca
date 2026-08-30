@@ -46,7 +46,7 @@ class CompensationOutcome:
     pool_left: Decimal
 
 
-_MAX_MOVES_PER_CLOSE = 12
+_MAX_MOVES_PER_CLOSE = 40
 _MOVE_PAUSE_SECONDS = 0.05
 _SETTLE_ATTEMPTS = 4
 _SETTLE_PAUSE_SECONDS = 0.3
@@ -204,7 +204,9 @@ class Compensator:
         Each move takes the furthest-stranded lot that fits, so a wall
         walks down in one move instead of a cascade of single steps —
         same cost, a fraction of the traffic. Moves continue while the
-        pool funds them; the cap only guards against a runaway burst.
+        pool funds them; the cap only guards against a runaway burst,
+        and is set above what the planner can find in one pass so a
+        drain is never chopped across two reports.
         """
         moves: list[dict[str, str]] = []
         nearest_buy = await self._nearest_buy()
