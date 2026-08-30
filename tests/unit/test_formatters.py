@@ -408,3 +408,26 @@ def test_close_message_shows_a_retirement_with_its_pool_cost() -> None:
     assert "x2" in text
     assert "-2.3597" in text
     assert "Pool" in text
+
+
+def test_a_long_drain_is_reported_as_one_message() -> None:
+    from core.services.compensator import _MAX_MOVES_PER_CLOSE
+
+    moves = [
+        {
+            "target_position": str(i),
+            "old_tp": "0.02955",
+            "new_tp": "0.02940",
+            "drawn": "0",
+        }
+        for i in range(_MAX_MOVES_PER_CLOSE)
+    ]
+    text = format_event(
+        {
+            "type": "pool.drained",
+            "payload": {"compensations": moves, "pool": "0.0023"},
+        }
+    )
+    assert text.count("↓ TP") == _MAX_MOVES_PER_CLOSE
+    # Telegram refuses anything past 4096 characters
+    assert len(text) < 4096
