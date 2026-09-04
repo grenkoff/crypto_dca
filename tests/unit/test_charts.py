@@ -312,3 +312,14 @@ def test_pool_badge_reads_the_last_pool_value() -> None:
     patch = badge[0].get_bbox_patch()
     assert patch is not None
     assert to_hex(patch.get_facecolor()) == _POOL
+
+
+def test_paired_bars_touch_at_the_day_and_gap_only_between_days() -> None:
+    from tgbot.charts import _PAIR_SHIFT, _PAIR_WIDTH
+
+    blue_right = -_PAIR_SHIFT + _PAIR_WIDTH / 2
+    red_left = _PAIR_SHIFT - _PAIR_WIDTH / 2
+    # the pair meets exactly on the day's tick: no overlap, no gap
+    assert blue_right == red_left == 0
+    # and the pair leaves room before the next day's blue bar
+    assert _PAIR_SHIFT + _PAIR_WIDTH / 2 < 1 - _PAIR_SHIFT - _PAIR_WIDTH / 2
