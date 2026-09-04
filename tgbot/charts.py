@@ -121,7 +121,8 @@ _GREY = "#b8b8b8"
 _VOL_UP = "#8fd3b6"
 _VOL_DOWN = "#f0a8a8"
 _MA_WINDOW = 10
-_POOL_SHIFT = 0.25
+_PAIR_WIDTH = 0.35
+_PAIR_SHIFT = _PAIR_WIDTH / 2
 
 
 def _axis_badge(
@@ -308,8 +309,9 @@ def render_pnl_chart(
     Locked USDT (amber) sits on the left axis; funds (green), daily
     profit (bars + MA), and the KAS price (daily candlesticks) each get
     their own right axis. The profit bars show what stays in the pocket;
-    ``pool`` draws the compensation share beside them in red, on the
-    same axis and slightly offset so both read at once. ``funds`` is the
+    ``pool`` draws the compensation share in red on the same axis,
+    the two meeting edge to edge at the day's tick so a day reads as
+    one pair and the gap falls between days. ``funds`` is the
     whole account's worth per day when given; without it the line falls
     back to cost basis plus realized profit. ``btc_ohlc`` (already
     rescaled to KAS units) is drawn as lighter grey candles on the same
@@ -336,19 +338,18 @@ def render_pnl_chart(
     price_ax = ax.twinx()
 
     bar_ax.bar(
-        xs,
+        [x - _PAIR_SHIFT for x in xs],
         [float(v) for v in profits],
         color=_BAR,
-        width=0.7,
+        width=_PAIR_WIDTH,
         label="profit/day",
     )
     pooled = [float(v) for v in pool] if pool else [0.0] * len(xs)
     bar_ax.bar(
-        [x + _POOL_SHIFT for x in xs],
+        [x + _PAIR_SHIFT for x in xs],
         pooled,
         color=_POOL,
-        width=0.7,
-        alpha=0.75,
+        width=_PAIR_WIDTH,
         label="pool/day",
     )
     fxs = [float(x) for x in xs]
