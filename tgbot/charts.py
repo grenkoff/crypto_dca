@@ -269,14 +269,20 @@ def _badges(
 
 
 def _draw_legend(fig: Any, axes: tuple[Any, Any, Any], has_btc: bool) -> None:
-    """Lay the legend above the plot, funds first and volume last."""
+    """Lay the legend above the plot, funds first and volume last.
+
+    Volume is drawn from two swatches sharing one slot, because the
+    bars themselves are green or red by direction and a single green
+    key would name only half of them.
+    """
+    from matplotlib.legend_handler import HandlerTuple
     from matplotlib.patches import Patch
 
     ax, funds_ax, bar_ax = axes
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = funds_ax.get_legend_handles_labels()
     h3, l3 = bar_ax.get_legend_handles_labels()
-    handles = [
+    handles: list[Any] = [
         *h2,
         *h1,
         *h3,
@@ -286,7 +292,12 @@ def _draw_legend(fig: Any, axes: tuple[Any, Any, Any], has_btc: bool) -> None:
     if has_btc:
         handles.append(Patch(facecolor="white", edgecolor=_GREY, label="BTC"))
         labels.append("BTC")
-    handles.append(Patch(facecolor=_VOL_UP, edgecolor="none", label="volume"))
+    handles.append(
+        (
+            Patch(facecolor=_VOL_UP, edgecolor="none"),
+            Patch(facecolor=_VOL_DOWN, edgecolor="none"),
+        )
+    )
     labels.append("volume")
     fig.legend(
         handles,
@@ -296,6 +307,7 @@ def _draw_legend(fig: Any, axes: tuple[Any, Any, Any], has_btc: bool) -> None:
         ncol=len(labels),
         fontsize=8,
         frameon=False,
+        handler_map={tuple: HandlerTuple(ndivide=None, pad=0)},
     )
 
 

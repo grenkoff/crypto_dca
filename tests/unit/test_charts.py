@@ -3,6 +3,9 @@ from __future__ import annotations
 import math
 from decimal import Decimal
 from itertools import pairwise
+from typing import Any
+
+from matplotlib.patches import Rectangle
 
 from tgbot.charts import (
     Bar,
@@ -358,3 +361,36 @@ def test_profit_badge_matches_the_profit_bar_colour() -> None:
     patch = badge[0].get_bbox_patch()
     assert patch is not None
     assert to_hex(patch.get_facecolor()) == _BAR
+
+
+def test_volume_legend_key_carries_both_bar_colours() -> None:
+    from matplotlib.colors import to_hex
+    from matplotlib.figure import Figure
+
+    from tgbot.charts import _VOL_DOWN, _VOL_UP, _draw_legend
+
+    fig = Figure()
+    ax = fig.subplots()
+    _draw_legend(fig, (ax, ax.twinx(), ax.twinx()), has_btc=False)
+    fig.canvas.draw()
+    swatches = [
+        to_hex(artist.get_facecolor())
+        for artist in _legend_swatches(fig.legends[0])
+    ]
+    # the volume key is the last entry and carries both directions
+    assert swatches[-2:] == [_VOL_UP, _VOL_DOWN]
+
+
+def _legend_swatches(legend: Any) -> list[Rectangle]:
+    """Every rectangle drawn inside a legend's key column, in order."""
+    found: list[Rectangle] = []
+
+    def walk(artist: object) -> None:
+        if isinstance(artist, Rectangle):
+            found.append(artist)
+        for child in getattr(artist, "get_children", list)():
+            walk(child)
+
+    for box in legend._legend_handle_box.get_children():
+        walk(box)
+    return found
