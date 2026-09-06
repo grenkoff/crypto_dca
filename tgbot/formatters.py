@@ -271,7 +271,7 @@ def _format_pool(payload: dict[str, Any]) -> str:
     pool = payload.get("pool")
     if not share or not pool:
         return ""
-    return f"🏦 Pool `{_dec(share) * 100:.0f}%` · `{_q(_dec(pool), '0.0001')}`"
+    return f"   Pool `{_dec(share) * 100:.0f}%` · `{_q(_dec(pool), '0.0001')}`"
 
 
 def _format_move(move: dict[str, Any]) -> str:
@@ -287,7 +287,7 @@ def _format_move(move: dict[str, Any]) -> str:
 
 def _format_drained(payload: dict[str, Any]) -> str:
     """Compensations bought by the pool with no close to trigger them."""
-    lines = ["🏦 Pool spent"]
+    lines = ["Pool spent"]
     moves = payload.get("compensations") or []
     if isinstance(moves, list):
         lines += [
