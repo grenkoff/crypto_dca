@@ -121,6 +121,7 @@ _GREY = "#b8b8b8"
 _VOL_UP = "#8fd3b6"
 _VOL_DOWN = "#f0a8a8"
 _MA_WINDOW = 10
+_CHART_DPI = 200
 _PAIR_WIDTH = 0.35
 _PAIR_SHIFT = _PAIR_WIDTH / 2
 
@@ -339,7 +340,7 @@ def render_pnl_chart(
     equity = funds if funds else computed
     xs = list(range(len(equity)))
 
-    fig = Figure(figsize=(8.4, 6.0), dpi=110)
+    fig = Figure(figsize=(8.4, 6.0), dpi=_CHART_DPI)
     ax, vol_ax = fig.subplots(
         2,
         1,
