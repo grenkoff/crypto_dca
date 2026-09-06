@@ -73,13 +73,13 @@ async def pnl_curve_data() -> tuple[
     list[date],
     list[Decimal],
 ]:
-    """Chart inputs: daily profit kept and pooled, base, locked, dates.
+    """Chart inputs: daily profit kept, pool balance, base, locked, dates.
 
     Closes are bucketed by UTC day: ``days`` is the share that stays in
-    the pocket, ``pool`` the share that funds compensation and the
-    payouts it later makes. ``base_capital`` is the cost basis of the
-    open inventory; ``locked`` is that basis at the end of each day;
-    ``dates`` are the UTC days for the price line.
+    the pocket, ``pool`` what the credit pool held at the end of that
+    day. ``base_capital`` is the cost basis of the open inventory;
+    ``locked`` is that basis at the end of each day; ``dates`` are the
+    UTC days for the price line.
     """
     return await repository.pnl_curve_data()
 

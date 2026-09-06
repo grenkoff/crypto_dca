@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -483,3 +483,57 @@ async def test_profit_per_day_counts_pocket_then_realized() -> None:
     assert by_day["02.07"] == Decimal("2.5")
     # 0.2 stayed, and the pool-funded loss does not claw it back
     assert by_day["03.07"] == Decimal("0.2")
+
+
+async def test_pool_bars_track_the_balance_and_never_go_negative() -> None:
+    await add_rows(BotStatus(id=1, pending_credit=Decimal("0.5")))
+    await add_rows(
+        # day one banks 0.8 of a 1.0 close
+        Position(
+            level_index=20,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("1.0"),
+            pocket_delta=Decimal("0.2"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 2, tzinfo=UTC),
+        ),
+        # day two spends 0.3 of it retiring a stranded lot
+        Position(
+            level_index=21,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("-0.3"),
+            pocket_delta=Decimal("0"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 3, tzinfo=UTC),
+        ),
+    )
+    _days, _base, _locked, dates, pool = await repository.pnl_curve_data()
+    by_day = dict(zip(dates, pool, strict=True))
+    # the last bar is the live pool, and the day before held 0.3 more
+    assert by_day[date(2026, 7, 3)] == Decimal("0.5")
+    assert by_day[date(2026, 7, 2)] == Decimal("0.8")
+    assert all(value >= 0 for value in pool)
+
+
+async def test_pool_bars_clamp_history_that_would_run_negative() -> None:
+    # an empty pool today with a big accrual behind it would imply a
+    # negative balance before it; the bar floors at zero instead
+    await add_rows(BotStatus(id=1, pending_credit=Decimal("0")))
+    await add_rows(
+        Position(
+            level_index=22,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("5.0"),
+            pocket_delta=Decimal("0"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 3, tzinfo=UTC),
+        ),
+    )
+    _days, _base, _locked, _dates, pool = await repository.pnl_curve_data()
+    assert min(pool) == Decimal("0")

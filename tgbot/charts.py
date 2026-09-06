@@ -306,19 +306,16 @@ def render_pnl_chart(
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
-    Locked USDT (amber) sits on the left axis; funds (green), daily
-    profit (bars + MA), and the KAS price (daily candlesticks) each get
-    their own right axis. The profit bars show what stays in the pocket;
-    ``pool`` draws the compensation share in red on the same axis,
-    the two meeting edge to edge at the day's tick so a day reads as
-    one pair and the gap falls between days. ``funds`` is the
-    whole account's worth per day when given; without it the line falls
-    back to cost basis plus realized profit. ``btc_ohlc`` (already
-    rescaled to KAS units) is drawn as lighter grey candles on the same
-    price axis to gauge BTC correlation. KAS volume sits in its own
-    panel below, above the date axis.
-    ``matplotlib`` is imported lazily to keep start-up fast.
+    Locked USDT (amber) sits on the left; funds (green), daily profit
+    and the KAS price each get a right axis. The blue bars are what a
+    day's closes left in the pocket, the red ones what the credit pool
+    held at the end of that day, paired edge to edge on the day's tick.
+    ``funds`` is the account's whole worth per day, falling back to
+    cost basis plus realized profit; ``btc_ohlc`` (rescaled to KAS
+    units) is drawn as grey candles to gauge correlation; volume sits
+    in its own panel. ``matplotlib`` is imported lazily.
     """
+
     from matplotlib.figure import Figure
 
     labels, profits, computed = pnl_series(days, base_capital)
@@ -350,7 +347,7 @@ def render_pnl_chart(
         pooled,
         color=_POOL,
         width=_PAIR_WIDTH,
-        label="pool/day",
+        label="pool",
     )
     fxs = [float(x) for x in xs]
     ma_x, ma_y = _smooth(fxs, _moving_average(profits, _MA_WINDOW))

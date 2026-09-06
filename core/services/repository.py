@@ -282,6 +282,23 @@ async def realized_pnl_since(cutoff: datetime | None) -> Decimal:
         return await _sum(session, Position.realized_pnl, *conds)
 
 
+def _pool_by_day(
+    pooled: dict[date, Decimal], dates: list[date], pool_now: Decimal
+) -> list[Decimal]:
+    """The pool's balance at the end of each day, never below zero.
+
+    Anchored on what the pool holds right now and walked backwards
+    through the daily accruals and payouts, so the last bar always
+    matches the live figure however incomplete the older history is.
+    """
+    balances: list[Decimal] = []
+    balance = pool_now
+    for day in reversed(dates):
+        balances.append(max(balance, Decimal(0)))
+        balance -= pooled.get(day, Decimal(0))
+    return list(reversed(balances))
+
+
 def _fill_day_gaps(daily: dict[date, Decimal]) -> list[date]:
     """Continuous day range from the first close through the last close.
 
@@ -322,7 +339,7 @@ async def pnl_curve_data() -> tuple[
     list[date],
     list[Decimal],
 ]:
-    """Chart inputs: daily profit kept and pooled, base, locked, dates.
+    """Chart inputs: daily profit kept, pool balance, base, locked, dates.
 
     Capped to the most recent ``_MAX_CHART_DAYS`` days so the chart stays
     readable as history grows.
@@ -350,7 +367,9 @@ async def pnl_curve_data() -> tuple[
             (d.strftime("%d.%m"), daily.get(d, Decimal(0)))
             for d in sorted_dates
         ]
-        pool = [pooled.get(d, Decimal(0)) for d in sorted_dates]
+        pool = _pool_by_day(
+            pooled, sorted_dates, (await _load_bot(session)).pending_credit
+        )
 
         base_rows = await session.execute(
             select(Position.entry_price, Position.qty, Position.fees_in).where(
