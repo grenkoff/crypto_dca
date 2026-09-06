@@ -13,6 +13,7 @@ from tgbot.formatters import (
     _sparkline,
     apr_formulas,
     build_balance,
+    build_equity,
     build_orders,
     build_pnl,
     build_status,
@@ -431,3 +432,11 @@ def test_a_long_drain_is_reported_as_one_message() -> None:
     assert text.count("↓ TP") == _MAX_MOVES_PER_CLOSE
     # Telegram refuses anything past 4096 characters
     assert len(text) < 4096
+
+
+def test_balance_line_shows_two_decimals() -> None:
+    assert build_equity(Decimal("533.6642")) == "Balance `533.66` USDT"
+
+
+def test_balance_line_is_dropped_when_the_exchange_is_unreachable() -> None:
+    assert build_equity(None) == ""

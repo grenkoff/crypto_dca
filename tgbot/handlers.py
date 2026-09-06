@@ -23,6 +23,7 @@ from tgbot.filters import AdminUserFilter
 from tgbot.formatters import (
     apr_formulas,
     build_balance,
+    build_equity,
     build_orders,
     build_pnl,
     build_status,
@@ -35,6 +36,7 @@ from tgbot.notify_settings import (
     toggle_field,
 )
 from tgbot.queries import (
+    account_equity,
     apr_estimate,
     balance_snapshot,
     btc_daily_ohlc,
@@ -149,9 +151,9 @@ async def cmd_pnl(message: Message) -> None:
     snap = await pnl_snapshot()
     days, base_capital, locked, dates, pool = await pnl_curve_data()
     unlock_days, _ = await unlock_estimate()
-    caption = (
-        build_pnl(snap) + "\n\n" + build_unlock(base_capital, unlock_days)
-    )
+    tail = [build_equity(await account_equity())]
+    tail.append(build_unlock(base_capital, unlock_days))
+    caption = build_pnl(snap) + "\n\n" + "\n".join(filter(None, tail))
     if not days:
         await message.answer(caption, parse_mode="Markdown")
         return

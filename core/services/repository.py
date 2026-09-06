@@ -282,6 +282,23 @@ async def realized_pnl_since(cutoff: datetime | None) -> Decimal:
         return await _sum(session, Position.realized_pnl, *conds)
 
 
+async def banked_pnl_since(cutoff: datetime | None) -> Decimal:
+    """Profit banked for good since ``cutoff`` (None = all time).
+
+    The pocket half of each close, which is what the account keeps: a
+    close the pool paid for contributes nothing rather than subtracting
+    profit that was earned, and reported, days earlier.
+    """
+    conds = [Position.status == _CLOSED]
+    if cutoff is not None:
+        conds.append(Position.closed_at >= cutoff)
+    kept = func.greatest(
+        func.coalesce(Position.pocket_delta, Position.realized_pnl), 0
+    )
+    async with new_session() as session:
+        return await _sum(session, kept, *conds)
+
+
 def _pool_by_day(
     pooled: dict[date, Decimal],
     dates: list[date],
