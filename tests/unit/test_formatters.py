@@ -344,7 +344,7 @@ def test_a_close_shows_the_pool_share_and_what_is_left() -> None:
     )
     lines = text.splitlines()
     assert len(lines) == 3
-    assert lines[2] == "🏦 Pool `79%` · `0.5743`"
+    assert lines[2] == "   Pool `79%` · `0.5743`"
 
 
 def test_the_pool_line_appears_without_any_moves() -> None:
@@ -361,7 +361,7 @@ def test_the_pool_line_appears_without_any_moves() -> None:
             },
         }
     )
-    assert text.splitlines()[1] == "🏦 Pool `20%` · `0.0038`"
+    assert text.splitlines()[1] == "   Pool `20%` · `0.0038`"
 
 
 def test_a_close_without_a_split_omits_the_pool_line() -> None:
