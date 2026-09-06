@@ -732,6 +732,51 @@ async def account_value_series(
     return [(day, value + spare) for day, value in projection]
 
 
+async def banked_value_series(
+    usdt_now: Decimal,
+    spare_base: Decimal,
+    price: Decimal,
+    dates: list[date],
+) -> list[tuple[date, Decimal]]:
+    """Starting capital plus the profit banked for good, per day.
+
+    Anchored on what the account was worth on the first charted day and
+    lifted only by the pocket half of each close, so the whole slope is
+    what the bot earned. Funding is left out on purpose — a deposit is
+    not a gain — and so is compensation spending, which the pool pays
+    for rather than the pocket.
+    """
+    if not dates:
+        return []
+    anchor = await account_value_series(usdt_now, spare_base, price, dates[:1])
+    value = anchor[0][1]
+    first = datetime.combine(dates[0], time.min, tzinfo=UTC)
+    async with new_session() as session:
+        closes = (
+            await session.execute(
+                select(
+                    Position.closed_at,
+                    Position.pocket_delta,
+                    Position.realized_pnl,
+                ).where(
+                    Position.status == _CLOSED,
+                    Position.closed_at.is_not(None),
+                    Position.closed_at > first,
+                )
+            )
+        ).all()
+    gained: dict[date, Decimal] = {}
+    for closed_at, pocket, realized in closes:
+        stayed = realized if pocket is None else pocket
+        day = closed_at.date()
+        gained[day] = gained.get(day, Decimal(0)) + max(stayed, Decimal(0))
+    out: list[tuple[date, Decimal]] = [(dates[0], value)]
+    for day in dates[1:]:
+        value += gained.get(day, Decimal(0))
+        out.append((day, value))
+    return out
+
+
 async def digest_metrics() -> dict[str, Any]:
     """DB metrics for the daily digest (counts, PnL windows, deployed)."""
     now = _now()
