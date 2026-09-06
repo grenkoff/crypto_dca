@@ -47,22 +47,19 @@ async def status_snapshot() -> StatusSnapshot:
 async def pnl_snapshot() -> PnlSnapshot:
     """Build the /pnl snapshot from closed positions.
 
-    ``today`` is since UTC midnight; the rest are rolling from now (last 24
-    hours, 7/30/365 days) plus all time.
+    Reports banked profit, matching the chart's green line: a close the
+    pool paid for never claws back profit already reported. ``today``
+    is since UTC midnight; the rest roll back from now.
     """
     now = datetime.now(tz=UTC)
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     return PnlSnapshot(
-        today=await repository.realized_pnl_since(midnight),
-        last_24h=await repository.realized_pnl_since(
-            now - timedelta(hours=24)
-        ),
-        last_7d=await repository.realized_pnl_since(now - timedelta(days=7)),
-        last_30d=await repository.realized_pnl_since(now - timedelta(days=30)),
-        last_365d=await repository.realized_pnl_since(
-            now - timedelta(days=365)
-        ),
-        all_time=await repository.realized_pnl_since(None),
+        today=await repository.banked_pnl_since(midnight),
+        last_24h=await repository.banked_pnl_since(now - timedelta(hours=24)),
+        last_7d=await repository.banked_pnl_since(now - timedelta(days=7)),
+        last_30d=await repository.banked_pnl_since(now - timedelta(days=30)),
+        last_365d=await repository.banked_pnl_since(now - timedelta(days=365)),
+        all_time=await repository.banked_pnl_since(None),
     )
 
 
@@ -196,6 +193,28 @@ async def unlock_estimate() -> tuple[Decimal | None, Decimal]:
     except Exception as exc:
         log.warning("pnl.price_fetch_failed", error=str(exc)[:100])
     return await repository.unlock_from_db(price)
+
+
+async def account_equity() -> Decimal | None:
+    """What the whole account is worth right now, in USDT.
+
+    Cash and coin alike, resting orders included, valued at the last
+    price — the figure the exchange's own dashboard shows. ``None``
+    when the exchange cannot be reached, so the report drops the line
+    rather than inventing a balance.
+    """
+    try:
+        client = BybitClient.from_settings()
+        symbol = await repository.symbol()
+        balances = await client.get_balances()
+        price = await client.get_last_price(symbol)
+    except Exception as exc:
+        log.warning("pnl.equity_failed", error=str(exc)[:100])
+        return None
+    total = Decimal(0)
+    for coin, balance in balances.items():
+        total += balance.total * (Decimal(1) if coin == "USDT" else price)
+    return total
 
 
 async def orders_snapshot() -> OrdersSnapshot:

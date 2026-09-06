@@ -31,7 +31,7 @@ class BalanceSnapshot:
 
 @dataclass(frozen=True)
 class PnlSnapshot:
-    """Realized PnL over several rolling windows for /pnl."""
+    """Banked profit over several rolling windows for /pnl."""
 
     today: Decimal
     last_24h: Decimal
@@ -128,7 +128,7 @@ def build_balance(snap: BalanceSnapshot) -> str:
 def build_pnl(snap: PnlSnapshot) -> str:
     """Render the /pnl message."""
     return (
-        "*Realized PnL, USDT*\n"
+        "*Banked profit, USDT*\n"
         f"today `{_signed(snap.today)}`\n"
         f"last 24 hours `{_signed(snap.last_24h)}`\n"
         f"last 7 days `{_signed(snap.last_7d)}`\n"
@@ -136,6 +136,13 @@ def build_pnl(snap: PnlSnapshot) -> str:
         f"last 365 days `{_signed(snap.last_365d)}`\n"
         f"all time `{_signed(snap.all_time)}`"
     )
+
+
+def build_equity(total: Decimal | None) -> str:
+    """The account's whole worth, as the exchange dashboard shows it."""
+    if total is None:
+        return ""
+    return f"Balance `{_q(total, '0.01')}` USDT"
 
 
 def build_unlock(locked_now: Decimal, days: Decimal | None) -> str:

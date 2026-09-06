@@ -615,3 +615,46 @@ async def test_banked_line_ignores_funding() -> None:
     series = await repository.banked_value_series(dates)
     values = [value for _, value in series]
     assert values == [Decimal(0), Decimal(0), Decimal(0)]
+
+
+async def test_banked_pnl_never_subtracts_a_pool_funded_close() -> None:
+    await add_rows(
+        Position(
+            level_index=50,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("1.0"),
+            pocket_delta=Decimal("0.2"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 3, tzinfo=UTC),
+        ),
+        Position(
+            level_index=51,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("-1.5"),
+            pocket_delta=Decimal("0"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 4, tzinfo=UTC),
+        ),
+    )
+    # realized nets out to a loss; what the account kept does not
+    assert await repository.realized_pnl_since(None) == Decimal("-0.5")
+    assert await repository.banked_pnl_since(None) == Decimal("0.2")
+
+
+async def test_banked_pnl_falls_back_to_realized_before_the_split() -> None:
+    await add_rows(
+        Position(
+            level_index=52,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("0.7"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 3, tzinfo=UTC),
+        ),
+    )
+    assert await repository.banked_pnl_since(None) == Decimal("0.7")
