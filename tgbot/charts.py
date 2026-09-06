@@ -240,6 +240,7 @@ def _badges(
     ma: list[float],
     ohlc: list[Bar | None],
     pool: list[float],
+    profit: list[float],
 ) -> None:
     """Tag every axis with the value it currently reads."""
     ax, funds_ax, bar_ax, price_ax, vol_ax = axes
@@ -253,6 +254,9 @@ def _badges(
         _axis_badge(funds_ax, last_funds, _GREEN, f"{last_funds:,.2f}", 2)
     if last_ma is not None:
         _axis_badge(bar_ax, last_ma, _MA, f"{last_ma:.2f}", 34)
+    last_profit = _last(profit)
+    if last_profit is not None:
+        _axis_badge(bar_ax, last_profit, _BAR, f"{last_profit:.2f}", 34)
     last_pool = _last(pool)
     if last_pool is not None:
         _axis_badge(bar_ax, last_pool, _POOL, f"{last_pool:.2f}", 34)
@@ -373,6 +377,7 @@ def render_pnl_chart(
         _moving_average(profits, _MA_WINDOW),
         ohlc,
         pooled,
+        [float(v) for v in profits],
     )
 
     fig.suptitle("Funds & profit, USDT", y=0.965, fontsize=11)
