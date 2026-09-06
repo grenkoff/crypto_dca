@@ -559,16 +559,6 @@ def _tp_gross_at(
     return total
 
 
-async def open_base_qty() -> Decimal:
-    """Base coin still held by open positions."""
-    async with new_session() as session:
-        return await _sum(
-            session,
-            Position.qty - Position.filled_qty,
-            Position.status == _OPEN,
-        )
-
-
 async def record_transfers(rows: Sequence[BybitTransfer]) -> int:
     """Store funding movements, skipping ones already known."""
     if not rows:
@@ -714,42 +704,16 @@ async def projection_for_days(
     return out
 
 
-async def account_value_series(
-    usdt_now: Decimal,
-    spare_base: Decimal,
-    price: Decimal,
-    dates: list[date],
-) -> list[tuple[date, Decimal]]:
-    """What the whole account is worth per day, in USDT.
+async def banked_value_series(dates: list[date]) -> list[tuple[date, Decimal]]:
+    """Profit banked for good, accumulated from zero over ``dates``.
 
-    Cash (including what rests in buy orders), every open lot valued at
-    the take-profit it carried that day, and base coin held outside any
-    position valued at ``price``. Deposits and withdrawals are rewound
-    with the trades, so the line steps when funding moves.
-    """
-    projection = await projection_for_days(usdt_now, dates)
-    spare = spare_base * price
-    return [(day, value + spare) for day, value in projection]
-
-
-async def banked_value_series(
-    usdt_now: Decimal,
-    spare_base: Decimal,
-    price: Decimal,
-    dates: list[date],
-) -> list[tuple[date, Decimal]]:
-    """Starting capital plus the profit banked for good, per day.
-
-    Anchored on what the account was worth on the first charted day and
-    lifted only by the pocket half of each close, so the whole slope is
-    what the bot earned. Funding is left out on purpose — a deposit is
-    not a gain — and so is compensation spending, which the pool pays
-    for rather than the pocket.
+    Only the pocket half of each close lifts the line, so the whole of
+    it is what the bot earned. Funding is left out — a deposit is not a
+    gain — and so is compensation spending, which the pool pays for
+    rather than the pocket.
     """
     if not dates:
         return []
-    anchor = await account_value_series(usdt_now, spare_base, price, dates[:1])
-    value = anchor[0][1]
     first = datetime.combine(dates[0], time.min, tzinfo=UTC)
     async with new_session() as session:
         closes = (
@@ -770,10 +734,11 @@ async def banked_value_series(
         stayed = realized if pocket is None else pocket
         day = closed_at.date()
         gained[day] = gained.get(day, Decimal(0)) + max(stayed, Decimal(0))
-    out: list[tuple[date, Decimal]] = [(dates[0], value)]
-    for day in dates[1:]:
-        value += gained.get(day, Decimal(0))
-        out.append((day, value))
+    out: list[tuple[date, Decimal]] = []
+    total = Decimal(0)
+    for day in dates:
+        total += gained.get(day, Decimal(0))
+        out.append((day, total))
     return out
 
 

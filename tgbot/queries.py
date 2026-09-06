@@ -85,34 +85,20 @@ async def pnl_curve_data() -> tuple[
 
 
 async def funds_curve(dates: list[date]) -> list[Decimal]:
-    """Starting capital plus banked profit for each chart day.
+    """Profit banked for good, accumulated from zero, per chart day.
 
-    Anchored on what the account was worth on the first charted day and
-    lifted only by the pocket half of each close, so deposits do not
-    flatter it. Falls back to an empty curve if the exchange cannot be
-    reached, so a price hiccup never costs the whole chart.
+    Only the pocket half of each close counts, so deposits and the
+    pool's compensation spending leave it alone. Funding is still
+    synced first because the digest's projection needs it, but a
+    failure there costs nothing here.
     """
     if not dates:
         return []
     try:
-        client = BybitClient.from_settings()
-        symbol = await repository.symbol()
-        balances = await client.get_balances()
-        price = await client.get_last_price(symbol)
-        await _sync_transfers(client)
+        await _sync_transfers(BybitClient.from_settings())
     except Exception as exc:
-        log.warning("pnl.funds_curve_failed", error=str(exc)[:100])
-        return []
-    quote = balances.get("USDT")
-    base = balances.get(symbol.removesuffix("USDT"))
-    held = await repository.open_base_qty()
-    spare = (base.total - held) if base is not None else Decimal(0)
-    series = await repository.banked_value_series(
-        quote.total if quote is not None else Decimal(0),
-        max(spare, Decimal(0)),
-        price,
-        dates,
-    )
+        log.warning("pnl.transfer_sync_failed", error=str(exc)[:100])
+    series = await repository.banked_value_series(dates)
     return [value for _, value in series]
 
 
