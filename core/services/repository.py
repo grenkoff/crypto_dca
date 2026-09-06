@@ -283,18 +283,24 @@ async def realized_pnl_since(cutoff: datetime | None) -> Decimal:
 
 
 def _pool_by_day(
-    pooled: dict[date, Decimal], dates: list[date], pool_now: Decimal
+    pooled: dict[date, Decimal],
+    dates: list[date],
+    pool_now: Decimal,
+    tracked_from: date | None,
 ) -> list[Decimal]:
     """The pool's balance at the end of each day, never below zero.
 
     Anchored on what the pool holds right now and walked backwards
-    through the daily accruals and payouts, so the last bar always
-    matches the live figure however incomplete the older history is.
+    through the daily accruals, so the last day always matches the live
+    figure. Days before ``tracked_from`` read zero: the split was not
+    recorded then, and carrying today's balance back over them would
+    invent a pool that did not exist.
     """
     balances: list[Decimal] = []
     balance = pool_now
     for day in reversed(dates):
-        balances.append(max(balance, Decimal(0)))
+        known = tracked_from is not None and day >= tracked_from
+        balances.append(max(balance, Decimal(0)) if known else Decimal(0))
         balance -= pooled.get(day, Decimal(0))
     return list(reversed(balances))
 
@@ -348,7 +354,7 @@ async def pnl_curve_data() -> tuple[
         closed_rows = await session.execute(
             select(
                 Position.closed_at,
-                func.coalesce(Position.pocket_delta, Position.realized_pnl),
+                Position.pocket_delta,
                 Position.realized_pnl,
             ).where(
                 Position.status == _CLOSED, Position.closed_at.is_not(None)
@@ -356,19 +362,28 @@ async def pnl_curve_data() -> tuple[
         )
         daily: dict[date, Decimal] = {}
         pooled: dict[date, Decimal] = {}
-        for closed_at, stayed, realized in closed_rows.all():
+        tracked_from: date | None = None
+        for closed_at, pocket, realized in closed_rows.all():
             if closed_at is None:
                 continue
             day = closed_at.date()
+            stayed = realized if pocket is None else pocket
             daily[day] = daily.get(day, Decimal(0)) + stayed
             pooled[day] = pooled.get(day, Decimal(0)) + (realized - stayed)
+            if pocket is not None and (
+                tracked_from is None or day < tracked_from
+            ):
+                tracked_from = day
         sorted_dates = _fill_day_gaps(daily)[-_MAX_CHART_DAYS:]
         days = [
             (d.strftime("%d.%m"), daily.get(d, Decimal(0)))
             for d in sorted_dates
         ]
         pool = _pool_by_day(
-            pooled, sorted_dates, (await _load_bot(session)).pending_credit
+            pooled,
+            sorted_dates,
+            (await _load_bot(session)).pending_credit,
+            tracked_from,
         )
 
         base_rows = await session.execute(

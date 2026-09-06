@@ -537,3 +537,52 @@ async def test_pool_bars_clamp_history_that_would_run_negative() -> None:
     )
     _days, _base, _locked, _dates, pool = await repository.pnl_curve_data()
     assert min(pool) == Decimal("0")
+
+
+async def test_pool_bars_stay_empty_before_the_split_was_recorded() -> None:
+    await add_rows(BotStatus(id=1, pending_credit=Decimal("0.5")))
+    await add_rows(
+        # closed before pocket_delta existed: no pool to speak of
+        Position(
+            level_index=30,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("1.0"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 2, tzinfo=UTC),
+        ),
+        # the first stamped close: tracking starts here
+        Position(
+            level_index=31,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("1.0"),
+            pocket_delta=Decimal("0.2"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 4, tzinfo=UTC),
+        ),
+    )
+    _days, _base, _locked, dates, pool = await repository.pnl_curve_data()
+    by_day = dict(zip(dates, pool, strict=True))
+    assert by_day[date(2026, 7, 2)] == Decimal("0")
+    assert by_day[date(2026, 7, 3)] == Decimal("0")
+    assert by_day[date(2026, 7, 4)] == Decimal("0.5")
+
+
+async def test_pool_bars_are_all_empty_when_nothing_was_ever_stamped() -> None:
+    await add_rows(BotStatus(id=1, pending_credit=Decimal("3")))
+    await add_rows(
+        Position(
+            level_index=32,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("1.0"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 2, tzinfo=UTC),
+        ),
+    )
+    _days, _base, _locked, _dates, pool = await repository.pnl_curve_data()
+    assert set(pool) == {Decimal("0")}
