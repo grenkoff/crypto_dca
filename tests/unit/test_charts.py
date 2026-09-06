@@ -394,3 +394,24 @@ def _legend_swatches(legend: Any) -> list[Rectangle]:
     for box in legend._legend_handle_box.get_children():
         walk(box)
     return found
+
+
+def test_chart_is_rendered_large_enough_to_fill_a_screen() -> None:
+    import io
+
+    from PIL import Image
+
+    from tgbot.charts import _CHART_DPI
+
+    png = render_pnl_chart(
+        [("01.07", Decimal("0.4"))],
+        Decimal("100"),
+        [Decimal("400")],
+        [None],
+    )
+    width, height = Image.open(io.BytesIO(png)).size
+    assert width >= 1600
+    assert height >= 1100
+    # Telegram refuses a photo whose sides add up past 10000
+    assert width + height <= 10000
+    assert _CHART_DPI == 200
