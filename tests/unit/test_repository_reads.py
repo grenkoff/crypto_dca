@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 
 import pytest
 from sqlalchemy import select
@@ -14,6 +15,7 @@ from core.db.models import (
     Position,
     PositionStatus,
     StrategyConfig,
+    Transfer,
 )
 from core.db.session import new_session
 from core.exchange.types import Transfer as BybitTransfer
@@ -586,3 +588,61 @@ async def test_pool_bars_are_all_empty_when_nothing_was_ever_stamped() -> None:
     )
     _days, _base, _locked, _dates, pool = await repository.pnl_curve_data()
     assert set(pool) == {Decimal("0")}
+
+
+async def test_banked_line_only_ever_rises() -> None:
+    await _cfg()
+    await add_rows(
+        # a profitable close banks its pocket share
+        Position(
+            level_index=40,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("1.0"),
+            pocket_delta=Decimal("0.2"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 3, tzinfo=UTC),
+        ),
+        # a retirement the pool paid for adds nothing, and takes nothing
+        Position(
+            level_index=41,
+            entry_price=Decimal("0.02"),
+            qty=Decimal("100"),
+            realized_pnl=Decimal("-1.5"),
+            pocket_delta=Decimal("0"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime(2026, 7, 1, tzinfo=UTC),
+            closed_at=datetime(2026, 7, 4, tzinfo=UTC),
+        ),
+    )
+    dates = [date(2026, 7, d) for d in (2, 3, 4, 5)]
+    series = await repository.banked_value_series(
+        Decimal("100"), Decimal(0), Decimal("0.03"), dates
+    )
+    values = [value for _, value in series]
+    assert all(b >= a for a, b in pairwise(values))
+    # the pocket share lands, the pool-funded loss does not
+    assert values[1] - values[0] == Decimal("0.2")
+    assert values[2] == values[1]
+    assert values[3] == values[2]
+
+
+async def test_banked_line_ignores_funding() -> None:
+    # a deposit is not a gain, so the line must not step on it
+    await _cfg()
+    await add_rows(
+        Transfer(
+            external_id="t-1",
+            coin="USDT",
+            amount=Decimal("50"),
+            at=datetime(2026, 7, 3, 12, tzinfo=UTC),
+        )
+    )
+    dates = [date(2026, 7, d) for d in (2, 3, 4)]
+    series = await repository.banked_value_series(
+        Decimal("100"), Decimal(0), Decimal("0.03"), dates
+    )
+    values = [value for _, value in series]
+    assert values[1] == values[0]
+    assert values[2] == values[0]

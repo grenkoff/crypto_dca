@@ -322,14 +322,15 @@ def render_pnl_chart(
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
-    Locked USDT (amber) sits on the left; funds (green), daily profit
-    and the KAS price each get a right axis. The blue bars are what a
-    day's closes left in the pocket, the red ones what the credit pool
-    held at the end of that day, paired edge to edge on the day's tick.
-    ``funds`` is the account's whole worth per day, falling back to
-    cost basis plus realized profit; ``btc_ohlc`` (rescaled to KAS
-    units) is drawn as grey candles to gauge correlation; volume sits
-    in its own panel. ``matplotlib`` is imported lazily.
+    Locked USDT (amber) sits on the left; banked capital (green), daily
+    profit and the KAS price each get a right axis. The blue bars are
+    what a day's closes left in the pocket, the red ones what the
+    credit pool held at the end of that day, paired edge to edge on the
+    day's tick. ``funds`` is capital plus profit banked for good,
+    falling back to cost basis plus realized profit; ``btc_ohlc``
+    (rescaled to KAS units) is drawn as grey candles to gauge
+    correlation; volume sits in its own panel. ``matplotlib`` is
+    imported lazily.
     """
 
     from matplotlib.figure import Figure
@@ -373,7 +374,7 @@ def render_pnl_chart(
     lk_x, lk_y = _smooth(fxs, [float(v) for v in locked])
     ax.plot(lk_x, lk_y, color=_AMBER, label="locked")
     fn_x, fn_y = _smooth(fxs, [float(v) for v in equity])
-    funds_ax.plot(fn_x, fn_y, color=_GREEN, label="funds")
+    funds_ax.plot(fn_x, fn_y, color=_GREEN, label="banked")
     if btc_ohlc is not None:
         _draw_candles(price_ax, btc_ohlc, color=_GREY, zorder=2)
     _draw_candles(price_ax, ohlc)

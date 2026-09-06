@@ -85,12 +85,12 @@ async def pnl_curve_data() -> tuple[
 
 
 async def funds_curve(dates: list[date]) -> list[Decimal]:
-    """Total account value in USDT for each chart day.
+    """Starting capital plus banked profit for each chart day.
 
-    Cash plus every open lot at its take-profit plus base coin held
-    outside any position; funding movements are rewound with the trades.
-    Falls back to an empty curve if the exchange cannot be reached, so a
-    price hiccup never costs the whole chart.
+    Anchored on what the account was worth on the first charted day and
+    lifted only by the pocket half of each close, so deposits do not
+    flatter it. Falls back to an empty curve if the exchange cannot be
+    reached, so a price hiccup never costs the whole chart.
     """
     if not dates:
         return []
@@ -107,7 +107,7 @@ async def funds_curve(dates: list[date]) -> list[Decimal]:
     base = balances.get(symbol.removesuffix("USDT"))
     held = await repository.open_base_qty()
     spare = (base.total - held) if base is not None else Decimal(0)
-    series = await repository.account_value_series(
+    series = await repository.banked_value_series(
         quote.total if quote is not None else Decimal(0),
         max(spare, Decimal(0)),
         price,
