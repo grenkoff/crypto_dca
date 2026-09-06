@@ -313,36 +313,6 @@ async def test_projection_rewinds_a_deposit_out_of_the_past() -> None:
     assert today - yesterday == Decimal("40")
 
 
-async def test_account_value_adds_base_held_outside_positions() -> None:
-    await _cfg()
-    await _open(1, "0.02", "100", "0.03")
-    days = [datetime.now(tz=UTC).date()]
-    with_spare = await repository.account_value_series(
-        Decimal("10"), Decimal("500"), Decimal("0.03"), days
-    )
-    without = await repository.account_value_series(
-        Decimal("10"), Decimal(0), Decimal("0.03"), days
-    )
-    assert with_spare[0][1] - without[0][1] == Decimal("500") * Decimal("0.03")
-
-
-async def test_account_value_of_no_days_is_empty() -> None:
-    await _cfg()
-    assert (
-        await repository.account_value_series(
-            Decimal("10"), Decimal(0), Decimal("0.03"), []
-        )
-        == []
-    )
-
-
-async def test_open_base_qty_counts_only_unsold_coins() -> None:
-    await _cfg()
-    await _open(1, "0.02", "100", "0.03")
-    await _open(2, "0.021", "50", "0.031")
-    assert await repository.open_base_qty() == Decimal("150")
-
-
 async def test_accrue_split_grows_both_buckets_and_accumulates() -> None:
     await add_rows(BotStatus(id=1))
     stamped = await _open(7, "0.02", "100", "0.03")
@@ -617,15 +587,17 @@ async def test_banked_line_only_ever_rises() -> None:
         ),
     )
     dates = [date(2026, 7, d) for d in (2, 3, 4, 5)]
-    series = await repository.banked_value_series(
-        Decimal("100"), Decimal(0), Decimal("0.03"), dates
-    )
+    series = await repository.banked_value_series(dates)
     values = [value for _, value in series]
     assert all(b >= a for a, b in pairwise(values))
-    # the pocket share lands, the pool-funded loss does not
-    assert values[1] - values[0] == Decimal("0.2")
-    assert values[2] == values[1]
-    assert values[3] == values[2]
+    # starts at nothing, the pocket share lands, the pool-funded loss
+    # does not
+    assert values == [
+        Decimal(0),
+        Decimal("0.2"),
+        Decimal("0.2"),
+        Decimal("0.2"),
+    ]
 
 
 async def test_banked_line_ignores_funding() -> None:
@@ -640,9 +612,6 @@ async def test_banked_line_ignores_funding() -> None:
         )
     )
     dates = [date(2026, 7, d) for d in (2, 3, 4)]
-    series = await repository.banked_value_series(
-        Decimal("100"), Decimal(0), Decimal("0.03"), dates
-    )
+    series = await repository.banked_value_series(dates)
     values = [value for _, value in series]
-    assert values[1] == values[0]
-    assert values[2] == values[0]
+    assert values == [Decimal(0), Decimal(0), Decimal(0)]
