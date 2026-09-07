@@ -9,7 +9,9 @@ from decimal import Decimal
 import structlog
 
 from core.exchange.bybit import BybitClient
+from core.exchange.types import Side
 from core.services import repository
+from core.strategy.book import BookLevel, build_ladder
 from tgbot.formatters import (
     AprSnapshot,
     BalanceSnapshot,
@@ -215,6 +217,29 @@ async def account_equity() -> Decimal | None:
     for coin, balance in balances.items():
         total += balance.total * (Decimal(1) if coin == "USDT" else price)
     return total
+
+
+async def book_snapshot() -> tuple[list[BookLevel], Decimal, str] | None:
+    """Resting orders as a ladder, with the price and symbol to label it.
+
+    Read from the exchange rather than the database: the ladder should
+    show what is actually resting, including anything the bot has not
+    booked yet. ``None`` when the exchange cannot be reached.
+    """
+    try:
+        client = BybitClient.from_settings()
+        symbol = await repository.symbol()
+        orders = await client.get_open_orders(symbol)
+        price = await client.get_last_price(symbol)
+    except Exception as exc:
+        log.warning("book.fetch_failed", error=str(exc)[:100])
+        return None
+    config = await repository.load_config()
+    rungs = build_ladder(
+        [(order.price, order.qty, order.side == Side.BUY) for order in orders],
+        config.grid_step,
+    )
+    return rungs, price, symbol
 
 
 async def orders_snapshot() -> OrdersSnapshot:

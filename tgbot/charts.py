@@ -7,6 +7,8 @@ from decimal import Decimal
 from math import isnan, sqrt
 from typing import Any
 
+from core.strategy.book import BookLevel
+
 Bar = tuple[float, float, float, float, float]
 
 
@@ -432,3 +434,102 @@ def render_formulas(lines: list[str]) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.25)
     return buf.getvalue()
+
+
+_BOOK_ROW_INCHES = 0.19
+_BOOK_DPI = 200
+_BOOK_SELL = "#dc2626"
+_BOOK_BUY = "#16a34a"
+_BOOK_GAP = "#9ca3af"
+
+
+def render_book(rungs: list[BookLevel], price: Decimal, symbol: str) -> bytes:
+    """Render the resting orders as a price ladder, PNG bytes.
+
+    Sells sit above the market line and buys below, each rung showing
+    the size resting there and a bar scaled to the largest. Collapsed
+    runs of empty grid levels read as a single dotted rung.
+    """
+    from matplotlib.figure import Figure
+
+    lines = _book_lines(rungs, price)
+    height = max(len(lines) * _BOOK_ROW_INCHES + 0.55, 1.5)
+    fig = Figure(figsize=(4.6, height), dpi=_BOOK_DPI)
+    ax = fig.add_axes((0, 0, 1, 1))
+    ax.set_axis_off()
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, len(lines) + 1.4)
+    ax.text(
+        0.5,
+        len(lines) + 0.75,
+        f"{symbol}  ·  {price}",
+        ha="center",
+        va="center",
+        fontsize=9,
+        fontweight="bold",
+        family="monospace",
+    )
+    biggest = max((rung.qty for rung in rungs), default=Decimal(1)) or 1
+    for row, (text, colour, rung) in enumerate(lines):
+        y = len(lines) - row - 0.5
+        if rung is not None and rung.qty > 0:
+            ax.barh(
+                y,
+                float(rung.qty / biggest) * 0.42,
+                left=0.56,
+                height=0.72,
+                color=colour,
+                alpha=0.18,
+                zorder=0,
+            )
+        ax.text(
+            0.04,
+            y,
+            text,
+            ha="left",
+            va="center",
+            fontsize=8,
+            family="monospace",
+            color=colour,
+            zorder=2,
+        )
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor="white")
+    return buf.getvalue()
+
+
+def _book_lines(
+    rungs: list[BookLevel], price: Decimal
+) -> list[tuple[str, str, BookLevel | None]]:
+    """Ladder text with the market line slotted in at its place."""
+    out: list[tuple[str, str, BookLevel | None]] = []
+    marked = False
+    for rung in rungs:
+        if not marked and rung.price < price:
+            out.append((_market_line(price), _INK, None))
+            marked = True
+        out.append((_rung_line(rung), _rung_colour(rung), rung))
+    if not marked:
+        out.append((_market_line(price), _INK, None))
+    return out
+
+
+def _rung_line(rung: BookLevel) -> str:
+    """One ladder row: price, size and value, or a collapsed gap."""
+    if rung.is_gap:
+        return f"{'· · ·':>9}   {rung.skipped:>4} levels"
+    return (
+        f"{rung.price:>9.5f}  {rung.qty:>8.2f}  {rung.price * rung.qty:>6.2f}"
+    )
+
+
+def _rung_colour(rung: BookLevel) -> str:
+    """Green for a bid, red for an ask, grey for a gap."""
+    if rung.is_gap:
+        return _BOOK_GAP
+    return _BOOK_BUY if rung.is_buy else _BOOK_SELL
+
+
+def _market_line(price: Decimal) -> str:
+    """The market row that splits bids from asks."""
+    return f"{'─' * 3} {price:.5f} {'─' * 12}"
