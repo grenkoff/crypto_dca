@@ -453,21 +453,41 @@ def render_book(rungs: list[BookLevel], price: Decimal, symbol: str) -> bytes:
     from matplotlib.figure import Figure
 
     lines = _book_lines(rungs, price)
-    height = max(len(lines) * _BOOK_ROW_INCHES + 0.55, 1.5)
+    height = max(len(lines) * _BOOK_ROW_INCHES + 0.95, 1.5)
     fig = Figure(figsize=(4.6, height), dpi=_BOOK_DPI)
     ax = fig.add_axes((0, 0, 1, 1))
     ax.set_axis_off()
     ax.set_xlim(0, 1)
-    ax.set_ylim(0, len(lines) + 1.4)
+    ax.set_ylim(-1.4, len(lines) + 2.4)
     ax.text(
         0.5,
-        len(lines) + 0.75,
+        len(lines) + 1.75,
         f"{symbol}  ·  {price}",
         ha="center",
         va="center",
         fontsize=9,
         fontweight="bold",
         family="monospace",
+    )
+    ax.text(
+        0.04,
+        len(lines) + 0.6,
+        f"{'price':>9}  {'KAS':>8}  {'USDT':>6}",
+        ha="left",
+        va="center",
+        fontsize=8,
+        family="monospace",
+        color=_BOOK_GAP,
+    )
+    ax.text(
+        0.04,
+        -0.75,
+        _book_totals(rungs),
+        ha="left",
+        va="center",
+        fontsize=8,
+        family="monospace",
+        color=_INK,
     )
     biggest = max((rung.qty for rung in rungs), default=Decimal(1)) or 1
     for row, (text, colour, rung) in enumerate(lines):
@@ -496,6 +516,18 @@ def render_book(rungs: list[BookLevel], price: Decimal, symbol: str) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor="white")
     return buf.getvalue()
+
+
+def _book_totals(rungs: list[BookLevel]) -> str:
+    """Coins and value resting on each side of the ladder."""
+    bid = [rung for rung in rungs if rung.is_buy and not rung.is_gap]
+    ask = [rung for rung in rungs if not rung.is_buy and not rung.is_gap]
+    coins = sum((rung.qty for rung in ask), Decimal(0))
+    cash = sum((rung.price * rung.qty for rung in bid), Decimal(0))
+    return (
+        f"{len(ask):>4} sell {coins:>10,.2f} KAS   ·"
+        f"{len(bid):>4} buy {cash:>9,.2f} USDT"
+    )
 
 
 def _book_lines(

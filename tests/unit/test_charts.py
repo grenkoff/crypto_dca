@@ -457,3 +457,21 @@ def test_book_market_line_falls_between_the_sides() -> None:
     ]
     lines = _book_lines(rungs, Decimal("0.03400"))
     assert [rung is None for _, _, rung in lines] == [False, True, False]
+
+
+def test_book_totals_count_coins_to_sell_and_cash_to_spend() -> None:
+    from core.strategy.book import BookLevel
+    from tgbot.charts import _book_totals
+
+    rungs = [
+        BookLevel(Decimal("0.03428"), Decimal("205"), False),
+        BookLevel(Decimal("0.03424"), Decimal("206"), False),
+        BookLevel(Decimal("0.03420"), Decimal(0), False, skipped=3),
+        BookLevel(Decimal("0.03400"), Decimal("205"), True),
+    ]
+    line = _book_totals(rungs)
+    # 205 + 206 KAS resting to sell, one bid worth 205 * 0.034 = 6.97
+    assert "411.00 KAS" in line
+    assert "2 sell" in line
+    assert "1 buy" in line
+    assert "6.97 USDT" in line
