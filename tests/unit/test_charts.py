@@ -415,3 +415,45 @@ def test_chart_is_rendered_large_enough_to_fill_a_screen() -> None:
     # Telegram refuses a photo whose sides add up past 10000
     assert width + height <= 10000
     assert _CHART_DPI == 200
+
+
+def test_book_image_has_a_row_for_every_rung_and_the_market_line() -> None:
+    import io
+
+    from PIL import Image
+
+    from core.strategy.book import BookLevel
+    from tgbot.charts import _BOOK_ROW_INCHES, render_book
+
+    rungs = [
+        BookLevel(Decimal("0.03408"), Decimal("205"), False),
+        BookLevel(Decimal("0.03404"), Decimal(0), False, skipped=7),
+        BookLevel(Decimal("0.03396"), Decimal("206"), True),
+    ]
+    png = render_book(rungs, Decimal("0.03400"), "KASUSDT")
+    assert png.startswith(b"\x89PNG")
+    width, height = Image.open(io.BytesIO(png)).size
+    # three rungs plus the market line slotted between ask and bid
+    assert height > 4 * _BOOK_ROW_INCHES * 200
+    assert width > 0
+
+
+def test_book_gap_rung_reads_as_dots_and_a_count() -> None:
+    from core.strategy.book import BookLevel
+    from tgbot.charts import _rung_line
+
+    gap = BookLevel(Decimal("0.03404"), Decimal(0), False, skipped=7)
+    assert "· · ·" in _rung_line(gap)
+    assert "7" in _rung_line(gap)
+
+
+def test_book_market_line_falls_between_the_sides() -> None:
+    from core.strategy.book import BookLevel
+    from tgbot.charts import _book_lines
+
+    rungs = [
+        BookLevel(Decimal("0.03408"), Decimal("205"), False),
+        BookLevel(Decimal("0.03396"), Decimal("206"), True),
+    ]
+    lines = _book_lines(rungs, Decimal("0.03400"))
+    assert [rung is None for _, _, rung in lines] == [False, True, False]

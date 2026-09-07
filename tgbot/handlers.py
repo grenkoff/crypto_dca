@@ -18,7 +18,11 @@ from aiogram.types import (
 from core.db.models import NotificationSettings
 from core.services import repository
 from core.services.tokens import hash_token, new_token
-from tgbot.charts import render_formulas, render_pnl_chart
+from tgbot.charts import (
+    render_book,
+    render_formulas,
+    render_pnl_chart,
+)
 from tgbot.filters import AdminUserFilter
 from tgbot.formatters import (
     apr_formulas,
@@ -39,6 +43,7 @@ from tgbot.queries import (
     account_equity,
     apr_estimate,
     balance_snapshot,
+    book_snapshot,
     btc_daily_ohlc,
     daily_ohlc,
     funds_curve,
@@ -59,8 +64,8 @@ async def cmd_start(message: Message) -> None:
     """Reply with the command list."""
     await message.answer(
         "Crypto DCA bot.\n"
-        "Commands: /status /balance /pnl /apr /orders /notify "
-        "/digesttime",
+        "Commands: /status /balance /pnl /apr /orders /book "
+        "/notify /digesttime",
         parse_mode="Markdown",
     )
 
@@ -203,6 +208,21 @@ async def cmd_orders(message: Message) -> None:
     """Reply with open positions."""
     snap = await orders_snapshot()
     await message.answer(build_orders(snap), parse_mode="Markdown")
+
+
+@router.message(Command("book"))
+async def cmd_book(message: Message) -> None:
+    """Reply with a ladder of every resting order on the grid."""
+    snap = await book_snapshot()
+    if snap is None:
+        await message.answer("Exchange unreachable — no book to show.")
+        return
+    rungs, price, symbol = snap
+    if not rungs:
+        await message.answer("No resting orders.")
+        return
+    png = await asyncio.to_thread(render_book, rungs, price, symbol)
+    await message.answer_photo(BufferedInputFile(png, filename="book.png"))
 
 
 @router.message(Command("token"))
