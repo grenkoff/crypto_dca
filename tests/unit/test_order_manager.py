@@ -743,11 +743,11 @@ async def test_drain_pool_stays_quiet_when_the_pool_is_empty(
     assert bus.events == []
 
 
-async def test_drain_pool_retires_a_stranded_lot_with_no_close(
+async def test_drain_pool_moves_a_take_profit_rather_than_selling_it(
     om: OrderManager, bus: RecordingEventBus, client: FakeBybitClient
 ) -> None:
-    # a lot stranded far above market, plus a fresh one to carry the
-    # order over the exchange minimum, and a pool that covers both
+    # both lots still have room under them, so the pool buys moves; a
+    # sale would realise a loss and give up the profit they will earn
     await add_one(BotStatus(id=1, pending_credit=Decimal("6000")))
     stranded = await add_one(
         Position(
@@ -788,5 +788,8 @@ async def test_drain_pool_retires_a_stranded_lot_with_no_close(
     async with new_session() as session:
         again = await session.get(Position, stranded.id)
     assert again is not None
-    assert again.status == PositionStatus.CLOSED
+    assert again.status == PositionStatus.OPEN
+    assert again.tp_price is not None
+    assert again.tp_price < Decimal("60100")
+    assert client.sold == []
     assert await repository.pending_credit() < Decimal("6000")

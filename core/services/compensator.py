@@ -229,25 +229,18 @@ class Compensator:
         pool: Decimal,
         source_position_id: int,
     ) -> tuple[dict[str, str], Decimal, list[OpenPosition]] | None:
-        """Retire a stranded lot if the pool can, else move a take-profit.
+        """Move a take-profit down, or retire a lot nothing can move.
 
-        Retiring comes first: a lot the market has left far behind will
-        never sell on its own, so freeing its capital beats nudging a
-        take-profit that was going to fill anyway.
+        Moving comes first and retiring is the fallback: a move keeps
+        the lot and the profit it will earn, while retiring realises a
+        loss and gives that up. Only when no take-profit can be moved
+        does the pool pay to close something outright.
         """
-        plan = plan_market_exit(positions, ctx)
-        if plan is not None:
-            move = await self._exit_at_market(plan, pool, source_position_id)
-            if move is None:
-                return None
-            gone = set(plan.position_ids)
-            rest = [lot for lot in positions if lot.id not in gone]
-            return move, pool - plan.credit_drawn, rest
         decision = plan_hole_fill(
             positions, ctx, offset=self.config.comp_hole_offset
         )
         if decision is None:
-            return None
+            return await self._retire(positions, ctx, pool, source_position_id)
         move = await self._execute(decision, pool, source_position_id)
         if move is None:
             return None
@@ -256,6 +249,24 @@ class Compensator:
             pool - decision.credit_drawn,
             _retagged(positions, decision),
         )
+
+    async def _retire(
+        self,
+        positions: list[OpenPosition],
+        ctx: CompensationContext,
+        pool: Decimal,
+        source_position_id: int,
+    ) -> tuple[dict[str, str], Decimal, list[OpenPosition]] | None:
+        """Sell a lot whose take-profit is pinned, freeing its capital."""
+        plan = plan_market_exit(positions, ctx)
+        if plan is None:
+            return None
+        move = await self._exit_at_market(plan, pool, source_position_id)
+        if move is None:
+            return None
+        gone = set(plan.position_ids)
+        rest = [lot for lot in positions if lot.id not in gone]
+        return move, pool - plan.credit_drawn, rest
 
     async def _exit_at_market(
         self,
