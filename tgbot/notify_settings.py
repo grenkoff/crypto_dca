@@ -6,8 +6,6 @@ Presentation constants live here; the DB access goes through the DAO.
 
 from __future__ import annotations
 
-from datetime import time
-
 from core.db.models import NotificationSettings
 from core.services import repository
 
@@ -55,8 +53,3 @@ async def toggle_field(field: str) -> bool:
     if field not in _ALLOWED_FIELDS:
         raise ValueError(f"unknown notification field: {field}")
     return await repository.toggle_notify_flag(field)
-
-
-async def set_digest_time_utc(t: time) -> time:
-    """Store the daily-digest time (UTC); return the stored value."""
-    return await repository.set_digest_time(t)

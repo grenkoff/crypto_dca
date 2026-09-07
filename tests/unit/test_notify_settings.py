@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from datetime import time
-
 import pytest
 
 from tgbot.notify_settings import (
     EVENT_TOGGLE,
     TOGGLE_LABELS,
     event_enabled,
-    set_digest_time_utc,
     toggle_field,
 )
 
@@ -36,8 +33,3 @@ async def test_toggle_field_rejects_unknown() -> None:
 
 async def test_unknown_event_type_never_suppressed() -> None:
     assert await event_enabled("something.new") is True
-
-
-async def test_set_digest_time_stores_utc() -> None:
-    stored = await set_digest_time_utc(time(9, 30))
-    assert stored == time(9, 30)

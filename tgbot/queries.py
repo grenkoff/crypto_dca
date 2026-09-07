@@ -14,12 +14,8 @@ from core.services import repository
 from core.strategy.book import BookLevel, build_ladder
 from tgbot.formatters import (
     AprSnapshot,
-    BalanceSnapshot,
     DigestSnapshot,
-    OrderRow,
-    OrdersSnapshot,
     PnlSnapshot,
-    StatusSnapshot,
 )
 
 log = structlog.get_logger()
@@ -28,22 +24,6 @@ Bar = tuple[float, float, float, float, float]
 
 _PROJECTION_DAYS = 10
 _TRANSFER_BACKFILL = 400
-
-
-async def status_snapshot() -> StatusSnapshot:
-    """Build the /status snapshot."""
-    (
-        paused,
-        open_count,
-        started_at,
-        last_heartbeat,
-    ) = await repository.status_data()
-    return StatusSnapshot(
-        paused=paused,
-        open_positions=open_count,
-        started_at=started_at,
-        last_heartbeat=last_heartbeat,
-    )
 
 
 async def pnl_snapshot() -> PnlSnapshot:
@@ -242,22 +222,6 @@ async def book_snapshot() -> tuple[list[BookLevel], Decimal, str] | None:
     return rungs, price, symbol
 
 
-async def orders_snapshot() -> OrdersSnapshot:
-    """Build the /orders snapshot from open positions."""
-    rows = [
-        OrderRow(
-            level_index=level_index,
-            entry_price=entry_price,
-            qty=qty,
-            tp_price=tp_price,
-        )
-        for level_index, entry_price, qty, tp_price in (
-            await repository.orders_data()
-        )
-    ]
-    return OrdersSnapshot(open_positions=rows)
-
-
 async def digest_snapshot() -> DigestSnapshot:
     """Build the daily digest snapshot (DB plus live price)."""
     db = await repository.digest_metrics()
@@ -293,15 +257,6 @@ async def digest_snapshot() -> DigestSnapshot:
         free_usdt=free_usdt,
         price=price,
         tp_projection=projection,
-    )
-
-
-async def balance_snapshot() -> BalanceSnapshot:
-    """Build the /balance snapshot from wallet balances."""
-    client = BybitClient.from_settings()
-    balances = await client.get_balances()
-    return BalanceSnapshot(
-        balances={coin: b.free for coin, b in balances.items() if b.total > 0}
     )
 
 

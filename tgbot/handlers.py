@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import time
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command
 from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
@@ -27,31 +26,24 @@ from tgbot.charts import (
 from tgbot.filters import AdminUserFilter
 from tgbot.formatters import (
     apr_formulas,
-    build_balance,
     build_equity,
-    build_orders,
     build_pnl,
-    build_status,
     build_unlock,
 )
 from tgbot.notify_settings import (
     TOGGLE_LABELS,
     load_settings,
-    set_digest_time_utc,
     toggle_field,
 )
 from tgbot.queries import (
     account_equity,
     apr_estimate,
-    balance_snapshot,
     book_snapshot,
     btc_daily_ohlc,
     daily_ohlc,
     funds_curve,
-    orders_snapshot,
     pnl_curve_data,
     pnl_snapshot,
-    status_snapshot,
     unlock_estimate,
 )
 
@@ -62,13 +54,8 @@ router.callback_query.filter(AdminUserFilter())
 
 @router.message(Command("start", "help"))
 async def cmd_start(message: Message) -> None:
-    """Reply with the command list."""
-    await message.answer(
-        "Crypto DCA bot.\n"
-        "Menu: /pnl /book /apr /notify\n"
-        "Also: /status /balance /orders /digesttime",
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    """Acknowledge the bot and clear any leftover keyboard."""
+    await message.answer("Crypto DCA bot.", reply_markup=ReplyKeyboardRemove())
 
 
 def _notify_keyboard(s: NotificationSettings) -> InlineKeyboardMarkup:
@@ -87,8 +74,7 @@ def _notify_keyboard(s: NotificationSettings) -> InlineKeyboardMarkup:
 def _notify_text(s: NotificationSettings) -> str:
     return (
         "*Notifications* — tap to toggle\n"
-        f"Digest time: `{s.digest_time_utc:%H:%M}` UTC  "
-        "(change with /digesttime HH:MM)"
+        f"Digest time: `{s.digest_time_utc:%H:%M}` UTC"
     )
 
 
@@ -116,39 +102,6 @@ async def cb_notify_toggle(call: CallbackQuery) -> None:
     if isinstance(call.message, Message):
         await call.message.edit_reply_markup(reply_markup=_notify_keyboard(s))
     await call.answer("updated")
-
-
-@router.message(Command("digesttime"))
-async def cmd_digesttime(message: Message, command: CommandObject) -> None:
-    """Set the daily digest time (UTC)."""
-    arg = (command.args or "").strip()
-    try:
-        hh, mm = (int(x) for x in arg.split(":", 1))
-        digest_time = time(hh, mm)
-    except (ValueError, TypeError):
-        await message.answer(
-            "Usage: `/digesttime HH:MM` (UTC)", parse_mode="Markdown"
-        )
-        return
-    await set_digest_time_utc(digest_time)
-    await message.answer(
-        f"📊 Digest time set to `{digest_time:%H:%M}` UTC",
-        parse_mode="Markdown",
-    )
-
-
-@router.message(Command("status"))
-async def cmd_status(message: Message) -> None:
-    """Reply with the bot status."""
-    snap = await status_snapshot()
-    await message.answer(build_status(snap), parse_mode="Markdown")
-
-
-@router.message(Command("balance"))
-async def cmd_balance(message: Message) -> None:
-    """Reply with wallet balances."""
-    snap = await balance_snapshot()
-    await message.answer(build_balance(snap), parse_mode="Markdown")
 
 
 @router.message(Command("pnl"))
@@ -202,13 +155,6 @@ async def cmd_apr(message: Message) -> None:
         ),
         parse_mode="Markdown",
     )
-
-
-@router.message(Command("orders"))
-async def cmd_orders(message: Message) -> None:
-    """Reply with open positions."""
-    snap = await orders_snapshot()
-    await message.answer(build_orders(snap), parse_mode="Markdown")
 
 
 @router.message(Command("book"))

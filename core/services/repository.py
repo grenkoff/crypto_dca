@@ -1019,15 +1019,6 @@ async def toggle_notify_flag(field: str) -> bool:
         return new_value
 
 
-async def set_digest_time(t: time) -> time:
-    """Store the daily-digest time (UTC); return the stored value."""
-    async with new_session() as session, session.begin():
-        obj = await _load_notif(session)
-        obj.digest_time_utc = t
-        obj.updated_at = _now()
-        return obj.digest_time_utc
-
-
 async def claim_digest_due() -> bool:
     """Return True and stamp ``digest_last_sent`` iff the digest is due."""
     async with new_session() as session, session.begin():
