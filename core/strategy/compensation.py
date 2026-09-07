@@ -93,16 +93,19 @@ def plan_market_exit(
 ) -> MarketExitDecision | None:
     """Retire the take-profit furthest from market, funded by the pool.
 
-    A lot stranded far above market never sells and its capital is dead;
-    selling it outright turns that back into working cash. The exchange
-    minimum applies to that sale, so a lot too small to meet it alone
-    leaves paired with the smallest lot that closes the gap and that the
-    pool can still afford.
+    Only a lot whose take-profit is pinned by the exchange minimum is a
+    candidate: it can never be moved closer to market and will never
+    sell on its own, so its capital is dead. A lot with room left is
+    left alone — moving it costs the pool far less than giving up the
+    profit it still stands to earn. The minimum applies to the sale
+    too, so the pinned lot leaves paired with the smallest lot that
+    closes the gap and that the pool can still afford.
     """
     if ctx.pool <= 0 or ctx.current_price <= 0:
         return None
     lots = [lot for lot in open_positions if lot.filled_qty == 0]
-    ranked = sorted(lots, key=lambda lot: lot.current_tp_price, reverse=True)
+    stuck = [lot for lot in lots if _pinned(lot, ctx)]
+    ranked = sorted(stuck, key=lambda lot: lot.current_tp_price, reverse=True)
     for candidate in ranked[:_MAX_EXITS_SCANNED]:
         plan = _exit_for(candidate, lots, ctx)
         if plan is not None:
@@ -152,6 +155,18 @@ def _paired_exit(
         if draw <= ctx.pool:
             return _exit_decision((top, partner), draw)
     return None
+
+
+def _pinned(lot: OpenPosition, ctx: CompensationContext) -> bool:
+    """Whether the exchange minimum leaves this lot nowhere to move.
+
+    One grid step down is the smallest move there is; a lot that cannot
+    afford even that is stuck where it stands.
+    """
+    if ctx.min_order_amt <= 0 or lot.qty <= 0:
+        return False
+    floor = ctx.min_order_amt / lot.qty
+    return lot.current_tp_price - ctx.grid_step < floor
 
 
 def _market_value(lot: OpenPosition, ctx: CompensationContext) -> Decimal:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from core.strategy.compensation import (
+    _pinned,
     account_load,
     compensation_share,
     plan_hole_fill,
@@ -324,9 +325,10 @@ def test_hole_fill_leaves_a_partly_sold_lot_alone() -> None:
 
 
 def test_market_exit_sells_top_alone_when_it_clears_the_minimum() -> None:
-    # 200 x 0.02768 = 5.54 -> above the 5.00 minimum, no partner needed
+    # pinned at its 0.025 floor, yet 200 x 0.02768 = 5.54 at market, so
+    # the sale clears the minimum without dragging a partner along
     lots = [
-        _pos(1, "0.05300", entry="0.05290", qty="200"),
+        _pos(1, "0.02502", entry="0.05000", qty="200"),
         _pos(2, "0.02800", entry="0.02790", qty="200"),
     ]
     plan = plan_market_exit(lots, _ctx(pool="1000", min_order_amt="5"))
@@ -375,16 +377,16 @@ def test_market_exit_returns_none_when_the_pool_is_too_thin() -> None:
 
 
 def test_market_exit_walks_down_when_the_top_cannot_be_paired() -> None:
-    # the two highest are stranded far too deep for this pool; the scan
-    # keeps going and retires the cheapest one it can actually afford
+    # every lot here is pinned; the highest is worth too little to pair
+    # with anything, so the scan walks down to one that can
     lots = [
-        _pos(1, "0.09000", entry="0.08990", qty="60"),
+        _pos(1, "0.09000", entry="0.08990", qty="50"),
         _pos(2, "0.05300", entry="0.05290", qty="90"),
-        _pos(3, "0.02800", entry="0.02790", qty="300"),
+        _pos(3, "0.04500", entry="0.04490", qty="100"),
     ]
-    plan = plan_market_exit(lots, _ctx(pool="0.5", min_order_amt="5"))
+    plan = plan_market_exit(lots, _ctx(pool="4", min_order_amt="5"))
     assert plan is not None
-    assert plan.position_ids == (3,)
+    assert plan.position_ids == (2, 3)
 
 
 def test_market_exit_never_retires_a_lot_already_in_profit() -> None:
@@ -400,12 +402,22 @@ def test_market_exit_ignores_partially_filled_lots() -> None:
 
 
 def test_market_exit_draw_covers_fees_so_the_pair_clears_zero() -> None:
-    lots = [_pos(1, "0.05300", entry="0.05290", qty="200")]
+    lots = [_pos(1, "0.02502", entry="0.05000", qty="200")]
     ctx = _ctx(pool="1000", min_order_amt="5")
     plan = plan_market_exit(lots, ctx)
     assert plan is not None
     proceeds = (
         Decimal("200") * ctx.current_price * (Decimal(1) - ctx.taker_fee)
     )
-    cost = Decimal("0.05290") * Decimal("200")
+    cost = Decimal("0.05000") * Decimal("200")
     assert plan.credit_drawn >= cost - proceeds
+
+
+def test_market_exit_never_touches_a_lot_that_still_has_room() -> None:
+    # a lot bought minutes ago sits far above its own floor: moving its
+    # take-profit is the cheap option, and selling it would throw away
+    # the profit it is about to earn
+    lots = [_pos(1, "0.03440", entry="0.03416", qty="205")]
+    ctx = _ctx(pool="1000", min_order_amt="5", market="0.03405")
+    assert _pinned(lots[0], ctx) is False
+    assert plan_market_exit(lots, ctx) is None
