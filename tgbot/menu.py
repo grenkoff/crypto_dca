@@ -5,7 +5,7 @@ from __future__ import annotations
 from aiogram.types import BotCommand
 
 _MENU: tuple[tuple[str, str], ...] = (
-    ("start", "Start and show the commands"),
+    ("start", "Check the bot is alive"),
     ("pnl", "Banked profit and the chart"),
     ("book", "Ladder of resting orders"),
     ("apr", "Estimated annual return"),

@@ -7,26 +7,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
-
-
-@dataclass(frozen=True)
-class StatusSnapshot:
-    """Snapshot for the /status message."""
-
-    paused: bool
-    open_positions: int
-    started_at: datetime | None
-    last_heartbeat: datetime | None
-
-
-@dataclass(frozen=True)
-class BalanceSnapshot:
-    """Snapshot for the /balance message."""
-
-    balances: dict[str, Decimal]
 
 
 @dataclass(frozen=True)
@@ -68,61 +51,6 @@ class AprSnapshot:
     free: Decimal
     profit_per_day: Decimal
     apr: Decimal | None
-
-
-@dataclass(frozen=True)
-class OrderRow:
-    """One open-position row for the /orders message."""
-
-    level_index: int
-    entry_price: Decimal
-    qty: Decimal
-    tp_price: Decimal | None
-
-
-@dataclass(frozen=True)
-class OrdersSnapshot:
-    """Snapshot for the /orders message."""
-
-    open_positions: list[OrderRow]
-
-
-def _humanize_age(since: datetime | None, now: datetime | None = None) -> str:
-    if since is None:
-        return "n/a"
-    now = now or datetime.now(tz=UTC)
-    delta = now - since
-    seconds = int(delta.total_seconds())
-    if seconds < 60:
-        return f"{seconds}s"
-    if seconds < 3600:
-        return f"{seconds // 60}m"
-    if seconds < 86400:
-        return f"{seconds // 3600}h"
-    return f"{seconds // 86400}d"
-
-
-def build_status(snap: StatusSnapshot, now: datetime | None = None) -> str:
-    """Render the /status message."""
-    state = "⏸ paused" if snap.paused else "▶ running"
-    uptime = _humanize_age(snap.started_at, now)
-    heartbeat = _humanize_age(snap.last_heartbeat, now)
-    return (
-        f"*Status:* {state}\n"
-        f"*Open positions:* {snap.open_positions}\n"
-        f"*Uptime:* {uptime}\n"
-        f"*Last heartbeat:* {heartbeat} ago"
-    )
-
-
-def build_balance(snap: BalanceSnapshot) -> str:
-    """Render the /balance message."""
-    if not snap.balances:
-        return "_no balances_"
-    lines = [
-        f"`{coin}`: {amount}" for coin, amount in sorted(snap.balances.items())
-    ]
-    return "*Balances:*\n" + "\n".join(lines)
 
 
 def build_pnl(snap: PnlSnapshot) -> str:
@@ -180,18 +108,6 @@ def apr_formulas(snap: AprSnapshot) -> tuple[str, str] | None:
         r"\approx " + f"{apr}" + r"\%\,\mathrm{/yr}"
     )
     return _APR_GENERAL, substituted
-
-
-def build_orders(snap: OrdersSnapshot) -> str:
-    """Render the /orders message."""
-    if not snap.open_positions:
-        return "_no open positions_"
-    rows = [
-        f"L{row.level_index:>3}  entry `{row.entry_price}` "
-        f"qty `{row.qty}` → TP `{row.tp_price}`"
-        for row in snap.open_positions
-    ]
-    return "*Open positions:*\n" + "\n".join(rows)
 
 
 def _q(amount: Decimal, places: str = "0.0001") -> Decimal:
