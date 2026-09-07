@@ -33,6 +33,7 @@ from tgbot.formatters import (
     build_status,
     build_unlock,
 )
+from tgbot.menu import keyboard, on
 from tgbot.notify_settings import (
     TOGGLE_LABELS,
     load_settings,
@@ -59,14 +60,12 @@ router.message.filter(AdminUserFilter())
 router.callback_query.filter(AdminUserFilter())
 
 
-@router.message(Command("start", "help"))
+@router.message(on("start", "help"))
 async def cmd_start(message: Message) -> None:
     """Reply with the command list."""
     await message.answer(
-        "Crypto DCA bot.\n"
-        "Commands: /status /balance /pnl /apr /orders /book "
-        "/notify /digesttime",
-        parse_mode="Markdown",
+        "Crypto DCA bot — tap a button or type the command.",
+        reply_markup=keyboard(),
     )
 
 
@@ -91,7 +90,7 @@ def _notify_text(s: NotificationSettings) -> str:
     )
 
 
-@router.message(Command("notify"))
+@router.message(on("notify"))
 async def cmd_notify(message: Message) -> None:
     """Show the notification toggle keyboard."""
     s = await load_settings()
@@ -117,7 +116,7 @@ async def cb_notify_toggle(call: CallbackQuery) -> None:
     await call.answer("updated")
 
 
-@router.message(Command("digesttime"))
+@router.message(on("digesttime"))
 async def cmd_digesttime(message: Message, command: CommandObject) -> None:
     """Set the daily digest time (UTC)."""
     arg = (command.args or "").strip()
@@ -136,21 +135,21 @@ async def cmd_digesttime(message: Message, command: CommandObject) -> None:
     )
 
 
-@router.message(Command("status"))
+@router.message(on("status"))
 async def cmd_status(message: Message) -> None:
     """Reply with the bot status."""
     snap = await status_snapshot()
     await message.answer(build_status(snap), parse_mode="Markdown")
 
 
-@router.message(Command("balance"))
+@router.message(on("balance"))
 async def cmd_balance(message: Message) -> None:
     """Reply with wallet balances."""
     snap = await balance_snapshot()
     await message.answer(build_balance(snap), parse_mode="Markdown")
 
 
-@router.message(Command("pnl"))
+@router.message(on("pnl"))
 async def cmd_pnl(message: Message) -> None:
     """Reply with realized PnL and a funds-and-profit chart."""
     snap = await pnl_snapshot()
@@ -182,7 +181,7 @@ async def cmd_pnl(message: Message) -> None:
     )
 
 
-@router.message(Command("apr"))
+@router.message(on("apr"))
 async def cmd_apr(message: Message) -> None:
     """Reply with the estimated annual return as LaTeX formulas."""
     snap = await apr_estimate()
@@ -203,14 +202,14 @@ async def cmd_apr(message: Message) -> None:
     )
 
 
-@router.message(Command("orders"))
+@router.message(on("orders"))
 async def cmd_orders(message: Message) -> None:
     """Reply with open positions."""
     snap = await orders_snapshot()
     await message.answer(build_orders(snap), parse_mode="Markdown")
 
 
-@router.message(Command("book"))
+@router.message(on("book"))
 async def cmd_book(message: Message) -> None:
     """Reply with a ladder of every resting order on the grid."""
     snap = await book_snapshot()

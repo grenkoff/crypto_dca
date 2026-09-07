@@ -23,6 +23,7 @@ async def run() -> None:
     from core.services.redis_bus import RedisEventBus
     from tgbot.digest import run_digest_scheduler
     from tgbot.handlers import router
+    from tgbot.menu import bot_commands
     from tgbot.notifications import run_subscriber
 
     settings = telegram_settings()
@@ -32,6 +33,7 @@ async def run() -> None:
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher()
     dp.include_router(router)
+    await bot.set_my_commands(bot_commands())
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
