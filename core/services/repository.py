@@ -1042,15 +1042,22 @@ async def upsert_grid_level(
 
 
 async def open_position_at_level(level_index: int) -> Position | None:
-    """The open position resting on a grid level, if there is one."""
+    """The open position resting on a grid level, if there is exactly one.
+
+    A hand-adopted lot carries a synthetic level index that a percent grid
+    can also reach, so a level is only an identity while it names one lot;
+    an ambiguous level hands the caller nothing rather than a guess.
+    """
     async with new_session() as session:
-        found: Position | None = await session.scalar(
-            select(Position).where(
-                Position.level_index == level_index,
-                Position.status == _OPEN,
+        found = (
+            await session.scalars(
+                select(Position).where(
+                    Position.level_index == level_index,
+                    Position.status == _OPEN,
+                )
             )
-        )
-        return found
+        ).all()
+        return found[0] if len(found) == 1 else None
 
 
 async def adopt_tp_order(position_id: int, order_id: str) -> None:

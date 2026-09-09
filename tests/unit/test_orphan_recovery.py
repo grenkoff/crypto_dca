@@ -109,3 +109,18 @@ async def test_an_order_we_did_not_place_is_never_touched() -> None:
     client = _FakeClient([_order("manual-1", "someone-elses-order")])
     await _run(client)
     assert client.cancelled == []
+
+
+async def test_a_stray_order_is_cancelled_when_its_level_is_ambiguous() -> (
+    None
+):
+    # a hand-adopted lot and a percent-grid lot can share a level index;
+    # handing the sell to a guess would leave the other lot mismatched, so
+    # it is cancelled and the protector re-places what is missing
+    unprotected = await _lot(606, "")
+    await _lot(606, "live-tp")
+    client = _FakeClient([_order("stray-3", "grid-tp-606-1")])
+    await _run(client)
+    assert client.cancelled == ["stray-3"]
+    still_naked = await repository.get_position(unprotected.id)
+    assert still_naked.tp_order_id == ""

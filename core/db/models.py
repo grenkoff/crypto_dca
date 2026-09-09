@@ -206,6 +206,7 @@ class Position(Base):
     filled_qty: Mapped[Decimal] = mapped_column(_AMOUNT, default=Decimal(0))
     sell_value: Mapped[Decimal] = mapped_column(_AMOUNT, default=Decimal(0))
     pocket_delta: Mapped[Decimal | None] = mapped_column(_AMOUNT, default=None)
+    adopted: Mapped[bool] = mapped_column(Boolean, default=False)
 
     @property
     def remaining_qty(self) -> Decimal:

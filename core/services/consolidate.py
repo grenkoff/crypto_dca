@@ -24,17 +24,13 @@ from core.strategy.rounding import next_tick_above, round_down_to_tick
 log = structlog.get_logger()
 
 
-_MANUAL_BAG_MIN = 1000
-_MANUAL_BAG_MAX = 2000
-
-
 @dataclass(frozen=True)
 class PosRow:
     """Minimal open-position view the planner needs (keeps it
     pure/testable)."""
 
     id: int
-    level_index: int
+    adopted: bool
     entry: Decimal
     qty: Decimal
     filled_qty: Decimal
@@ -78,7 +74,7 @@ def plan_consolidation(
     for p in positions:
         if p.filled_qty > 0:
             continue
-        if _MANUAL_BAG_MIN <= p.level_index < _MANUAL_BAG_MAX:
+        if p.adopted:
             continue
         groups.setdefault(nearest_rung(geometry.lattice, p.entry), []).append(
             p
@@ -128,7 +124,7 @@ async def load_open_positions() -> list[PosRow]:
     return [
         PosRow(
             id=int(p.id),
-            level_index=int(p.level_index),
+            adopted=bool(p.adopted),
             entry=p.entry_price,
             qty=p.qty,
             filled_qty=p.filled_qty,
