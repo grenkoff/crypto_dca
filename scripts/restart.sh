@@ -15,6 +15,10 @@
 #   scripts/restart.sh tgbot        # restart only tgbot
 #   scripts/restart.sh tgbot trader # restart both, explicitly
 #
+# Starting the trader waits out its instance lease first (up to
+# DCA_LEASE_WAIT_MAX_S, default 150), because a killed trader leaves a fresh
+# heartbeat behind that its own guard reads as a live peer.
+#
 # tgbot goes first on purpose: the trader spends the credit pool during
 # bootstrap and reports it on the bus, and Redis pub/sub keeps nothing
 # for a subscriber that is not listening yet.
@@ -23,6 +27,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOGDIR="${DCA_LOGDIR:-$REPO/logs}"
+LEASE_WAIT_MAX_S="${DCA_LEASE_WAIT_MAX_S:-150}"
 mkdir -p "$LOGDIR"
 cd "$REPO"
 
@@ -65,8 +70,36 @@ stop() {
   echo "[$svc] stopped"
 }
 
+# The trader refuses to start while a heartbeat younger than its instance
+# lease is in the database — that guard is what stops two traders racing the
+# same account. A trader that had to be SIGKILLed never got to clear its own
+# heartbeat, so the restart has to outwait the lease it just orphaned;
+# without this the start fails and leaves nothing running at all.
+# A check that cannot run counts as "held" on purpose: not starting is the
+# safe answer, since the whole point is to never race two traders.
+wait_for_lease() {
+  if [ "${TRADER_SKIP_INSTANCE_GUARD:-}" = "1" ]; then return 0; fi
+  local waited=0
+  if uv run python -m cli trader-lease; then return 0; fi
+  echo "[trader] waiting for the instance lease to expire"
+  while [ "$waited" -lt "$LEASE_WAIT_MAX_S" ]; do
+    sleep 5
+    waited=$((waited + 5))
+    if uv run python -m cli trader-lease >/dev/null 2>&1; then
+      echo "[trader] lease clear after ${waited}s"
+      return 0
+    fi
+  done
+  echo "[trader] ERROR: lease not clear after ${waited}s — another trader is" \
+       "alive, or the lease check itself is failing"
+  return 1
+}
+
 start() {
   local svc="$1"
+  if [ "$svc" = "trader" ]; then
+    wait_for_lease || return 1
+  fi
   setsid uv run python -m "$svc" > "$LOGDIR/$svc.log" 2>&1 < /dev/null &
   disown
   sleep 12

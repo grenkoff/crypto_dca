@@ -22,6 +22,7 @@ from core.services.consolidate import (
     plan_consolidation,
 )
 from core.services.order_common import config_geometry
+from core.services.runtime import INSTANCE_LEASE_S, another_instance_alive
 from core.strategy.lattice import PercentGeometry, percent_lattice
 from core.strategy.rounding import round_up_to_tick
 
@@ -304,6 +305,30 @@ def grid_geometry(
 ) -> None:
     """Show, and optionally apply, the percent grid's two fractions."""
     asyncio.run(_grid_geometry(apply_it=apply_it, step_raw=step, tp_raw=tp))
+
+
+async def _lease_held() -> bool:
+    """Whether a live trader's heartbeat still holds the instance lease."""
+    beat = await repository.last_heartbeat()
+    now = datetime.now(tz=UTC)
+    held = another_instance_alive(beat, now, INSTANCE_LEASE_S)
+    age = "never" if beat is None else f"{(now - beat).total_seconds():.0f}s"
+    state = "held" if held else "clear"
+    typer.echo(
+        f"lease {state} (heartbeat {age} old, lease {INSTANCE_LEASE_S}s)"
+    )
+    return held
+
+
+@app.command()
+def trader_lease() -> None:
+    """Exit 0 when a trader may start, 1 while the lease is still held.
+
+    A killed trader leaves its own heartbeat behind, and the instance
+    guard reads that as a live peer until the lease runs out.
+    """
+    if asyncio.run(_lease_held()):
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

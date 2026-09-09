@@ -27,7 +27,7 @@ from core.services.reconciliation import reconcile_once
 log = structlog.get_logger()
 
 RECONCILE_INTERVAL_S = 30
-_INSTANCE_LEASE_S = RECONCILE_INTERVAL_S * 3
+INSTANCE_LEASE_S = RECONCILE_INTERVAL_S * 3
 
 
 def another_instance_alive(
@@ -191,7 +191,7 @@ class TraderRuntime:
             return
         last = await repository.last_heartbeat()
         if another_instance_alive(
-            last, datetime.now(tz=UTC), _INSTANCE_LEASE_S
+            last, datetime.now(tz=UTC), INSTANCE_LEASE_S
         ):
             log.error(
                 "trader.instance_guard_blocked", last_heartbeat=str(last)
