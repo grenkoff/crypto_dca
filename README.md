@@ -112,7 +112,9 @@ Two spacings, picked by `grid_mode` in the strategy config:
 - **`percent`** — both steps are *fractions* of price, so neither drifts
   as the market moves: `grid_step` (e.g. `0.0011` = 0.11%) is how far the
   price falls between resting buys, and `tp_step` (e.g. `0.0066` = 0.66%)
-  is the profit each lot takes. The buy ladder is pinned at one tick and
+  is the profit each lot takes — snapped up to the next buy rung, so the
+  take-profit wall stays on the same lattice the compensator walks. The
+  buy ladder is pinned at one tick and
   counted upward, which keeps level indexes stable and holds the ratio
   down to the tick — below `tick / grid_step` a rung widens to a single
   tick rather than stalling, so the grid keeps trading to the bottom.

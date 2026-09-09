@@ -250,22 +250,30 @@ class PercentGeometry:
             raise ValueError("tp_ratio must be in (0, 1)")
 
     def tp_target(self, entry_price: Decimal) -> Decimal:
-        """The price whose drop back to ``entry_price`` is ``tp_ratio``."""
-        return entry_price / (Decimal(1) - self.tp_ratio)
+        """The first rung whose drop back to ``entry_price`` clears the ratio.
+
+        Snapping to a rung keeps the whole take-profit wall on the same
+        lattice the compensator walks when it looks for an empty slot; the
+        overshoot it costs is at most one rung.
+        """
+        return self.lattice.snap_up(entry_price / (Decimal(1) - self.tp_ratio))
 
     def buy_ceiling(self, lowest_tp: Decimal) -> Decimal:
         """Highest price a resting buy may take below the wall.
 
         Room for the take-profit a fill here would rest — which must stay
-        under the wall — and one rung more for the buy itself.
+        under the wall — and one rung more for the buy itself. Rounding
+        can leave the estimate a rung high, so it steps down until the
+        take-profit it implies really does clear the wall.
         """
-        below_wall = lowest_tp * (Decimal(1) - self.tp_ratio)
-        return self.lattice.below(self.lattice.snap_down(below_wall))
+        rung = self.lattice.snap_down(lowest_tp * (Decimal(1) - self.tp_ratio))
+        while rung > 0 and self.tp_target(rung) >= lowest_tp:
+            rung = self.lattice.below(rung)
+        return self.lattice.below(rung)
 
     def wall_floor(self, nearest_buy: Decimal) -> Decimal:
         """Lowest price a resting take-profit may be moved onto."""
-        above_buy = self.tp_target(nearest_buy)
-        return self.lattice.above(self.lattice.snap_up(above_buy))
+        return self.lattice.above(self.tp_target(nearest_buy))
 
 
 def build_geometry(

@@ -28,8 +28,8 @@ def _ladder() -> PercentLattice:
 
 
 def _ratio_of(entry: Decimal, target: Decimal) -> Decimal:
-    """How much of ``target`` the rise from ``entry`` earns, to 10 places."""
-    return ((target - entry) / target).quantize(Decimal("1E-10"))
+    """How much of ``target`` the rise from ``entry`` earns."""
+    return (target - entry) / target
 
 
 def _geometry() -> PercentGeometry:
@@ -112,23 +112,40 @@ def test_nearest_rung_claims_the_level_a_fill_was_placed_at() -> None:
     assert nearest_rung(lattice, Decimal("0.03638")) == Decimal("0.03638")
 
 
-def test_percent_take_profit_is_the_profit_ratio_above_the_entry() -> None:
+def test_percent_take_profit_clears_the_ratio_and_rests_on_a_rung() -> None:
     # the two fractions are independent: buys 0.11% apart, profit 0.66%,
-    # so one take-profit reaches over several buy rungs
+    # so one take-profit reaches over several buy rungs — and lands on a
+    # rung, which is where the compensator looks for it
     geometry = _geometry()
+    lattice = geometry.lattice
     entry = Decimal("0.03634")
     target = geometry.tp_target(entry)
-    assert _ratio_of(entry, target) == _TP_RATIO
-    lattice = geometry.lattice
-    assert lattice.index_of(target) - lattice.index_of(entry) == 4
+    assert target == Decimal("0.03659")
+    assert _ratio_of(entry, target) >= _TP_RATIO
+    assert lattice.price_at(lattice.index_of(target)) == target
+    assert lattice.index_of(target) - lattice.index_of(entry) == 5
 
 
 def test_percent_take_profit_holds_the_ratio_at_any_price() -> None:
     # the point of the relative grid: the profit does not drift as the
-    # market falls, where an absolute step would
+    # market falls, where an absolute step would. Snapping to a rung can
+    # only overshoot, and never by more than that rung.
     geometry = _geometry()
-    for entry in (Decimal("0.03634"), Decimal("0.0088"), Decimal("0.00042")):
-        assert _ratio_of(entry, geometry.tp_target(entry)) == _TP_RATIO
+    lattice = geometry.lattice
+    for index in (300, 900, 1500, 1876):
+        entry = lattice.price_at(index)
+        earned = _ratio_of(entry, geometry.tp_target(entry))
+        assert _TP_RATIO <= earned < _TP_RATIO + _STEP_RATIO * 2
+
+
+def test_percent_wall_stays_on_the_ladder_all_the_way_down() -> None:
+    # an off-ladder take-profit would sit in a slot the compensator reads
+    # as empty, so it would keep paying to move lots into a full wall
+    geometry = _geometry()
+    lattice = geometry.lattice
+    for index in range(1, 1877, 7):
+        target = geometry.tp_target(lattice.price_at(index))
+        assert lattice.price_at(lattice.index_of(target)) == target
 
 
 def test_percent_buy_ceiling_keeps_a_fill_below_the_wall() -> None:
@@ -137,8 +154,20 @@ def test_percent_buy_ceiling_keeps_a_fill_below_the_wall() -> None:
     geometry = _geometry()
     wall = Decimal("0.03664")
     ceiling = geometry.buy_ceiling(wall)
-    assert ceiling == Decimal("0.03634")
+    assert ceiling == Decimal("0.03630")
     assert geometry.tp_target(ceiling) < wall
+
+
+def test_percent_buy_ceiling_clears_the_wall_at_every_rung() -> None:
+    # rounding used to leave the ceiling a rung high, landing a fill's
+    # take-profit exactly on the bottom of the wall
+    geometry = _geometry()
+    lattice = geometry.lattice
+    for index in range(1, 1877, 11):
+        wall = lattice.price_at(index)
+        ceiling = geometry.buy_ceiling(wall)
+        if ceiling > 0:
+            assert geometry.tp_target(ceiling) < wall
 
 
 def test_percent_wall_floor_clears_the_nearest_buy() -> None:

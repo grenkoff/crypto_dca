@@ -831,5 +831,6 @@ async def test_percent_config_takes_the_profit_ratio_at_any_price(
     entry = Decimal("60000")
     profit = (position.tp_price - entry) / position.tp_price
     assert profit >= Decimal("0.0066")
-    # and not wastefully far above it — one tick of slack at most
-    assert position.tp_price - entry < entry * Decimal("0.0067")
+    # the take-profit snaps to a buy rung, so it can overshoot — but by
+    # less than the rung it snapped to
+    assert profit < Decimal("0.0066") + Decimal("0.0011")
