@@ -166,8 +166,8 @@ def config() -> StrategyConfig:
     # In-memory SA config: the services only read its fields, never persist it.
     return StrategyConfig(
         symbol="BTCUSDT",
-        grid_mode="percent",
-        grid_step=Decimal("0.01"),
+        grid_mode="absolute",
+        grid_step=Decimal("10"),
         order_qty_quote=Decimal("20"),
         min_profit_quote=Decimal("0.05"),
         maker_fee=Decimal("0.001"),
@@ -793,3 +793,44 @@ async def test_drain_pool_moves_a_take_profit_rather_than_selling_it(
     assert again.tp_price < Decimal("60100")
     assert client.sold == []
     assert await repository.pending_credit() < Decimal("6000")
+
+
+async def test_percent_config_takes_the_profit_ratio_at_any_price(
+    client: FakeBybitClient,
+    instrument: Instrument,
+    config: StrategyConfig,
+    bus: RecordingEventBus,
+) -> None:
+    # percent mode: buys sit 0.11% apart and every lot sells for 0.66%,
+    # whatever the price — the absolute distance is not fixed
+    config.grid_mode = "percent"
+    config.grid_step = Decimal("0.0011")
+    config.tp_step = Decimal("0.0066")
+    om = OrderManager(
+        client=client,  # type: ignore[arg-type]
+        instrument=instrument,
+        config=config,
+        bus=bus,
+    )
+    client.next_id = "buy-pct"
+    await om.place_buy_at_level(0, Decimal("60000"))
+    client.next_id = "tp-pct"
+    await om.handle_buy_fill(
+        _exec(
+            exec_id="e-pct",
+            order_id="buy-pct",
+            side=Side.BUY,
+            price=Decimal("60000"),
+            qty=Decimal("0.000333"),
+            fee=Decimal("0.000000333"),
+            fee_coin="BTC",
+        )
+    )
+    position = await _position_at(0)
+    assert position.tp_price is not None
+    entry = Decimal("60000")
+    profit = (position.tp_price - entry) / position.tp_price
+    assert profit >= Decimal("0.0066")
+    # the take-profit snaps to a buy rung, so it can overshoot — but by
+    # less than the rung it snapped to
+    assert profit < Decimal("0.0066") + Decimal("0.0011")

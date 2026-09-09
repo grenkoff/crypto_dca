@@ -2,7 +2,20 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from core.strategy.lattice import (
+    AbsoluteGeometry,
+    AbsoluteLattice,
+    PercentGeometry,
+    percent_lattice,
+)
 from core.strategy.pricing import compute_tp_price
+
+
+def _geo(tp_step: str) -> AbsoluteGeometry:
+    return AbsoluteGeometry(
+        lattice=AbsoluteLattice(Decimal("0.00001")),
+        tp_step=Decimal(tp_step),
+    )
 
 
 def _verify_pnl_at_least(
@@ -25,7 +38,7 @@ def test_absolute_tp_step_used_when_above_floor() -> None:
         entry_price=Decimal("60000"),
         qty=Decimal("0.001"),
         fees_in=Decimal("0.06"),
-        tp_step=Decimal("600"),  # +$600 absolute
+        geometry=_geo("600"),  # +$600 absolute
         min_profit_quote=Decimal("0.05"),
         maker_fee=Decimal("0.001"),
         tick_size=Decimal("0.01"),
@@ -47,7 +60,7 @@ def test_min_profit_overrides_when_tp_step_too_small() -> None:
         entry_price=Decimal("60000"),
         qty=Decimal("0.001"),
         fees_in=Decimal("0.06"),
-        tp_step=Decimal("1"),  # only +$1 absolute
+        geometry=_geo("1"),  # only +$1 absolute
         min_profit_quote=Decimal("1"),
         maker_fee=Decimal("0.001"),
         tick_size=Decimal("0.01"),
@@ -73,7 +86,7 @@ def test_breakeven_floor_when_min_profit_zero() -> None:
         entry_price=entry,
         qty=qty,
         fees_in=fees_in,
-        tp_step=Decimal("0.00001"),  # 1 tick — below break-even (~4 ticks)
+        geometry=_geo("0.00001"),  # 1 tick — below break-even (~4 ticks)
         min_profit_quote=Decimal("0"),
         maker_fee=Decimal("0.000625"),
         tick_size=Decimal("0.00001"),
@@ -98,7 +111,7 @@ def test_min_notional_floor_lifts_tp_for_small_position() -> None:
         entry_price=entry,
         qty=qty,
         fees_in=Decimal("0"),
-        tp_step=Decimal("0.0001"),
+        geometry=_geo("0.0001"),
         min_profit_quote=Decimal("0"),
         maker_fee=Decimal("0.000625"),
         tick_size=Decimal("0.00001"),
@@ -114,7 +127,7 @@ def test_no_min_notional_floor_by_default() -> None:
         entry_price=Decimal("0.0302"),
         qty=Decimal("164.91"),
         fees_in=Decimal("0"),
-        tp_step=Decimal("0.0001"),
+        geometry=_geo("0.0001"),
         min_profit_quote=Decimal("0"),
         maker_fee=Decimal("0.000625"),
         tick_size=Decimal("0.00001"),
@@ -127,10 +140,30 @@ def test_tp_rounds_up_to_tick() -> None:
         entry_price=Decimal("60000"),
         qty=Decimal("0.001"),
         fees_in=Decimal("0"),
-        tp_step=Decimal("12.345"),
+        geometry=_geo("12.345"),
         min_profit_quote=Decimal("0"),
         maker_fee=Decimal("0"),
         tick_size=Decimal("0.10"),
     )
     # Raw target = 60012.345 → ceil to 0.10 = 60012.40
     assert tp == Decimal("60012.40")
+
+
+def test_percent_take_profit_clears_the_ratio_after_the_floors() -> None:
+    # the buy rungs and the profit are separate fractions; a lot takes
+    # the profit one whatever rung it was bought on
+    ratio = Decimal("0.0066")
+    lattice = percent_lattice(Decimal("0.0011"), Decimal("0.00001"))
+    entry = lattice.price_at(lattice.index_of(Decimal("0.03640")))
+    tp = compute_tp_price(
+        entry_price=entry,
+        qty=Decimal("200"),
+        fees_in=Decimal("0.0045"),
+        geometry=PercentGeometry(lattice=lattice, tp_ratio=ratio),
+        min_profit_quote=Decimal("0"),
+        maker_fee=Decimal("0.000625"),
+        tick_size=Decimal("0.00001"),
+        min_order_amt=Decimal("5"),
+    )
+    assert (tp - entry) / tp >= ratio
+    assert tp > lattice.above(entry)

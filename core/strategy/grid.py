@@ -1,88 +1,51 @@
-"""Generate descending grid buy levels (absolute or percent step)."""
+"""Pick the grid rungs a resting buy band should occupy."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from decimal import Decimal
 
-from core.strategy.rounding import round_down_to_tick
-from core.strategy.types import GridLevelSpec, GridMode
+from core.strategy.lattice import Lattice, nearest_rung
 
 
-def generate_levels(
-    *,
-    top_anchor: Decimal,
-    mode: GridMode,
-    step: Decimal,
-    count: int,
-    tick_size: Decimal,
-) -> list[GridLevelSpec]:
-    """Generate up to ``count`` buy levels descending from ``top_anchor``.
-
-    ``percent`` step is a fraction ((1 - step) per level); ``absolute`` is a
-    price delta off a step-snapped anchor. Prices floor to ``tick_size``;
-    generation stops once a level would be non-positive.
-    """
-    if count <= 0:
-        return []
-    if step <= 0:
-        raise ValueError("step must be positive")
-    if mode == "percent" and step >= 1:
-        raise ValueError("percent step must be < 1")
-    if top_anchor <= 0:
-        return []
-
-    if mode == "absolute":
-        top_anchor = round_down_to_tick(top_anchor, step)
-
-    levels: list[GridLevelSpec] = []
-    for i in range(count):
-        raw = (
-            top_anchor * (Decimal(1) - step) ** i
-            if mode == "percent"
-            else top_anchor - step * i
-        )
-        price = round_down_to_tick(raw, tick_size)
-        if price <= 0:
-            break
-        levels.append(GridLevelSpec(level_index=i, price=price))
-    return levels
+def held_rungs(
+    entry_prices: Iterable[Decimal], lattice: Lattice
+) -> set[Decimal]:
+    """The rungs already covered by open positions."""
+    return {nearest_rung(lattice, price) for price in entry_prices}
 
 
 def resting_buy_levels(
     price: Decimal,
-    step: Decimal,
+    lattice: Lattice,
     count: int,
     held: set[Decimal],
     ceiling: Decimal | None = None,
 ) -> list[tuple[int, Decimal]]:
-    """The ``count`` highest step-aligned prices below ``price`` not held.
+    """The ``count`` highest rungs below ``price`` that are not held.
 
-    Walks round levels down from a full step below market, skipping held
-    levels, until ``count`` are collected or price reaches zero. A ``ceiling``
-    caps the band top: levels above it are skipped so buys keep clear of the
-    resting take-profit wall.
+    Walks the lattice down from a full rung below market — a buy placed
+    just under the price would fill on noise — skipping held rungs, until
+    ``count`` are collected or the ladder bottoms out. A
+    ``ceiling`` caps the band top: rungs above it are skipped so buys keep
+    clear of the resting take-profit wall.
     """
-    if step <= 0 or price <= 0 or count <= 0:
+    if price <= 0 or count <= 0:
         return []
-    k_floor = int(price / step)
-    if Decimal(k_floor) * step > price:
-        k_floor -= 1
-    k_top = k_floor - 1
+    top = lattice.below(lattice.snap_down(price))
     if ceiling is not None:
-        k_ceiling = int(ceiling / step)
-        while Decimal(k_ceiling) * step > ceiling:
-            k_ceiling -= 1
-        k_top = min(k_top, k_ceiling)
+        top = min(top, lattice.snap_down(ceiling))
+    if top <= 0:
+        return []
+    index = lattice.index_of(top)
     levels: list[tuple[int, Decimal]] = []
-    k = k_top
-    while len(levels) < count:
-        p = Decimal(k) * step
-        if p <= 0:
+    while len(levels) < count and index >= 0:
+        rung = lattice.price_at(index)
+        if rung <= 0:
             break
-        if p not in held:
-            levels.append((k, p))
-        k -= 1
+        if rung not in held:
+            levels.append((index, rung))
+        index -= 1
     return levels
 
 

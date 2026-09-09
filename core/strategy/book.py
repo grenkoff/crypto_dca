@@ -11,6 +11,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
+from core.strategy.lattice import Lattice
+
 
 @dataclass(frozen=True)
 class BookLevel:
@@ -28,26 +30,24 @@ class BookLevel:
 
 
 def build_ladder(
-    orders: Sequence[tuple[Decimal, Decimal, bool]], grid_step: Decimal
+    orders: Sequence[tuple[Decimal, Decimal, bool]], lattice: Lattice
 ) -> list[BookLevel]:
     """Resting ``orders`` from the top down, gaps collapsed.
 
     Each order is ``(price, qty, is_buy)``. Between two neighbours the
-    ladder counts the grid levels nobody is resting on and emits one
+    ladder counts the grid rungs nobody is resting on and emits one
     gap rung for the run, so a hundred empty levels cost one line.
     """
-    if grid_step <= 0:
-        raise ValueError("grid_step must be positive")
     ranked = sorted(orders, key=lambda row: row[0], reverse=True)
     rungs: list[BookLevel] = []
     previous: Decimal | None = None
     for price, qty, is_buy in ranked:
         if previous is not None:
-            missing = int((previous - price) / grid_step) - 1
+            missing = lattice.index_of(previous) - lattice.index_of(price) - 1
             if missing > 0:
                 rungs.append(
                     BookLevel(
-                        price=price + grid_step,
+                        price=lattice.above(price),
                         qty=Decimal(0),
                         is_buy=is_buy,
                         skipped=missing,

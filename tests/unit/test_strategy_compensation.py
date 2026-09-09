@@ -8,9 +8,9 @@ from core.strategy.compensation import (
     compensation_share,
     plan_hole_fill,
     plan_market_exit,
-    slot_below,
     split_profit,
 )
+from core.strategy.lattice import AbsoluteGeometry, AbsoluteLattice
 from core.strategy.types import CompensationContext, OpenPosition
 
 
@@ -51,8 +51,10 @@ def _ctx(
         maker_fee=Decimal(maker_fee),
         current_price=Decimal(market),
         tick_size=Decimal(tick),
-        grid_step=Decimal(grid_step),
-        tp_step=Decimal(tp_step),
+        geometry=AbsoluteGeometry(
+            lattice=AbsoluteLattice(Decimal(grid_step)),
+            tp_step=Decimal(tp_step),
+        ),
         nearest_buy_price=Decimal(nearest_buy),
         min_order_amt=Decimal(min_order_amt),
         taker_fee=Decimal(taker_fee),
@@ -60,16 +62,14 @@ def _ctx(
 
 
 def test_slot_below_on_grid_steps_one_grid_step() -> None:
-    assert slot_below(Decimal("0.02810"), Decimal("0.00005")) == Decimal(
-        "0.02805"
-    )
+    lattice = AbsoluteLattice(Decimal("0.00005"))
+    assert lattice.below(Decimal("0.02810")) == Decimal("0.02805")
 
 
 def test_slot_below_off_grid_snaps_to_lattice() -> None:
     # 0.02836 is off the 0.00005 lattice -> pulled down to 0.02835
-    assert slot_below(Decimal("0.02836"), Decimal("0.00005")) == Decimal(
-        "0.02835"
-    )
+    lattice = AbsoluteLattice(Decimal("0.00005"))
+    assert lattice.below(Decimal("0.02836")) == Decimal("0.02835")
 
 
 def test_fills_nearest_hole_above_the_wall() -> None:
@@ -328,7 +328,7 @@ def test_market_exit_sells_top_alone_when_it_clears_the_minimum() -> None:
     # pinned at its 0.025 floor, yet 200 x 0.02768 = 5.54 at market, so
     # the sale clears the minimum without dragging a partner along
     lots = [
-        _pos(1, "0.02502", entry="0.05000", qty="200"),
+        _pos(1, "0.02500", entry="0.05000", qty="200"),
         _pos(2, "0.02800", entry="0.02790", qty="200"),
     ]
     plan = plan_market_exit(lots, _ctx(pool="1000", min_order_amt="5"))
@@ -402,7 +402,7 @@ def test_market_exit_ignores_partially_filled_lots() -> None:
 
 
 def test_market_exit_draw_covers_fees_so_the_pair_clears_zero() -> None:
-    lots = [_pos(1, "0.02502", entry="0.05000", qty="200")]
+    lots = [_pos(1, "0.02500", entry="0.05000", qty="200")]
     ctx = _ctx(pool="1000", min_order_amt="5")
     plan = plan_market_exit(lots, ctx)
     assert plan is not None

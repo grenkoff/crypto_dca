@@ -96,7 +96,6 @@ class StrategyConfig(Base):
     order_qty_quote: Mapped[Decimal] = mapped_column(
         _AMOUNT, default=Decimal("10")
     )
-    top_anchor: Mapped[Decimal | None] = mapped_column(_AMOUNT)
     min_profit_quote: Mapped[Decimal] = mapped_column(
         _AMOUNT, default=Decimal("0.01")
     )
@@ -207,6 +206,7 @@ class Position(Base):
     filled_qty: Mapped[Decimal] = mapped_column(_AMOUNT, default=Decimal(0))
     sell_value: Mapped[Decimal] = mapped_column(_AMOUNT, default=Decimal(0))
     pocket_delta: Mapped[Decimal | None] = mapped_column(_AMOUNT, default=None)
+    adopted: Mapped[bool] = mapped_column(Boolean, default=False)
 
     @property
     def remaining_qty(self) -> Decimal:

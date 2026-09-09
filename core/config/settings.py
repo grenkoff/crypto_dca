@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import Field
@@ -46,6 +47,22 @@ class DatabaseSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = Field(default="")
+
+
+class GridSettings(BaseSettings):
+    """Percent-grid defaults (``GRID_*``), both fractions of price.
+
+    ``step_pct`` spaces the resting buys — how far the price must fall to
+    reach the next one — and ``profit_pct`` is what a lot earns when its
+    take-profit fills. Neither drifts as the market moves.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", env_prefix="GRID_"
+    )
+
+    step_pct: Decimal = Field(default=Decimal("0.0011"))
+    profit_pct: Decimal = Field(default=Decimal("0.0066"))
 
 
 class TelegramSettings(BaseSettings):
@@ -107,3 +124,9 @@ def telegram_settings() -> TelegramSettings:
 def webui_settings() -> WebuiSettings:
     """Return the cached web dashboard settings."""
     return WebuiSettings()
+
+
+@lru_cache(maxsize=1)
+def grid_settings() -> GridSettings:
+    """Return the cached grid geometry defaults."""
+    return GridSettings()

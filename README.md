@@ -25,6 +25,7 @@ uv run python -m trader             # trading worker
 uv run python -m tgbot              # telegram bot
 uv run python -m webui              # read-only dashboard (WEBUI_HOST/PORT)
 uv run python -m cli preflight      # validate config/credentials/balance
+uv run python -m cli grid-geometry  # preview the percent grid ladder
 ```
 
 ## Checks
@@ -100,6 +101,29 @@ control token: send `/token` to the bot (admin-only) and use it as
 `Authorization: Bearer <token>`.
 
 Health check on `webui`: `GET /healthz` (unauthenticated, no DB).
+
+## Grid geometry
+
+Two spacings, picked by `grid_mode` in the strategy config:
+
+- **`absolute`** — buys rest every `grid_step` in price, and a lot's
+  take-profit sits `tp_step` above its entry. The profit a trade takes in
+  percent therefore drifts with the price.
+- **`percent`** — both steps are *fractions* of price, so neither drifts
+  as the market moves: `grid_step` (e.g. `0.0011` = 0.11%) is how far the
+  price falls between resting buys, and `tp_step` (e.g. `0.0066` = 0.66%)
+  is the profit each lot takes — snapped up to the next buy rung, so the
+  take-profit wall stays on the same lattice the compensator walks. The
+  buy ladder is pinned at one tick and
+  counted upward, which keeps level indexes stable and holds the ratio
+  down to the tick — below `tick / grid_step` a rung widens to a single
+  tick rather than stalling, so the grid keeps trading to the bottom.
+
+Defaults live in `GRID_STEP_PCT` and `GRID_PROFIT_PCT` (see
+`GridSettings`). `python -m cli grid-geometry` previews the ladder against
+the live price; `--step X --tp Y` override the fractions and `--apply`
+writes them to the config. Changing the geometry cancels and re-lays the
+resting buys on the next trader start.
 
 ## Strategy
 

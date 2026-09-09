@@ -20,6 +20,7 @@ from core.strategy.grid import (
     fundable_targets,
     resting_buy_levels,
 )
+from core.strategy.lattice import AbsoluteGeometry, AbsoluteLattice
 from core.strategy.pricing import compute_tp_price
 from core.strategy.rounding import (
     min_notional_price,
@@ -117,7 +118,9 @@ def test_tp_price_never_below_entry_and_on_grid(
         entry_price=entry_price,
         qty=qty,
         fees_in=fees_in,
-        tp_step=tp_step,
+        geometry=AbsoluteGeometry(
+            lattice=AbsoluteLattice(tick), tp_step=tp_step
+        ),
         min_profit_quote=min_profit,
         maker_fee=maker_fee,
         tick_size=tick,
@@ -137,7 +140,7 @@ def test_tp_price_never_below_entry_and_on_grid(
 def test_resting_buy_levels_are_below_market_descending_and_unheld(
     price: Decimal, tick: Decimal, count: int, held: set[Decimal]
 ) -> None:
-    levels = resting_buy_levels(price, tick, count, held)
+    levels = resting_buy_levels(price, AbsoluteLattice(tick), count, held)
     prices = [p for _, p in levels]
     assert len(levels) <= count
     assert all(p < price for p in prices)
@@ -267,8 +270,9 @@ def test_compensation_decision_invariants(
         maker_fee=maker_fee,
         current_price=market,
         tick_size=_COMP_TICK,
-        grid_step=_COMP_GRID,
-        tp_step=_COMP_TP_STEP,
+        geometry=AbsoluteGeometry(
+            lattice=AbsoluteLattice(_COMP_GRID), tp_step=_COMP_TP_STEP
+        ),
         nearest_buy_price=nearest_buy,
         min_order_amt=Decimal(0),
     )

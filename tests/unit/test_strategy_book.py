@@ -5,8 +5,9 @@ from decimal import Decimal
 import pytest
 
 from core.strategy.book import build_ladder
+from core.strategy.lattice import AbsoluteLattice
 
-_STEP = Decimal("0.00004")
+_STEP = AbsoluteLattice(Decimal("0.00004"))
 
 
 def _order(
@@ -58,5 +59,5 @@ def test_an_empty_book_is_an_empty_ladder() -> None:
 
 
 def test_a_zero_grid_step_is_refused() -> None:
-    with pytest.raises(ValueError, match="grid_step"):
-        build_ladder([_order("0.03400")], Decimal(0))
+    with pytest.raises(ValueError, match="step"):
+        AbsoluteLattice(Decimal(0))

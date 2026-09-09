@@ -4,17 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from core.strategy.lattice import GridGeometry
 
 GridMode = Literal["absolute", "percent"]
-
-
-@dataclass(frozen=True)
-class GridLevelSpec:
-    """A grid level: its index and step-aligned buy price."""
-
-    level_index: int
-    price: Decimal
 
 
 @dataclass(frozen=True)
@@ -42,8 +37,7 @@ class CompensationContext:
     maker_fee: Decimal
     current_price: Decimal
     tick_size: Decimal
-    grid_step: Decimal
-    tp_step: Decimal
+    geometry: GridGeometry
     nearest_buy_price: Decimal
     min_order_amt: Decimal = Decimal(0)
     taker_fee: Decimal = Decimal(0)

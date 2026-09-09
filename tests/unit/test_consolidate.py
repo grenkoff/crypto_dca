@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from core.services.consolidate import PosRow, plan_consolidation
+from core.strategy.lattice import AbsoluteGeometry, AbsoluteLattice
 
 
 def _row(
@@ -14,11 +16,11 @@ def _row(
     filled: str = "0",
     tp: str = "",
     day: int = 1,
-    level: int = 500,
+    adopted: bool = False,
 ) -> PosRow:
     return PosRow(
         id=pid,
-        level_index=level,
+        adopted=adopted,
         entry=Decimal(entry),
         qty=Decimal(qty),
         filled_qty=Decimal(filled),
@@ -28,9 +30,11 @@ def _row(
     )
 
 
-_COMMON = {
-    "step": Decimal("0.00005"),
-    "tp_step": Decimal("0.0001"),
+_COMMON: dict[str, Any] = {
+    "geometry": AbsoluteGeometry(
+        lattice=AbsoluteLattice(Decimal("0.00005")),
+        tp_step=Decimal("0.0001"),
+    ),
     "min_profit_quote": Decimal("0"),
     "maker_fee": Decimal("0.000625"),
     "tick_size": Decimal("0.00001"),
@@ -89,21 +93,18 @@ def test_weighted_entry_across_prices_rounding_to_same_level() -> None:
 
 
 def test_manual_bag_is_never_consolidated() -> None:
-    # the manual bag (level 1000..1999) intentionally stacks many lots at one
-    # entry with laddered TPs — it must be left untouched even though it shares
-    # a price
-    bag = [
-        _row(i, "0.052", level=1000 + i, tp=f"ladder-{i}") for i in range(5)
-    ]
+    # the hand-adopted bag intentionally stacks many lots at one entry with
+    # laddered TPs — it must be left untouched even though it shares a price
+    bag = [_row(i, "0.052", adopted=True, tp=f"ladder-{i}") for i in range(5)]
     assert plan_consolidation(positions=bag, **_COMMON) == []
 
 
 def test_readopt_dupes_merge_but_bag_excluded_in_mixed_input() -> None:
     positions = [
-        _row(1, "0.052", level=1000),  # bag lot — excluded
-        _row(2, "0.052", level=1001),  # bag lot — excluded
-        _row(3, "0.02945", level=3020, day=1),  # readopt dup
-        _row(4, "0.02945", level=3021, day=2),  # readopt dup
+        _row(1, "0.052", adopted=True),  # bag lot — excluded
+        _row(2, "0.052", adopted=True),  # bag lot — excluded
+        _row(3, "0.02945", day=1),  # grid dup
+        _row(4, "0.02945", day=2),  # grid dup
     ]
     plan = plan_consolidation(positions=positions, **_COMMON)
     assert len(plan) == 1
@@ -120,3 +121,17 @@ def test_tp_floored_at_market_when_recomputed_tp_below_price() -> None:
         **common,
     )
     assert plan[0].new_tp_price == Decimal("0.04001")
+
+
+def test_percent_level_indexes_no_longer_read_as_the_bag() -> None:
+    # the bag used to be recognised by a level index in [1000, 2000); a
+    # percent grid puts ordinary levels there too, so only the flag counts
+    plan = plan_consolidation(
+        positions=[
+            _row(1, "0.02945", day=1),
+            _row(2, "0.02945", day=2),
+        ],
+        **_COMMON,
+    )
+    assert len(plan) == 1
+    assert plan[0].absorbed_ids == [2]
