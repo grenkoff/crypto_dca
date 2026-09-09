@@ -25,7 +25,7 @@ uv run python -m trader             # trading worker
 uv run python -m tgbot              # telegram bot
 uv run python -m webui              # read-only dashboard (WEBUI_HOST/PORT)
 uv run python -m cli preflight      # validate config/credentials/balance
-uv run python -m cli grid-profit    # preview the percent grid ladder
+uv run python -m cli grid-geometry  # preview the percent grid ladder
 ```
 
 ## Checks
@@ -109,18 +109,19 @@ Two spacings, picked by `grid_mode` in the strategy config:
 - **`absolute`** — buys rest every `grid_step` in price, and a lot's
   take-profit sits `tp_step` above its entry. The profit a trade takes in
   percent therefore drifts with the price.
-- **`percent`** — buys rest on a ladder where every rung is at least
-  `grid_step` (a *fraction*, e.g. `0.0066` = 0.66%) below the rung above,
-  and a lot's take-profit is the rung above its entry, so one number sets
-  both the spacing and the profit. `tp_step` is unused. The ladder is
-  pinned at one tick and counted upward, which keeps level indexes stable
-  and lets it stay on the ratio down to the tick — below `tick / ratio` a
-  rung widens to a single tick rather than stalling.
+- **`percent`** — both steps are *fractions* of price, so neither drifts
+  as the market moves: `grid_step` (e.g. `0.0011` = 0.11%) is how far the
+  price falls between resting buys, and `tp_step` (e.g. `0.0066` = 0.66%)
+  is the profit each lot takes. The buy ladder is pinned at one tick and
+  counted upward, which keeps level indexes stable and holds the ratio
+  down to the tick — below `tick / grid_step` a rung widens to a single
+  tick rather than stalling, so the grid keeps trading to the bottom.
 
-The default ratio lives in `GRID_PROFIT_PCT` (see `GridSettings`).
-`python -m cli grid-profit` previews the ladder against the live price;
-`--set X` picks a ratio and `--apply` writes it to the config. Changing the
-geometry cancels and re-lays the resting buys on the next trader start.
+Defaults live in `GRID_STEP_PCT` and `GRID_PROFIT_PCT` (see
+`GridSettings`). `python -m cli grid-geometry` previews the ladder against
+the live price; `--step X --tp Y` override the fractions and `--apply`
+writes them to the config. Changing the geometry cancels and re-lays the
+resting buys on the next trader start.
 
 ## Strategy
 

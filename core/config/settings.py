@@ -50,17 +50,18 @@ class DatabaseSettings(BaseSettings):
 
 
 class GridSettings(BaseSettings):
-    """Grid geometry defaults (``GRID_*``).
+    """Percent-grid defaults (``GRID_*``), both fractions of price.
 
-    ``profit_pct`` is the one number the percent grid runs on: the
-    fraction each rung sits below the rung above it, and so the profit a
-    lot takes when its take-profit fills one rung up.
+    ``step_pct`` spaces the resting buys — how far the price must fall to
+    reach the next one — and ``profit_pct`` is what a lot earns when its
+    take-profit fills. Neither drifts as the market moves.
     """
 
     model_config = SettingsConfigDict(
         env_file=".env", extra="ignore", env_prefix="GRID_"
     )
 
+    step_pct: Decimal = Field(default=Decimal("0.0011"))
     profit_pct: Decimal = Field(default=Decimal("0.0066"))
 
 

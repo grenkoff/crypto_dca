@@ -14,13 +14,28 @@ from core.strategy.lattice import (
     percent_lattice,
 )
 
-_RATIO = Decimal("0.0066")
 _TICK = Decimal("0.00001")
 _MARKET = Decimal("0.03640")
+# a coarse ladder, so the lattice's own properties are easy to read
+_RATIO = Decimal("0.0066")
+# the live pair: buys 0.11% apart, each lot taking 0.66%
+_STEP_RATIO = Decimal("0.0011")
+_TP_RATIO = Decimal("0.0066")
 
 
 def _ladder() -> PercentLattice:
     return PercentLattice(_RATIO, _TICK)
+
+
+def _ratio_of(entry: Decimal, target: Decimal) -> Decimal:
+    """How much of ``target`` the rise from ``entry`` earns, to 10 places."""
+    return ((target - entry) / target).quantize(Decimal("1E-10"))
+
+
+def _geometry() -> PercentGeometry:
+    return PercentGeometry(
+        lattice=percent_lattice(_STEP_RATIO, _TICK), tp_ratio=_TP_RATIO
+    )
 
 
 def test_absolute_rungs_are_round_multiples_of_the_step() -> None:
@@ -97,24 +112,48 @@ def test_nearest_rung_claims_the_level_a_fill_was_placed_at() -> None:
     assert nearest_rung(lattice, Decimal("0.03638")) == Decimal("0.03638")
 
 
-def test_percent_take_profit_is_the_rung_above_the_entry() -> None:
-    geometry = PercentGeometry(lattice=_ladder())
-    assert geometry.tp_target(Decimal("0.03613")) == Decimal("0.03638")
-
-
-def test_percent_take_profit_keeps_the_ratio_for_an_off_ladder_entry() -> None:
-    # a merged lot's weighted entry sits between rungs; its take-profit
-    # still has to clear the ratio, not just reach the next rung
-    geometry = PercentGeometry(lattice=_ladder())
-    entry = Decimal("0.03616")
+def test_percent_take_profit_is_the_profit_ratio_above_the_entry() -> None:
+    # the two fractions are independent: buys 0.11% apart, profit 0.66%,
+    # so one take-profit reaches over several buy rungs
+    geometry = _geometry()
+    entry = Decimal("0.03634")
     target = geometry.tp_target(entry)
-    assert (target - entry) / target >= _RATIO
+    assert _ratio_of(entry, target) == _TP_RATIO
+    lattice = geometry.lattice
+    assert lattice.index_of(target) - lattice.index_of(entry) == 4
 
 
-def test_percent_buy_ceiling_leaves_two_rungs_under_the_wall() -> None:
-    geometry = PercentGeometry(lattice=_ladder())
-    assert geometry.buy_ceiling(Decimal("0.03663")) == Decimal("0.03613")
-    assert geometry.wall_floor(Decimal("0.03613")) == Decimal("0.03663")
+def test_percent_take_profit_holds_the_ratio_at_any_price() -> None:
+    # the point of the relative grid: the profit does not drift as the
+    # market falls, where an absolute step would
+    geometry = _geometry()
+    for entry in (Decimal("0.03634"), Decimal("0.0088"), Decimal("0.00042")):
+        assert _ratio_of(entry, geometry.tp_target(entry)) == _TP_RATIO
+
+
+def test_percent_buy_ceiling_keeps_a_fill_below_the_wall() -> None:
+    # a buy at the ceiling must have room for its own take-profit under
+    # the lowest resting one, plus a rung for the buy itself
+    geometry = _geometry()
+    wall = Decimal("0.03664")
+    ceiling = geometry.buy_ceiling(wall)
+    assert ceiling == Decimal("0.03634")
+    assert geometry.tp_target(ceiling) < wall
+
+
+def test_percent_wall_floor_clears_the_nearest_buy() -> None:
+    geometry = _geometry()
+    buy = Decimal("0.03616")
+    floor = geometry.wall_floor(buy)
+    assert floor == Decimal("0.03649")
+    assert floor > geometry.tp_target(buy)
+
+
+def test_percent_geometry_rejects_a_profit_outside_the_unit_range() -> None:
+    with pytest.raises(ValueError, match="tp_ratio"):
+        PercentGeometry(
+            lattice=percent_lattice(_STEP_RATIO, _TICK), tp_ratio=Decimal("1")
+        )
 
 
 def test_absolute_geometry_keeps_its_own_take_profit_step() -> None:
@@ -130,8 +169,8 @@ def test_absolute_geometry_keeps_its_own_take_profit_step() -> None:
 def test_build_geometry_picks_the_mode() -> None:
     percent = build_geometry(
         mode="percent",
-        step=_RATIO,
-        tp_step=Decimal("0.00024"),
+        step=_STEP_RATIO,
+        tp_step=_TP_RATIO,
         tick_size=_TICK,
     )
     absolute = build_geometry(
@@ -141,5 +180,7 @@ def test_build_geometry_picks_the_mode() -> None:
         tick_size=_TICK,
     )
     assert isinstance(percent, PercentGeometry)
+    assert percent.tp_ratio == _TP_RATIO
+    assert percent.lattice.ratio == _STEP_RATIO
     assert isinstance(absolute, AbsoluteGeometry)
     assert absolute.tp_step == Decimal("0.00024")

@@ -59,8 +59,11 @@ async def _check_strategy_config() -> Check:
     issues: list[str] = []
     if cfg.grid_step <= 0:
         issues.append("grid_step ≤ 0")
-    if cfg.grid_mode == "percent" and cfg.grid_step >= 1:
-        issues.append("percent step ≥ 1")
+    if cfg.grid_mode == "percent":
+        if cfg.grid_step >= 1:
+            issues.append("percent step ≥ 1")
+        if cfg.tp_step >= 1:
+            issues.append("percent profit ≥ 1")
     if cfg.order_qty_quote <= 0:
         issues.append("order_qty_quote ≤ 0")
     if cfg.max_open_orders <= 0:
@@ -71,7 +74,7 @@ async def _check_strategy_config() -> Check:
         c.fail("; ".join(issues))
     else:
         step = (
-            f"step={cfg.grid_step * 100:.4f}%/rung"
+            f"step={cfg.grid_step * 100:.4f}% profit={cfg.tp_step * 100:.4f}%"
             if cfg.grid_mode == "percent"
             else f"step={cfg.grid_step} tp_step={cfg.tp_step}"
         )

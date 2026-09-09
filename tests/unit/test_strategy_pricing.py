@@ -150,20 +150,20 @@ def test_tp_rounds_up_to_tick() -> None:
 
 
 def test_percent_take_profit_clears_the_ratio_after_the_floors() -> None:
-    # a lot bought on a rung sells into the rung above it, so the profit
-    # it takes is the ratio the grid was laid out with
+    # the buy rungs and the profit are separate fractions; a lot takes
+    # the profit one whatever rung it was bought on
     ratio = Decimal("0.0066")
-    lattice = percent_lattice(ratio, Decimal("0.00001"))
+    lattice = percent_lattice(Decimal("0.0011"), Decimal("0.00001"))
     entry = lattice.price_at(lattice.index_of(Decimal("0.03640")))
     tp = compute_tp_price(
         entry_price=entry,
         qty=Decimal("200"),
         fees_in=Decimal("0.0045"),
-        geometry=PercentGeometry(lattice=lattice),
+        geometry=PercentGeometry(lattice=lattice, tp_ratio=ratio),
         min_profit_quote=Decimal("0"),
         maker_fee=Decimal("0.000625"),
         tick_size=Decimal("0.00001"),
         min_order_amt=Decimal("5"),
     )
-    assert tp == lattice.above(entry)
     assert (tp - entry) / tp >= ratio
+    assert tp > lattice.above(entry)

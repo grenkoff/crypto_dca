@@ -236,35 +236,36 @@ class AbsoluteGeometry:
 
 @dataclass(frozen=True)
 class PercentGeometry:
-    """A take-profit sits one rung above its entry.
+    """A take-profit sits ``tp_ratio`` above its entry, in relative terms.
 
-    One ratio drives both the buy grid and the profit each lot takes, so
-    a fill on any rung sells into the rung above it.
+    The lattice ratio spaces the buys and ``tp_ratio`` sets the profit;
+    both are fractions of price, so neither drifts as the market falls.
     """
 
     lattice: PercentLattice
+    tp_ratio: Decimal
+
+    def __post_init__(self) -> None:
+        if not 0 < self.tp_ratio < 1:
+            raise ValueError("tp_ratio must be in (0, 1)")
 
     def tp_target(self, entry_price: Decimal) -> Decimal:
-        """The rung above ``entry_price``, never nearer than the ratio.
-
-        An entry off the ladder — a merged lot's weighted average — would
-        otherwise sell for less than the ratio it was bought under.
-        """
-        rung = self.lattice.above(entry_price)
-        floor = entry_price / (Decimal(1) - self.lattice.ratio)
-        return max(rung, self.lattice.snap_up(floor))
+        """The price whose drop back to ``entry_price`` is ``tp_ratio``."""
+        return entry_price / (Decimal(1) - self.tp_ratio)
 
     def buy_ceiling(self, lowest_tp: Decimal) -> Decimal:
         """Highest price a resting buy may take below the wall.
 
-        One rung for the take-profit a fill would rest, one for the buy
-        itself, so a rising grid never crowds the bottom of the wall.
+        Room for the take-profit a fill here would rest — which must stay
+        under the wall — and one rung more for the buy itself.
         """
-        return self.lattice.below(self.lattice.below(lowest_tp))
+        below_wall = lowest_tp * (Decimal(1) - self.tp_ratio)
+        return self.lattice.below(self.lattice.snap_down(below_wall))
 
     def wall_floor(self, nearest_buy: Decimal) -> Decimal:
         """Lowest price a resting take-profit may be moved onto."""
-        return self.lattice.above(self.lattice.above(nearest_buy))
+        above_buy = self.tp_target(nearest_buy)
+        return self.lattice.above(self.lattice.snap_up(above_buy))
 
 
 def build_geometry(
@@ -274,7 +275,13 @@ def build_geometry(
     tp_step: Decimal,
     tick_size: Decimal,
 ) -> GridGeometry:
-    """Grid geometry for a strategy config's mode and steps."""
+    """Grid geometry for a strategy config's mode and steps.
+
+    In ``percent`` mode both steps are fractions: ``step`` spaces the buy
+    rungs and ``tp_step`` is the profit each lot takes.
+    """
     if mode == "percent":
-        return PercentGeometry(lattice=percent_lattice(step, tick_size))
+        return PercentGeometry(
+            lattice=percent_lattice(step, tick_size), tp_ratio=tp_step
+        )
     return AbsoluteGeometry(lattice=AbsoluteLattice(step), tp_step=tp_step)
