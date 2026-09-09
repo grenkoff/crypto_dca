@@ -14,7 +14,7 @@ from core.services.order_manager import OrderManager
 from core.strategy.grid import (
     buys_to_prune,
     fundable_targets,
-    generate_levels,
+    held_rungs,
     resting_buy_levels,
 )
 
@@ -37,18 +37,14 @@ class GridMaintainer:
     async def _ensure_impl(self, price: Decimal) -> None:
         """Maintain a contiguous band of buy orders below the price.
 
-        The band is the ``max_open_orders`` highest ``grid_step`` steps
-        below market; gaps fill, out-of-band buys prune, held levels skip.
+        The band is the ``max_open_orders`` highest lattice rungs below
+        market; gaps fill, out-of-band buys prune, held rungs skip.
         """
         if await repository.is_paused():
             return
-        if self._om.grid_mode != "absolute":
-            await self._ensure_percent(price)
-            return
         cfg = self._om.config
-        step: Decimal = cfg.grid_step
         per_order: Decimal = cfg.order_qty_quote
-        if step <= 0 or price <= 0 or per_order <= 0:
+        if price <= 0 or per_order <= 0:
             return
 
         balances = await self._om.balances.snapshot()
@@ -57,9 +53,11 @@ class GridMaintainer:
         locked = quote.locked if quote is not None else Decimal(0)
         n = min(int((free + locked) / per_order), int(cfg.max_open_orders))
 
-        resting, held = await repository.grid_state(step)
+        lattice = self._om.geometry.lattice
+        resting, entries = await repository.grid_state()
+        held = held_rungs(entries, lattice)
         ceiling = await self._buy_ceiling()
-        targets = resting_buy_levels(price, step, n, held, ceiling=ceiling)
+        targets = resting_buy_levels(price, lattice, n, held, ceiling=ceiling)
         target_prices = {p for _, p in targets}
         prune = set(
             buys_to_prune(resting.keys(), target_prices, ceiling=ceiling)
@@ -71,14 +69,13 @@ class GridMaintainer:
     async def _buy_ceiling(self) -> Decimal | None:
         """Highest price a resting buy may take, or None if unconstrained.
 
-        Keeps the buy band at least ``tp_step + grid_step`` below the bottom
-        of the take-profit wall, so a rising grid never crowds a resting TP.
+        Keeps the buy band two slots below the bottom of the take-profit
+        wall, so a rising grid never crowds a resting TP.
         """
         lowest_tp = await repository.lowest_resting_tp()
         if lowest_tp is None:
             return None
-        cfg = self._om.config
-        return lowest_tp - cfg.tp_step - cfg.grid_step
+        return self._om.geometry.buy_ceiling(lowest_tp)
 
     async def _prune_out_of_band(
         self,
@@ -129,23 +126,6 @@ class GridMaintainer:
                 log.warning(
                     "grid.place_skipped", price=str(p), error=str(exc)[:100]
                 )
-
-    async def _ensure_percent(self, price: Decimal) -> None:
-        """Legacy percent-mode grid (relative levels off a moving anchor)."""
-        config = self._om.config
-        anchor = config.top_anchor if config.top_anchor is not None else price
-        specs = generate_levels(
-            top_anchor=anchor,
-            mode=self._om.grid_mode,
-            step=config.grid_step,
-            count=config.max_open_orders,
-            tick_size=self._om.instrument.tick_size,
-        )
-        existing = await repository.existing_active_levels()
-        for spec in specs:
-            if spec.level_index in existing:
-                continue
-            await self._om.place_buy_at_level(spec.level_index, spec.price)
 
     async def rebuild_on_param_change(self) -> None:
         """Rebuild the buy grid when grid geometry changed.

@@ -23,10 +23,12 @@ from core.strategy.compensation import (
     split_profit,
 )
 from core.strategy.grid import resting_buy_levels
+from core.strategy.lattice import build_geometry
 from core.strategy.pricing import compute_tp_price
 from core.strategy.types import (
     CompensationContext,
     CompensationDecision,
+    GridMode,
     OpenPosition,
 )
 
@@ -43,6 +45,7 @@ class BacktestConfig:
     maker_fee: Decimal
     max_open_orders: int
     start_usdt: Decimal
+    grid_mode: GridMode = "absolute"
     min_profit_quote: Decimal = Decimal(0)
     compensation_moves: int = 1
     comp_share_min: Decimal = Decimal(1)
@@ -115,6 +118,12 @@ class _Book:
     """Mutable simulation state: cash, lots, resting buys, credit pool."""
 
     def __init__(self, cfg: BacktestConfig, instrument: Instrument) -> None:
+        self.geometry = build_geometry(
+            mode=cfg.grid_mode,
+            step=cfg.grid_step,
+            tp_step=cfg.tp_step,
+            tick_size=instrument.tick_size,
+        )
         self.cfg = cfg
         self.instrument = instrument
         self.usdt = cfg.start_usdt
@@ -145,7 +154,9 @@ class _Book:
         """
         if self.band_price is None:
             return True
-        return abs(price - self.band_price) >= self.cfg.grid_step
+        return abs(price - self.band_price) >= self.geometry.lattice.step_at(
+            price
+        )
 
     def refresh(self, price: Decimal) -> None:
         """Re-place the resting buy band under ``price``."""
@@ -157,7 +168,7 @@ class _Book:
             return
         ceiling = self._buy_ceiling()
         targets = resting_buy_levels(
-            price, self.cfg.grid_step, count, self.held, ceiling
+            price, self.geometry.lattice, count, self.held, ceiling
         )
         self.resting = {level_price for _, level_price in targets}
 
@@ -176,7 +187,7 @@ class _Book:
         lowest = self.lowest_tp()
         if lowest is None:
             return None
-        return lowest - self.cfg.tp_step - self.cfg.grid_step
+        return self.geometry.buy_ceiling(lowest)
 
     def fill_buys(self, low: Decimal) -> None:
         """Fill every resting buy the bar reached."""
@@ -206,7 +217,7 @@ class _Book:
                         entry_price=price,
                         qty=qty,
                         fees_in=fees_in,
-                        tp_step=self.cfg.tp_step,
+                        geometry=self.geometry,
                         min_profit_quote=self.cfg.min_profit_quote,
                         maker_fee=self.cfg.maker_fee,
                         tick_size=self.instrument.tick_size,
@@ -276,8 +287,7 @@ class _Book:
             maker_fee=self.cfg.maker_fee,
             current_price=price,
             tick_size=self.instrument.tick_size,
-            grid_step=self.cfg.grid_step,
-            tp_step=self.cfg.tp_step,
+            geometry=self.geometry,
             nearest_buy_price=(
                 max(self.resting) if self.resting else Decimal(0)
             ),

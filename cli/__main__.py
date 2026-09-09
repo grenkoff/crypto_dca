@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import typer
 
 from cli.preflight import FAIL, WARN, run_checks
-from core.config.settings import bybit_settings
+from core.config.settings import bybit_settings, grid_settings
 from core.exchange.bybit import BybitClient
 from core.services import repository
 from core.services.consolidate import (
@@ -20,6 +21,8 @@ from core.services.consolidate import (
     load_open_positions,
     plan_consolidation,
 )
+from core.services.order_common import config_geometry
+from core.strategy.lattice import Lattice, percent_lattice
 
 app = typer.Typer(add_completion=False, help="crypto_dca operator commands.")
 
@@ -82,8 +85,7 @@ async def _consolidate(*, commit: bool) -> None:
     positions = await load_open_positions()
     plan = plan_consolidation(
         positions=positions,
-        step=config.grid_step,
-        tp_step=config.tp_step,
+        geometry=config_geometry(config, instrument.tick_size),
         min_profit_quote=config.min_profit_quote,
         maker_fee=config.maker_fee,
         tick_size=instrument.tick_size,
@@ -156,6 +158,7 @@ async def _compensate(commit: bool) -> None:
         client=client,
         instrument=instrument,
         config=config,
+        geometry=config_geometry(config, instrument.tick_size),
         bus=NoOpEventBus(),
         balances=BalanceCache(client),
     )
@@ -176,6 +179,106 @@ def compensate(
 ) -> None:
     """Spend the banked compensation pool without waiting for a close."""
     asyncio.run(_compensate(commit))
+
+
+_PREVIEW_RUNGS = 8
+_MILESTONES = (
+    Decimal("0.90"),
+    Decimal("0.75"),
+    Decimal("0.50"),
+    Decimal("0.25"),
+    Decimal("0.10"),
+    Decimal("0.05"),
+)
+
+
+def _echo_rungs(lattice: Lattice, price: Decimal) -> None:
+    """Print the first buy rungs, with the gap each one leaves.
+
+    Measured rung to rung from the rung under market, which is where the
+    band starts: the gap is the profit a fill there takes.
+    """
+    typer.echo("\n  rungs below market:")
+    upper = lattice.snap_down(price)
+    for _ in range(_PREVIEW_RUNGS):
+        rung = lattice.below(upper)
+        if rung <= 0:
+            return
+        gap = (upper - rung) / upper * 100
+        typer.echo(
+            f"    {rung}  ({rung / price * 100:.3f}% of market,"
+            f" gap {gap:.4f}%)"
+        )
+        upper = rung
+
+
+def _echo_milestones(lattice: Lattice, price: Decimal) -> None:
+    """Print how many rungs it takes to fall to each depth."""
+    top = lattice.index_of(price)
+    typer.echo("\n  depth:")
+    for share in _MILESTONES:
+        index = lattice.index_of(price * share)
+        typer.echo(
+            f"    {(1 - share) * 100:>2.0f}% down: rung {top - index}"
+            f" @ {lattice.price_at(index)}"
+        )
+
+
+async def _grid_profit(*, apply_it: bool, raw: str) -> None:
+    """Preview the percent ladder and optionally make it the live config."""
+    ratio = Decimal(raw) if raw else grid_settings().profit_pct
+    if not 0 < ratio < 1:
+        typer.echo("profit must be a fraction in (0, 1)", err=True)
+        raise typer.Exit(1)
+    config = await repository.load_config()
+    client = BybitClient.from_settings()
+    symbol = str(config.symbol)
+    instrument = await client.get_instrument(symbol)
+    price = await client.get_last_price(symbol)
+    lattice = percent_lattice(ratio, instrument.tick_size)
+
+    typer.echo(f"=== PERCENT GRID · {symbol} ===")
+    typer.echo(
+        f"profit {ratio} ({ratio * 100:.4f}% per rung) ·"
+        f" tick {instrument.tick_size} · price {price}"
+    )
+    typer.echo(
+        f"{lattice.index_of(price) + 1} rung(s) from market"
+        f" down to {lattice.price_at(0)}"
+    )
+    _echo_rungs(lattice, price)
+    _echo_milestones(lattice, price)
+
+    typer.echo(
+        f"\nlive config: mode={config.grid_mode} step={config.grid_step}"
+        f" tp_step={config.tp_step}"
+    )
+    if not apply_it:
+        typer.echo("\nDRY-RUN — nothing changed. Re-run with --apply.")
+        return
+    await repository.update_config(
+        actor="cli",
+        updates={"grid_mode": "percent", "grid_step": ratio},
+    )
+    typer.echo(
+        "\napplied — take-profits now rest one rung above entry and"
+        " tp_step is unused. Restart the trader to rebuild the grid."
+    )
+
+
+@app.command()
+def grid_profit(
+    set_to: str = typer.Option(
+        "",
+        "--set",
+        help="Profit fraction per rung (default: GRID_PROFIT_PCT).",
+    ),
+    apply_it: bool = typer.Option(
+        False, "--apply", help="Write the ratio into the live config."
+    ),
+) -> None:
+    """Show, and optionally apply, the percent grid's profit step."""
+    asyncio.run(_grid_profit(apply_it=apply_it, raw=set_to))
 
 
 if __name__ == "__main__":

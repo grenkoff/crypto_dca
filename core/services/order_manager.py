@@ -8,7 +8,6 @@ keeps multi-statement writes inside a single transaction.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import cast
 
 import structlog
 
@@ -23,12 +22,11 @@ from core.services.compensator import (
     Compensator,
 )
 from core.services.events import EventBus
-from core.services.order_common import link_id
+from core.services.order_common import config_geometry, link_id
 from core.strategy.pricing import compute_tp_price
 from core.strategy.rounding import (
     round_down_to_tick,
 )
-from core.strategy.types import GridMode
 
 log = structlog.get_logger()
 
@@ -70,11 +68,13 @@ class OrderManager:
         self.config = config
         self.bus = bus
         self.balances = BalanceCache(client)
+        self.geometry = config_geometry(config, instrument.tick_size)
         self._compensator = Compensator(
             balances=self.balances,
             client=client,
             instrument=instrument,
             config=config,
+            geometry=self.geometry,
             bus=bus,
         )
 
@@ -82,14 +82,6 @@ class OrderManager:
     def symbol(self) -> str:
         """The configured trading symbol."""
         return str(self.config.symbol)
-
-    @property
-    def grid_mode(self) -> GridMode:
-        """The configured grid mode (validated)."""
-        mode = str(self.config.grid_mode)
-        if mode not in ("absolute", "percent"):
-            raise ValueError(f"unexpected grid_mode: {mode}")
-        return cast(GridMode, mode)
 
     async def place_buy_at_level(
         self, level_index: int, price: Decimal
@@ -153,7 +145,7 @@ class OrderManager:
             entry_price=execution.price,
             qty=execution.qty,
             fees_in=fees_quote,
-            tp_step=self.config.tp_step,
+            geometry=self.geometry,
             min_profit_quote=self.config.min_profit_quote,
             maker_fee=self.config.maker_fee,
             tick_size=self.instrument.tick_size,

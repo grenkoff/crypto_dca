@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from core.services.consolidate import PosRow, plan_consolidation
+from core.strategy.lattice import AbsoluteGeometry, AbsoluteLattice
 
 
 def _row(
@@ -28,9 +30,11 @@ def _row(
     )
 
 
-_COMMON = {
-    "step": Decimal("0.00005"),
-    "tp_step": Decimal("0.0001"),
+_COMMON: dict[str, Any] = {
+    "geometry": AbsoluteGeometry(
+        lattice=AbsoluteLattice(Decimal("0.00005")),
+        tp_step=Decimal("0.0001"),
+    ),
     "min_profit_quote": Decimal("0"),
     "maker_fee": Decimal("0.000625"),
     "tick_size": Decimal("0.00001"),

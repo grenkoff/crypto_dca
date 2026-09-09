@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 
 import pytest
 from sqlalchemy import select
@@ -21,8 +22,10 @@ from core.services.runtime import another_instance_alive
 from core.strategy.grid import (
     buys_to_prune,
     fundable_targets,
+    held_rungs,
     resting_buy_levels,
 )
+from core.strategy.lattice import AbsoluteLattice, percent_lattice
 from tests.conftest import add_rows
 
 
@@ -70,7 +73,7 @@ def test_resting_levels_contiguous_when_nothing_held() -> None:
     # full-step clearance: 0.03080 sits only 0.00006 below 0.03086, so the top
     # buy is one step lower at 0.03070.
     levels = resting_buy_levels(
-        Decimal("0.03086"), Decimal("0.0001"), 6, set()
+        Decimal("0.03086"), AbsoluteLattice(Decimal("0.0001")), 6, set()
     )
     prices = [p for _, p in levels]
     assert prices == [
@@ -92,7 +95,7 @@ def test_resting_levels_ceiling_keeps_buys_clear_of_tp_wall() -> None:
     # the TP); the ceiling drops the top buy to 0.02810 (0.00015 clearance).
     levels = resting_buy_levels(
         Decimal("0.02822"),
-        Decimal("0.00005"),
+        AbsoluteLattice(Decimal("0.00005")),
         3,
         set(),
         ceiling=Decimal("0.02810"),
@@ -210,7 +213,9 @@ def test_instance_guard_stale_heartbeat_allows_start() -> None:
 def test_resting_levels_full_step_gap() -> None:
     # fractional price: top buy a full step below (0.02978 -> 0.02970, not
     # 0.02975)
-    frac = resting_buy_levels(Decimal("0.02978"), Decimal("0.00005"), 3, set())
+    frac = resting_buy_levels(
+        Decimal("0.02978"), AbsoluteLattice(Decimal("0.00005")), 3, set()
+    )
     assert [p for _, p in frac] == [
         Decimal("0.02970"),
         Decimal("0.02965"),
@@ -219,16 +224,49 @@ def test_resting_levels_full_step_gap() -> None:
     # on an exact round level the clearance is exactly one step: 0.02975
     # becomes a buy only once the market reaches 0.02980.
     boundary = resting_buy_levels(
-        Decimal("0.02980"), Decimal("0.00005"), 1, set()
+        Decimal("0.02980"), AbsoluteLattice(Decimal("0.00005")), 1, set()
     )
     assert [p for _, p in boundary] == [Decimal("0.02975")]
+
+
+def test_percent_band_keeps_the_ratio_between_neighbouring_buys() -> None:
+    # the whole point of the percent grid: every buy is at least the
+    # profit ratio below the buy above it, at any price
+    ratio = Decimal("0.0066")
+    lattice = percent_lattice(ratio, Decimal("0.00001"))
+    levels = resting_buy_levels(Decimal("0.03640"), lattice, 5, set())
+    prices = [p for _, p in levels]
+    assert prices == [
+        Decimal("0.03613"),
+        Decimal("0.03589"),
+        Decimal("0.03565"),
+        Decimal("0.03541"),
+        Decimal("0.03517"),
+    ]
+    for high, low in pairwise(prices):
+        assert (high - low) / high >= ratio
+
+
+def test_percent_band_still_lays_buys_at_the_bottom_of_the_ladder() -> None:
+    # near the tick a rung is a tick wide, so the grid keeps trading
+    # instead of stalling on a step it cannot afford
+    lattice = percent_lattice(Decimal("0.0066"), Decimal("0.00001"))
+    levels = resting_buy_levels(Decimal("0.00005"), lattice, 6, set())
+    assert [p for _, p in levels] == [
+        Decimal("0.00004"),
+        Decimal("0.00003"),
+        Decimal("0.00002"),
+        Decimal("0.00001"),
+    ]
 
 
 def test_resting_levels_skip_held_and_go_deeper() -> None:
     # keep 4 *resting* buys — held levels are skipped, deeper unheld ones take
     # their place
     held = {Decimal("0.03080"), Decimal("0.03060")}
-    levels = resting_buy_levels(Decimal("0.03086"), Decimal("0.0001"), 4, held)
+    levels = resting_buy_levels(
+        Decimal("0.03086"), AbsoluteLattice(Decimal("0.0001")), 4, held
+    )
     assert [p for _, p in levels] == [
         Decimal("0.03070"),
         Decimal("0.03050"),
@@ -239,7 +277,7 @@ def test_resting_levels_skip_held_and_go_deeper() -> None:
 
 def test_resting_levels_excludes_price_on_round_level() -> None:
     levels = resting_buy_levels(
-        Decimal("0.03090"), Decimal("0.0001"), 3, set()
+        Decimal("0.03090"), AbsoluteLattice(Decimal("0.0001")), 3, set()
     )
     assert [p for _, p in levels] == [
         Decimal("0.03080"),
@@ -250,7 +288,7 @@ def test_resting_levels_excludes_price_on_round_level() -> None:
 
 def test_resting_levels_index_matches_price_over_step() -> None:
     levels = resting_buy_levels(
-        Decimal("0.03086"), Decimal("0.0001"), 2, set()
+        Decimal("0.03086"), AbsoluteLattice(Decimal("0.0001")), 2, set()
     )
     assert levels[0] == (307, Decimal("0.03070"))
     assert levels[1] == (306, Decimal("0.03060"))
@@ -258,16 +296,23 @@ def test_resting_levels_index_matches_price_over_step() -> None:
 
 def test_resting_levels_stop_at_zero() -> None:
     levels = resting_buy_levels(
-        Decimal("0.0003"), Decimal("0.0001"), 10, set()
+        Decimal("0.0003"), AbsoluteLattice(Decimal("0.0001")), 10, set()
     )
     assert [p for _, p in levels] == [Decimal("0.0002"), Decimal("0.0001")]
 
 
 def test_resting_levels_empty_on_invalid_input() -> None:
-    assert resting_buy_levels(Decimal("0"), Decimal("0.0001"), 6, set()) == []
-    assert resting_buy_levels(Decimal("0.03"), Decimal("0"), 6, set()) == []
     assert (
-        resting_buy_levels(Decimal("0.03"), Decimal("0.0001"), 0, set()) == []
+        resting_buy_levels(
+            Decimal("0"), AbsoluteLattice(Decimal("0.0001")), 6, set()
+        )
+        == []
+    )
+    assert (
+        resting_buy_levels(
+            Decimal("0.03"), AbsoluteLattice(Decimal("0.0001")), 0, set()
+        )
+        == []
     )
 
 
@@ -358,7 +403,8 @@ async def test_grid_state_held_covers_every_open_position() -> None:
     await _open_position(
         1000, "0.052"
     )  # manual bag (>=1000) must block its level too
-    _resting, held = await repository.grid_state(step)
+    _resting, entries = await repository.grid_state()
+    held = held_rungs(entries, AbsoluteLattice(step))
     # every held price blocks a fresh buy there — one buy per level, no
     # stacking
     assert held == {Decimal("0.02845"), Decimal("0.02945"), Decimal("0.052")}
@@ -379,7 +425,8 @@ async def test_grid_state_held_ignores_closed_positions() -> None:
             opened_at=datetime(2026, 7, 8, tzinfo=UTC),
         )
     )
-    _resting, held = await repository.grid_state(step)
+    _resting, entries = await repository.grid_state()
+    held = held_rungs(entries, AbsoluteLattice(step))
     # a closed position frees its level for the grid again
     assert held == {Decimal("0.02845")}
 

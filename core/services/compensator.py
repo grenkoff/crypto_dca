@@ -26,6 +26,7 @@ from core.strategy.compensation import (
     plan_market_exit,
     split_profit,
 )
+from core.strategy.lattice import GridGeometry
 from core.strategy.rounding import min_notional_price
 from core.strategy.types import (
     CompensationContext,
@@ -92,12 +93,14 @@ class Compensator:
         client: BybitClient,
         instrument: Instrument,
         config: StrategyConfig,
+        geometry: GridGeometry,
         bus: EventBus,
         balances: BalanceCache,
     ) -> None:
         self.client = client
         self.instrument = instrument
         self.config = config
+        self.geometry = geometry
         self.bus = bus
         self.balances = balances
 
@@ -185,8 +188,7 @@ class Compensator:
             maker_fee=self.config.maker_fee,
             current_price=current_price,
             tick_size=self.instrument.tick_size,
-            grid_step=self.config.grid_step,
-            tp_step=self.config.tp_step,
+            geometry=self.geometry,
             nearest_buy_price=nearest_buy,
             min_order_amt=self.instrument.min_order_amt,
             taker_fee=self.config.taker_fee,

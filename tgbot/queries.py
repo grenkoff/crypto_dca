@@ -11,6 +11,7 @@ import structlog
 from core.exchange.bybit import BybitClient
 from core.exchange.types import Side
 from core.services import repository
+from core.services.order_common import config_geometry
 from core.strategy.book import BookLevel, build_ladder
 from tgbot.formatters import (
     AprSnapshot,
@@ -211,13 +212,15 @@ async def book_snapshot() -> tuple[list[BookLevel], Decimal, str] | None:
         symbol = await repository.symbol()
         orders = await client.get_open_orders(symbol)
         price = await client.get_last_price(symbol)
+        instrument = await client.get_instrument(symbol)
     except Exception as exc:
         log.warning("book.fetch_failed", error=str(exc)[:100])
         return None
     config = await repository.load_config()
+    geometry = config_geometry(config, instrument.tick_size)
     rungs = build_ladder(
         [(order.price, order.qty, order.side == Side.BUY) for order in orders],
-        config.grid_step,
+        geometry.lattice,
     )
     return rungs, price, symbol
 

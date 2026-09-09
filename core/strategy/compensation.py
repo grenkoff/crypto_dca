@@ -1,13 +1,12 @@
 """Take-profit grid compaction: pull TPs down onto empty grid slots.
 
 On each profitable close the profit is banked into a credit pool. One TP —
-the nearest-to-market one that has an empty ``grid_step`` slot directly
-below it — descends into that slot, funded so the compensated pair stays
-strictly in profit; otherwise the profit stays banked until it can. This
-compacts the TP wall toward market with no gaps and no off-lattice orders,
-its bottom resting ``tp_step + grid_step`` above the nearest buy (a filled
-buy's TP sits ``tp_step`` above it, and the next resting buy is one
-``grid_step`` lower).
+the nearest-to-market one that has an empty lattice slot directly below it
+— descends into that slot, funded so the compensated pair stays strictly in
+profit; otherwise the profit stays banked until it can. This compacts the
+TP wall toward market with no gaps and no off-lattice orders, its bottom
+resting two slots above the nearest buy (a filled buy's TP takes one, the
+buy itself the other).
 """
 
 from __future__ import annotations
@@ -15,11 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from decimal import ROUND_DOWN, Decimal
 
-from core.strategy.rounding import (
-    next_tick_above,
-    round_down_to_tick,
-    round_up_to_tick,
-)
+from core.strategy.rounding import next_tick_above
 from core.strategy.types import (
     CompensationContext,
     CompensationDecision,
@@ -160,13 +155,13 @@ def _paired_exit(
 def _pinned(lot: OpenPosition, ctx: CompensationContext) -> bool:
     """Whether the exchange minimum leaves this lot nowhere to move.
 
-    One grid step down is the smallest move there is; a lot that cannot
+    One slot down is the smallest move there is; a lot that cannot
     afford even that is stuck where it stands.
     """
     if ctx.min_order_amt <= 0 or lot.qty <= 0:
         return False
     floor = ctx.min_order_amt / lot.qty
-    return lot.current_tp_price - ctx.grid_step < floor
+    return ctx.geometry.lattice.below(lot.current_tp_price) < floor
 
 
 def _market_value(lot: OpenPosition, ctx: CompensationContext) -> Decimal:
@@ -202,18 +197,6 @@ def _exit_decision(
     )
 
 
-def slot_below(tp_price: Decimal, grid_step: Decimal) -> Decimal:
-    """The nearest ``grid_step`` level strictly below ``tp_price``.
-
-    An on-grid price steps down a full ``grid_step``; an off-grid price
-    snaps down to its grid level, pulling a stray TP back onto the lattice.
-    """
-    snapped = round_down_to_tick(tp_price, grid_step)
-    if snapped < tp_price:
-        return snapped
-    return tp_price - grid_step
-
-
 def plan_hole_fill(
     open_positions: Sequence[OpenPosition],
     ctx: CompensationContext,
@@ -232,7 +215,7 @@ def plan_hole_fill(
     so a lot lands near the price rather than on top of it and is not
     sold into an immediate loss.
     """
-    if ctx.pool <= 0 or ctx.grid_step <= 0 or not open_positions:
+    if ctx.pool <= 0 or not open_positions:
         return None
     occupied = {p.current_tp_price for p in open_positions}
     for hole in _holes(ctx, occupied, offset):
@@ -258,7 +241,7 @@ def _step_down(
     for lot in sorted(open_positions, key=lambda p: p.current_tp_price):
         if lot.filled_qty > 0:
             continue
-        target = slot_below(lot.current_tp_price, ctx.grid_step)
+        target = ctx.geometry.lattice.below(lot.current_tp_price)
         if target in occupied or target < floor:
             continue
         if ctx.min_order_amt > 0 and target * lot.qty < ctx.min_order_amt:
@@ -326,13 +309,14 @@ def _holes(
     planner walks outward until it finds a move it can pay for.
     """
     floor = _wall_floor(ctx) + ctx.current_price * max(offset, Decimal(0))
-    slot = round_up_to_tick(floor, ctx.grid_step)
+    lattice = ctx.geometry.lattice
+    slot = lattice.snap_up(floor)
     highest = max(occupied) if occupied else slot
     found: list[Decimal] = []
     while slot <= highest and len(found) < _MAX_HOLES_SCANNED:
         if slot not in occupied:
             found.append(slot)
-        slot += ctx.grid_step
+        slot = lattice.above(slot)
     return found
 
 
@@ -341,6 +325,4 @@ def _wall_floor(ctx: CompensationContext) -> Decimal:
     market_floor = next_tick_above(ctx.current_price, ctx.tick_size)
     if ctx.nearest_buy_price <= 0:
         return market_floor
-    return max(
-        market_floor, ctx.nearest_buy_price + ctx.tp_step + ctx.grid_step
-    )
+    return max(market_floor, ctx.geometry.wall_floor(ctx.nearest_buy_price))

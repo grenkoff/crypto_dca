@@ -96,7 +96,6 @@ class StrategyConfig(Base):
     order_qty_quote: Mapped[Decimal] = mapped_column(
         _AMOUNT, default=Decimal("10")
     )
-    top_anchor: Mapped[Decimal | None] = mapped_column(_AMOUNT)
     min_profit_quote: Mapped[Decimal] = mapped_column(
         _AMOUNT, default=Decimal("0.01")
     )

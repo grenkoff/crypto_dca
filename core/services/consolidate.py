@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 import structlog
 
@@ -17,6 +17,7 @@ from core.db.models import StrategyConfig
 from core.exchange.bybit import BybitClient
 from core.exchange.types import Side
 from core.services import repository
+from core.strategy.lattice import GridGeometry, nearest_rung
 from core.strategy.pricing import compute_tp_price
 from core.strategy.rounding import next_tick_above, round_down_to_tick
 
@@ -59,8 +60,7 @@ class MergeGroup:
 def plan_consolidation(
     *,
     positions: list[PosRow],
-    step: Decimal,
-    tp_step: Decimal,
+    geometry: GridGeometry,
     min_profit_quote: Decimal,
     maker_fee: Decimal,
     tick_size: Decimal,
@@ -72,8 +72,6 @@ def plan_consolidation(
     Partially-filled positions are excluded. The oldest lot survives; the rest
     are absorbed. The merged sell rests above the recomputed TP and market.
     """
-    if step <= 0:
-        raise ValueError("step must be positive")
     market_floor = next_tick_above(market_price, tick_size)
 
     groups: dict[Decimal, list[PosRow]] = {}
@@ -82,8 +80,9 @@ def plan_consolidation(
             continue
         if _MANUAL_BAG_MIN <= p.level_index < _MANUAL_BAG_MAX:
             continue
-        k = int((p.entry / step).to_integral_value(rounding=ROUND_HALF_UP))
-        groups.setdefault(Decimal(k) * step, []).append(p)
+        groups.setdefault(nearest_rung(geometry.lattice, p.entry), []).append(
+            p
+        )
 
     plan: list[MergeGroup] = []
     for price_key, rows in sorted(groups.items()):
@@ -101,7 +100,7 @@ def plan_consolidation(
             entry_price=weighted_entry,
             qty=combined_qty,
             fees_in=combined_fees_in,
-            tp_step=tp_step,
+            geometry=geometry,
             min_profit_quote=min_profit_quote,
             maker_fee=maker_fee,
             tick_size=tick_size,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import delete, func, or_, select, update
@@ -89,18 +89,6 @@ async def _count(session: AsyncSession, *conds: Any) -> int:
     return int(val or 0)
 
 
-async def existing_active_levels() -> set[int]:
-    """Level indices of awaiting-fill grid levels and open positions."""
-    async with new_session() as session:
-        levels = await session.scalars(
-            select(GridLevel.level_index).where(GridLevel.status == _AWAITING)
-        )
-        positions = await session.scalars(
-            select(Position.level_index).where(Position.status == _OPEN)
-        )
-        return set(levels.all()) | set(positions.all())
-
-
 async def naked_candidates(min_age_seconds: int) -> list[tuple[int, str]]:
     """(id, tp_order_id) for open positions older than the guard window."""
     cutoff = _now() - timedelta(seconds=min_age_seconds)
@@ -126,10 +114,8 @@ async def get_open_position(pos_id: int) -> Position | None:
         return found
 
 
-async def grid_state(
-    step: Decimal,
-) -> tuple[dict[Decimal, tuple[int, str]], set[Decimal]]:
-    """Resting buys keyed by price and the set of held round prices."""
+async def grid_state() -> tuple[dict[Decimal, tuple[int, str]], list[Decimal]]:
+    """Resting buys keyed by price, and every open position's entry."""
     async with new_session() as session:
         rows = await session.execute(
             select(
@@ -142,14 +128,10 @@ async def grid_state(
             )
         )
         resting = {price: (int(idx), oid) for price, idx, oid in rows.all()}
-        held: set[Decimal] = set()
         entries = await session.scalars(
             select(Position.entry_price).where(Position.status == _OPEN)
         )
-        for entry in entries.all():
-            k = int((entry / step).to_integral_value(rounding=ROUND_HALF_UP))
-            held.add(Decimal(k) * step)
-    return resting, held
+        return resting, list(entries.all())
 
 
 async def idle_level(level_index: int) -> None:

@@ -70,8 +70,13 @@ async def _check_strategy_config() -> Check:
     if issues:
         c.fail("; ".join(issues))
     else:
+        step = (
+            f"step={cfg.grid_step * 100:.4f}%/rung"
+            if cfg.grid_mode == "percent"
+            else f"step={cfg.grid_step} tp_step={cfg.tp_step}"
+        )
         c.ok(
-            f"symbol={cfg.symbol} mode={cfg.grid_mode} step={cfg.grid_step} "
+            f"symbol={cfg.symbol} mode={cfg.grid_mode} {step} "
             f"qty={cfg.order_qty_quote} max={cfg.max_open_orders}"
         )
     return c

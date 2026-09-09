@@ -5,6 +5,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import cast
+
+from core.db.models import StrategyConfig
+from core.strategy.lattice import GridGeometry, build_geometry
+from core.strategy.types import GridMode
+
+
+def config_geometry(
+    config: StrategyConfig, tick_size: Decimal
+) -> GridGeometry:
+    """Grid geometry for a strategy config, validating its mode."""
+    mode = str(config.grid_mode)
+    if mode not in ("absolute", "percent"):
+        raise ValueError(f"unexpected grid_mode: {mode}")
+    return build_geometry(
+        mode=cast(GridMode, mode),
+        step=config.grid_step,
+        tp_step=config.tp_step,
+        tick_size=tick_size,
+    )
 
 
 @dataclass
