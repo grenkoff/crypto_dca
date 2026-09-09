@@ -26,6 +26,7 @@ uv run python -m tgbot              # telegram bot
 uv run python -m webui              # read-only dashboard (WEBUI_HOST/PORT)
 uv run python -m cli preflight      # validate config/credentials/balance
 uv run python -m cli grid-geometry  # preview the percent grid ladder
+uv run python -m cli trader-lease   # may a trader start? (exit 1 = lease held)
 ```
 
 ## Checks
