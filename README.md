@@ -121,7 +121,11 @@ Two spacings, picked by `grid_mode` in the strategy config:
   down to the tick — below `tick / grid_step` a rung widens to a single
   tick rather than stalling, so the grid keeps trading to the bottom.
 
-A position is only written off as phantom-sold when the wallet is
+A fill is never dropped: if a prune raced it and cleared its level, the
+buy is still booked — at its real fill price, on a level of its own — and
+a cancel that comes back "order does not exist" asks the exchange what
+actually happened before idling the level. A position is only written off
+as phantom-sold when the wallet is
 genuinely short by its remainder: an "insufficient balance" from the
 exchange says the *free* coin ran out, which is just as easily another
 lot's resting sell holding it. Every coin in the wallet should be

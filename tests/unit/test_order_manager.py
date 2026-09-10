@@ -307,21 +307,6 @@ async def test_handle_buy_fill_too_small_leaves_coin_free(
     assert not any(p["side"] == Side.SELL for p in client.placed)
 
 
-async def test_handle_buy_fill_with_no_matching_level_warns_and_returns_none(
-    om: OrderManager,
-) -> None:
-    execution = _exec(
-        exec_id="e0",
-        order_id="orphan",
-        side=Side.BUY,
-        price=Decimal("60000"),
-        qty=Decimal("0.001"),
-        fee=Decimal("0.06"),
-        fee_coin="USDT",
-    )
-    assert await om.handle_buy_fill(execution) is None
-
-
 async def test_handle_sell_fill_closes_position_and_runs_compensation(
     om: OrderManager, client: FakeBybitClient, bus: RecordingEventBus
 ) -> None:
@@ -887,3 +872,28 @@ async def test_settle_phantom_books_the_lot_the_wallet_cannot_cover(
     assert (await repository.get_position(victim.id)).status == (
         PositionStatus.CLOSED
     )
+
+
+async def test_a_fill_whose_level_was_pruned_is_still_booked(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    # a prune that raced the fill clears the level's order id; dropping
+    # the fill then left the coin outside the book entirely
+    execution = _exec(
+        exec_id="e-orphan",
+        order_id="vanished-level",
+        side=Side.BUY,
+        price=Decimal("60000"),
+        qty=Decimal("0.000333"),
+        fee=Decimal("0.000000333"),
+        fee_coin="BTC",
+    )
+    level_index = await om.handle_buy_fill(execution)
+    assert level_index is not None
+    assert level_index >= repository.ADOPTED_LEVEL_BASE
+    position = await _position_at(level_index)
+    # booked at what it really cost, not at some later market price
+    assert position.entry_price == Decimal("60000")
+    assert position.qty == Decimal("0.000333")
+    assert position.tp_order_id != ""
+    assert await _exec_exists("e-orphan")

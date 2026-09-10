@@ -366,3 +366,23 @@ def test_balance_line_shows_two_decimals() -> None:
 
 def test_balance_line_is_dropped_when_the_exchange_is_unreachable() -> None:
     assert build_equity(None) == ""
+
+
+def test_adopted_coin_reads_as_a_sentence_not_a_payload() -> None:
+    # the event used to fall through to the raw-dict branch
+    text = format_event(
+        {
+            "type": "coin.adopted",
+            "payload": {
+                "lots": "3",
+                "qty": "541.08",
+                "entry": "0.03881",
+            },
+        }
+    )
+    assert text == "🧹 Adopted `3` lot(s) · `541.08` @ `0.03881`"
+
+
+def test_an_unknown_event_still_falls_back_to_its_payload() -> None:
+    text = format_event({"type": "mystery", "payload": {"a": 1}})
+    assert text.startswith("📨 mystery:")

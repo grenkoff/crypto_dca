@@ -5,7 +5,7 @@ Kept side-effect free so they're easily snapshot-testable.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -260,23 +260,56 @@ def _build_projection(series: Sequence[Decimal]) -> str:
     )
 
 
+def _format_adopted(payload: dict[str, Any]) -> str:
+    """Coin that was outside the book, put back to work as lots."""
+    lots = payload.get("lots", "?")
+    qty = _dec(payload.get("qty"))
+    entry = payload.get("entry")
+    return (
+        f"🧹 Adopted `{lots}` lot(s) · `{_q(qty, '0.01')}` "
+        f"@ `{_price5(entry)}`"
+    )
+
+
+def _format_placed(payload: dict[str, Any]) -> str:
+    """A resting buy laid on the grid."""
+    return f"🔵 `{_price5(payload.get('price'))}`"
+
+
+def _format_cancelled(payload: dict[str, Any]) -> str:
+    """A resting buy pulled off the grid."""
+    return f"❌ `{_price5(payload.get('price'))}`"
+
+
+def _format_opened(payload: dict[str, Any]) -> str:
+    """A buy that filled, with the take-profit now resting over it."""
+    return (
+        f"🟢 `{_price5(payload.get('entry_price'))}` → "
+        f"TP `{_price5(payload.get('tp_price'))}`"
+    )
+
+
+def _format_error(payload: dict[str, Any]) -> str:
+    """Something the trader wants a human to see."""
+    return f"❌ Error: {payload.get('message', '?')}"
+
+
+_RENDERERS: dict[str, Callable[[dict[str, Any]], str]] = {
+    "order.placed": _format_placed,
+    "order.cancelled": _format_cancelled,
+    "position.opened": _format_opened,
+    "position.closed": _format_closed,
+    "pool.drained": _format_drained,
+    "coin.adopted": _format_adopted,
+    "error": _format_error,
+}
+
+
 def format_event(event: dict[str, Any]) -> str:
     """Render a single live event for the notifications channel."""
     etype = event.get("type", "?")
     payload = event.get("payload", {})
-    if etype == "order.placed":
-        return f"🔵 `{_price5(payload.get('price'))}`"
-    if etype == "order.cancelled":
-        return f"❌ `{_price5(payload.get('price'))}`"
-    if etype == "position.opened":
-        return (
-            f"🟢 `{_price5(payload.get('entry_price'))}` → "
-            f"TP `{_price5(payload.get('tp_price'))}`"
-        )
-    if etype == "position.closed":
-        return _format_closed(payload)
-    if etype == "pool.drained":
-        return _format_drained(payload)
-    if etype == "error":
-        return f"❌ Error: {payload.get('message', '?')}"
-    return f"📨 {etype}: `{payload}`"
+    render = _RENDERERS.get(etype)
+    if render is None:
+        return f"📨 {etype}: `{payload}`"
+    return render(payload)

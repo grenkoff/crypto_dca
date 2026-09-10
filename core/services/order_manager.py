@@ -126,16 +126,32 @@ class OrderManager:
         )
         return order_id
 
+    async def _level_for_fill(self, execution: BybitExecution) -> int:
+        """The level a filled buy belongs to, or a fresh one off the grid.
+
+        A prune that raced the fill clears the level's order id, and the
+        fill then belongs to no level at all. Booking it on a level of its
+        own keeps the real entry price and the execution, where dropping
+        it used to leave the coin outside the book entirely.
+        """
+        level = await repository.find_level_by_order_id(execution.order_id)
+        if level is not None:
+            return int(level.level_index)
+        spare_level = await repository.next_adopted_level()
+        log.warning(
+            "buy_fill.level_lost",
+            order_id=execution.order_id,
+            booked_at=spare_level,
+        )
+        return spare_level
+
     async def handle_buy_fill(self, execution: BybitExecution) -> int | None:
         """Book a filled buy: open a position and rest its take-profit."""
-        level = await repository.find_level_by_order_id(execution.order_id)
-        if level is None:
-            log.warning("buy_fill.no_level", order_id=execution.order_id)
-            return None
+        level_index = await self._level_for_fill(execution)
         if execution.qty * execution.price < self.instrument.min_order_amt:
             log.warning(
                 "buy_fill.too_small_left_free",
-                level=level.level_index,
+                level=level_index,
                 qty=str(execution.qty),
                 notional=str(execution.qty * execution.price),
             )
@@ -157,12 +173,12 @@ class OrderManager:
                 Side.SELL,
                 execution.qty,
                 tp_price,
-                order_link_id=link_id("grid-tp", level.level_index),
+                order_link_id=link_id("grid-tp", level_index),
             )
         except Exception as exc:
             log.exception(
                 "buy_fill.tp_failed_coin_free",
-                level=level.level_index,
+                level=level_index,
                 qty=str(execution.qty),
                 tp=str(tp_price),
                 error=str(exc)[:100],
@@ -170,14 +186,14 @@ class OrderManager:
             raise
         await repository.persist_buy_fill(
             execution=execution,
-            level_index=level.level_index,
+            level_index=level_index,
             fees_in=fees_quote,
             tp_price=tp_price,
             tp_order_id=tp_order_id,
         )
         log.info(
             "buy.filled",
-            level=level.level_index,
+            level=level_index,
             entry=str(execution.price),
             qty=str(execution.qty),
             tp=str(tp_price),
@@ -185,12 +201,12 @@ class OrderManager:
         await self.bus.publish(
             "position.opened",
             {
-                "level": level.level_index,
+                "level": level_index,
                 "entry_price": str(execution.price),
                 "tp_price": str(tp_price),
             },
         )
-        return int(level.level_index)
+        return level_index
 
     async def drain_pool(self, current_price: Decimal) -> None:
         """Spend the banked pool without waiting for a profitable close.

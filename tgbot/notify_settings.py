@@ -15,6 +15,7 @@ EVENT_TOGGLE: dict[str, str] = {
     "compensation.applied": "notify_compensation",
     "pool.drained": "notify_compensation",
     "position.opened": "notify_opened",
+    "coin.adopted": "notify_opened",
     "order.placed": "notify_order_placed",
     "order.cancelled": "notify_order_cancelled",
 }
