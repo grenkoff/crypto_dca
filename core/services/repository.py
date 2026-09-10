@@ -41,6 +41,7 @@ _CLOSED = str(PositionStatus.CLOSED)
 _SELL = str(OrderSide.SELL)
 _MAX_CHART_DAYS = 100
 _AWAITING = str(LevelStatus.AWAITING_FILL)
+ADOPTED_LEVEL_BASE = 1_000_000
 _IDLE = str(LevelStatus.IDLE)
 _FILLED = str(LevelStatus.FILLED)
 
@@ -1039,6 +1040,52 @@ async def upsert_grid_level(
         level.current_buy_order_id = order_id
         level.status = _AWAITING
         level.updated_at = _now()
+
+
+async def next_adopted_level() -> int:
+    """The next free level index reserved for hand-adopted lots.
+
+    Kept far above any lattice rung so an adopted lot can never share a
+    level with a grid one, whatever the geometry.
+    """
+    async with new_session() as session:
+        highest = await session.scalar(
+            select(func.max(Position.level_index)).where(
+                Position.level_index >= ADOPTED_LEVEL_BASE
+            )
+        )
+        return ADOPTED_LEVEL_BASE if highest is None else int(highest) + 1
+
+
+async def adopt_position(
+    *,
+    level_index: int,
+    entry_price: Decimal,
+    qty: Decimal,
+    tp_price: Decimal,
+    tp_order_id: str,
+) -> int:
+    """Open a lot over coin already in the wallet (atomic)."""
+    async with new_session() as session, session.begin():
+        position = Position(
+            level_index=level_index,
+            entry_price=entry_price,
+            qty=qty,
+            fees_in=Decimal(0),
+            fees_out=Decimal(0),
+            filled_qty=Decimal(0),
+            sell_value=Decimal(0),
+            tp_order_id=tp_order_id,
+            tp_price=tp_price,
+            status=_OPEN,
+            realized_pnl=Decimal(0),
+            compensation_credit=Decimal(0),
+            opened_at=_now(),
+            adopted=True,
+        )
+        session.add(position)
+        await session.flush()
+        return int(position.id)
 
 
 async def open_position_at_level(level_index: int) -> Position | None:

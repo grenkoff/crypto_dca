@@ -54,7 +54,8 @@ class GridSettings(BaseSettings):
 
     ``step_pct`` spaces the resting buys — how far the price must fall to
     reach the next one — and ``profit_pct`` is what a lot earns when its
-    take-profit fills. Neither drifts as the market moves.
+    take-profit fills. Neither drifts as the market moves. ``auto_adopt``
+    keeps coin the book does not cover from lying idle.
     """
 
     model_config = SettingsConfigDict(
@@ -63,6 +64,7 @@ class GridSettings(BaseSettings):
 
     step_pct: Decimal = Field(default=Decimal("0.0011"))
     profit_pct: Decimal = Field(default=Decimal("0.0066"))
+    auto_adopt: bool = Field(default=True)
 
 
 class TelegramSettings(BaseSettings):

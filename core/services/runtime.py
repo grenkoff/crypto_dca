@@ -18,6 +18,7 @@ from core.exchange.dry_run import DryRunBybitClient
 from core.exchange.types import Side
 from core.exchange.ws import BybitPrivateStream, StreamEvent
 from core.services import repository
+from core.services.adopt import SpareAdopter
 from core.services.events import EventBus, NoOpEventBus
 from core.services.grid_maintainer import GridMaintainer
 from core.services.healer import Healer
@@ -55,6 +56,7 @@ class TraderRuntime:
         self._current_price = Decimal(0)
         self._grid: GridMaintainer | None = None
         self._healer: Healer | None = None
+        self._adopter: SpareAdopter | None = None
 
     async def bootstrap(self) -> None:
         """Load config, build the OrderManager, lay the initial grid."""
@@ -78,6 +80,7 @@ class TraderRuntime:
         )
         self._grid = GridMaintainer(self._om, self._bus)
         self._healer = Healer(self._om)
+        self._adopter = SpareAdopter(self._om, self._bus)
         await self._mark_started()
         log.info(
             "trader.bootstrap",
@@ -152,6 +155,7 @@ class TraderRuntime:
             and self._om is not None
             and self._grid is not None
             and self._healer is not None
+            and self._adopter is not None
         )
         while not self._stop.is_set():
             try:
@@ -162,6 +166,7 @@ class TraderRuntime:
                 await self._healer.heal(self._current_price)
                 await self._grid.ensure(self._current_price)
                 await self._om.drain_pool(self._current_price)
+                await self._adopter.sweep(self._current_price)
             except Exception as exc:
                 log.exception("reconcile.error", error=str(exc))
             try:

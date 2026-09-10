@@ -27,6 +27,7 @@ uv run python -m webui              # read-only dashboard (WEBUI_HOST/PORT)
 uv run python -m cli preflight      # validate config/credentials/balance
 uv run python -m cli grid-geometry  # preview the percent grid ladder
 uv run python -m cli trader-lease   # may a trader start? (exit 1 = lease held)
+uv run python -m cli adopt          # put uncovered coin back to work
 ```
 
 ## Checks
@@ -119,6 +120,16 @@ Two spacings, picked by `grid_mode` in the strategy config:
   counted upward, which keeps level indexes stable and holds the ratio
   down to the tick — below `tick / grid_step` a rung widens to a single
   tick rather than stalling, so the grid keeps trading to the bottom.
+
+Every coin in the wallet should be working. Coin no open lot accounts for
+— a bag taken over by hand, or a close that booked a sale which never
+reached the exchange — is swept into grid-sized lots at the market price
+on the reconcile tick, each with the usual resting take-profit; the sweep
+waits for the spare to survive a few ticks so a fill that has not rested
+its sell yet is never double-booked. `GRID_AUTO_ADOPT=0` turns it off, and
+`python -m cli adopt` does the same by hand with a dry-run first. Adopted
+lots are flagged `adopted` and take level indexes from 1,000,000 up, clear
+of every grid level.
 
 Defaults live in `GRID_STEP_PCT` and `GRID_PROFIT_PCT` (see
 `GridSettings`). `python -m cli grid-geometry` previews the ladder against
