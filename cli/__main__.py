@@ -124,6 +124,21 @@ async def _consolidate(*, commit: bool) -> None:
     typer.echo(f"\nConsolidated {len(done)} group(s).")
 
 
+async def _refuse_if_trader_live(clash: str) -> None:
+    """Stop an operator command that would fight a running trader."""
+    beat = await repository.last_heartbeat()
+    now = datetime.now(tz=UTC)
+    if not another_instance_alive(beat, now, INSTANCE_LEASE_S):
+        return
+    age = "unknown" if beat is None else f"{(now - beat).total_seconds():.0f}s"
+    typer.echo(
+        f"trader is live (heartbeat {age} ago) — stop it first,"
+        f" otherwise both will {clash}",
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
 async def _compensate(commit: bool) -> None:
     """Report, and optionally make, the moves the pool can fund."""
     from core.config.bootstrap import bootstrap
@@ -137,16 +152,7 @@ async def _compensate(commit: bool) -> None:
     if pool <= 0 or source is None:
         typer.echo(f"pool {pool}, nothing to spend")
         return
-    _paused, _open, _started, beat = await repository.status_data()
-    if beat is not None:
-        age = (datetime.now(tz=UTC) - beat).total_seconds()
-        if age < 90:
-            typer.echo(
-                f"trader is live (heartbeat {age:.0f}s ago) — stop it"
-                " first, otherwise both will move the same orders",
-                err=True,
-            )
-            raise typer.Exit(1)
+    await _refuse_if_trader_live("move the same orders")
     config = await repository.get_config()
     client = BybitClient.from_settings()
     symbol = str(config.symbol)
@@ -329,6 +335,72 @@ def trader_lease() -> None:
     """
     if asyncio.run(_lease_held()):
         raise typer.Exit(1)
+
+
+async def _adopt(*, commit: bool, entry_raw: str) -> None:
+    """Report, and optionally open, lots over coin the book misses."""
+    from core.services.adopt import SpareAdopter, plan_adoption, spare_coin
+    from core.services.events import NoOpEventBus
+    from core.services.order_manager import OrderManager
+
+    await _refuse_if_trader_live("place sells over the same coin")
+    config = await repository.load_config()
+    client = BybitClient.from_settings()
+    symbol = str(config.symbol)
+    instrument = await client.get_instrument(symbol)
+    entry = (
+        Decimal(entry_raw)
+        if entry_raw
+        else await client.get_last_price(symbol)
+    )
+    balances = await client.get_balances()
+    positions = await repository.open_positions()
+    spare = spare_coin(balances, positions, instrument.base_coin)
+    plan = plan_adoption(
+        spare=spare,
+        entry_price=entry,
+        order_qty_quote=config.order_qty_quote,
+        instrument=instrument,
+    )
+
+    typer.echo("\n=== ADOPTION PLAN ===")
+    typer.echo(
+        f"{instrument.base_coin}: {spare} outside the book"
+        f" ({len(positions)} open lot(s) hold the rest)"
+    )
+    if plan.lots <= 0:
+        typer.echo("nothing to adopt — under one lot.")
+        return
+    om = OrderManager(
+        client=client,
+        instrument=instrument,
+        config=config,
+        bus=NoOpEventBus(),
+    )
+    adopter = SpareAdopter(om, NoOpEventBus())
+    typer.echo(
+        f"  {plan.lots} lot(s) x {plan.lot_qty} @ entry {entry}"
+        f" = {plan.total_qty} (~${plan.total_qty * entry:.2f})"
+    )
+    typer.echo(f"  leftover left alone: {plan.leftover}")
+    if not commit:
+        typer.echo("\nDRY-RUN — nothing changed. Re-run with --commit.")
+        return
+    opened = await adopter.commit(plan, limit=plan.lots)
+    typer.echo(f"\nAdopted {opened} lot(s).")
+
+
+@app.command()
+def adopt(
+    commit: bool = typer.Option(
+        False, help="Open the lots and rest their sells (default: dry-run)."
+    ),
+    entry: str = typer.Option(
+        "", "--entry", help="Entry price to book (default: market)."
+    ),
+) -> None:
+    """Put coin the book does not cover back to work as grid lots."""
+    asyncio.run(_adopt(commit=commit, entry_raw=entry))
 
 
 if __name__ == "__main__":
