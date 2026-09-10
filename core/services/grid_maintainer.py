@@ -21,6 +21,12 @@ from core.strategy.grid import (
 log = structlog.get_logger()
 
 
+def _order_gone(exc: Exception) -> bool:
+    """Whether a cancel failed because the order is no longer resting."""
+    message = str(exc)
+    return "170213" in message or "does not exist" in message.lower()
+
+
 class GridMaintainer:
     """Maintain a contiguous band of resting buy orders below market."""
 
@@ -92,13 +98,12 @@ class GridMaintainer:
                 await self._om.client.cancel_order(self._om.symbol, order_id)
                 cancelled = True
             except Exception as exc:
-                if (
-                    "170213" not in str(exc)
-                    and "does not exist" not in str(exc).lower()
-                ):
+                if not _order_gone(exc):
                     log.warning(
                         "grid.prune_failed", price=str(p), error=str(exc)
                     )
+                    continue
+                if await self._book_late_fill(order_id):
                     continue
             await repository.idle_level(k)
             log.info("grid.pruned", price=str(p))
@@ -106,6 +111,37 @@ class GridMaintainer:
             if cancelled:
                 await self._bus.publish("order.cancelled", {"price": str(p)})
         return freed
+
+    async def _book_late_fill(self, order_id: str) -> bool:
+        """Book a buy that filled just as we tried to cancel it.
+
+        The exchange answers "order does not exist" both for an order that
+        is gone and for one that has just filled. Idling the level on the
+        second case loses the fill — and with it the coin, which lands
+        outside the book. So ask what actually happened before idling.
+        """
+        try:
+            executions = await self._om.client.get_order_executions(
+                self._om.symbol, order_id
+            )
+        except Exception as exc:
+            log.warning(
+                "grid.prune_lookup_failed",
+                order_id=order_id,
+                error=str(exc)[:120],
+            )
+            return False
+        booked = False
+        for execution in executions:
+            if execution.side != Side.BUY:
+                continue
+            if await repository.exec_logged(execution.exec_id):
+                booked = True
+                continue
+            log.warning("grid.prune_raced_fill", order_id=order_id)
+            if await self._om.handle_buy_fill(execution) is not None:
+                booked = True
+        return booked
 
     async def _place_missing(
         self,
