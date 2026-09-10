@@ -58,6 +58,7 @@ class Healer:
             instrument=om.instrument,
             config=om.config,
             bus=om.bus,
+            balances=om.balances,
         )
 
     async def heal(self, price: Decimal) -> None:

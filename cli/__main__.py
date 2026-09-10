@@ -339,7 +339,8 @@ def trader_lease() -> None:
 
 async def _adopt(*, commit: bool, entry_raw: str) -> None:
     """Report, and optionally open, lots over coin the book misses."""
-    from core.services.adopt import SpareAdopter, plan_adoption, spare_coin
+    from core.services.adopt import SpareAdopter, plan_adoption
+    from core.services.balances import spare_coin
     from core.services.events import NoOpEventBus
     from core.services.order_manager import OrderManager
 

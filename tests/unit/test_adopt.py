@@ -11,11 +11,8 @@ import pytest
 from core.db.models import Position, PositionStatus, StrategyConfig
 from core.exchange.types import Balance, Instrument, Side
 from core.services import repository
-from core.services.adopt import (
-    SpareAdopter,
-    plan_adoption,
-    spare_coin,
-)
+from core.services.adopt import SpareAdopter, plan_adoption
+from core.services.balances import book_shortfall, spare_coin
 from core.services.events import NoOpEventBus
 from core.services.order_manager import OrderManager
 from tests.conftest import add_rows
@@ -69,6 +66,22 @@ def test_spare_is_never_negative() -> None:
 
 def test_a_missing_coin_reads_as_no_spare() -> None:
     assert spare_coin({}, [], "KAS") == Decimal(0)
+
+
+def test_a_short_book_is_the_mirror_of_spare_coin() -> None:
+    # the wallet holds 60 of the 100 the lot claims: 40 sold unseen
+    balances = {
+        "KAS": Balance(coin="KAS", free=Decimal("60"), locked=Decimal("0"))
+    }
+    assert book_shortfall(balances, [_lot("100")], "KAS") == Decimal("40")
+    assert spare_coin(balances, [_lot("100")], "KAS") == Decimal(0)
+
+
+def test_a_covered_book_is_never_short() -> None:
+    balances = {
+        "KAS": Balance(coin="KAS", free=Decimal("150"), locked=Decimal("0"))
+    }
+    assert book_shortfall(balances, [_lot("100")], "KAS") == Decimal(0)
 
 
 def test_spare_splits_into_grid_sized_lots() -> None:

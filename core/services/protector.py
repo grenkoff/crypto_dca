@@ -10,6 +10,7 @@ from core.db.models import Position, StrategyConfig
 from core.exchange.bybit import BybitClient
 from core.exchange.types import Instrument, Side
 from core.services import repository
+from core.services.balances import BalanceCache, book_shortfall
 from core.services.events import EventBus
 from core.services.order_common import link_id
 from core.strategy.rounding import min_notional_price, next_tick_above
@@ -27,11 +28,13 @@ class Protector:
         instrument: Instrument,
         config: StrategyConfig,
         bus: EventBus,
+        balances: BalanceCache,
     ) -> None:
         self.client = client
         self.instrument = instrument
         self.config = config
         self.bus = bus
+        self.balances = balances
 
     async def reprotect(
         self, position: Position, current_price: Decimal
@@ -64,12 +67,35 @@ class Protector:
         log.warning("position.reprotected", id=position.id, price=str(price))
         return order_id
 
-    async def settle_phantom(self, position: Position) -> Decimal:
-        """Close a phantom-open position whose coin is already gone.
+    async def _coin_is_gone(self, position: Position) -> bool:
+        """Whether the wallet is short by at least this lot's remainder.
 
-        The TP filled under a superseded order id we can't trace, so book it
-        at its recorded TP price to match the wallet. Returns realized PnL.
+        The exchange refuses a sell for want of *free* coin, which says
+        nothing about whether this lot's coin exists — it may be locked in
+        another lot's resting sell. Only a book that claims more coin than
+        the wallet holds proves something was really sold behind our back.
         """
+        snapshot = await self.balances.snapshot()
+        positions = await repository.open_positions()
+        missing = book_shortfall(
+            snapshot, positions, self.instrument.base_coin
+        )
+        return missing >= position.remaining_qty > 0
+
+    async def settle_phantom(self, position: Position) -> Decimal | None:
+        """Close a position whose coin the wallet no longer holds.
+
+        The TP filled under a superseded order id we can't trace, so book
+        it at its recorded TP price to match the wallet. Returns the
+        realized PnL, or None when the coin turns out to still be there.
+        """
+        if not await self._coin_is_gone(position):
+            log.warning(
+                "position.phantom_refused",
+                id=position.id,
+                qty=str(position.remaining_qty),
+            )
+            return None
         price = position.tp_price or position.entry_price
         realized = await repository.close_at_price(
             position=position, price=price, maker_fee=self.config.maker_fee

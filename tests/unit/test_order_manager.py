@@ -22,6 +22,7 @@ from core.db.models import (
 from core.db.session import new_session
 from core.exchange.types import Balance, Execution, Instrument, Side
 from core.services import repository
+from core.services.balances import BalanceCache
 from core.services.events import RecordingEventBus
 from core.services.order_manager import OrderManager
 from core.services.protector import Protector
@@ -73,13 +74,16 @@ class FakeBybitClient:
         self.sold: list[dict[str, Any]] = []
         self.fills: dict[str, Decimal] = {}
         self.market_price = Decimal("40000")
+        self.base_free = Decimal("0")
 
     async def get_balances(self) -> dict[str, Balance]:
         return {
             "USDT": Balance(
                 coin="USDT", free=Decimal("50"), locked=Decimal("0")
             ),
-            "BTC": Balance(coin="BTC", free=Decimal("0"), locked=Decimal("0")),
+            "BTC": Balance(
+                coin="BTC", free=self.base_free, locked=Decimal("0")
+            ),
         }
 
     async def place_limit(
@@ -212,6 +216,7 @@ def protector(
         instrument=instrument,
         config=config,
         bus=bus,
+        balances=BalanceCache(client),  # type: ignore[arg-type]
     )
 
 
@@ -834,3 +839,51 @@ async def test_percent_config_takes_the_profit_ratio_at_any_price(
     # the take-profit snaps to a buy rung, so it can overshoot — but by
     # less than the rung it snapped to
     assert profit < Decimal("0.0066") + Decimal("0.0011")
+
+
+async def test_settle_phantom_refuses_while_the_wallet_holds_the_coin(
+    protector: Protector, client: FakeBybitClient
+) -> None:
+    # "insufficient balance" only means the *free* coin is short — this
+    # lot's coin can be locked in another lot's resting sell, and writing
+    # it off would hand real coin to nobody
+    client.base_free = Decimal("0.005")
+    pos = await add_one(
+        Position(
+            level_index=9,
+            entry_price=Decimal("59000"),
+            qty=Decimal("0.001"),
+            tp_price=Decimal("59100"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
+    )
+    assert await protector.settle_phantom(pos) is None
+    still_open = await repository.get_position(pos.id)
+    assert still_open.status == PositionStatus.OPEN
+    assert still_open.filled_qty == Decimal(0)
+
+
+async def test_settle_phantom_books_the_lot_the_wallet_cannot_cover(
+    protector: Protector, client: FakeBybitClient
+) -> None:
+    # the book claims 0.003 and the wallet holds 0.001: one lot's worth
+    # really did sell behind our back
+    client.base_free = Decimal("0.001")
+    for level in (10, 11, 12):
+        await add_one(
+            Position(
+                level_index=level,
+                entry_price=Decimal("59000"),
+                qty=Decimal("0.001"),
+                tp_price=Decimal("59100"),
+                status=PositionStatus.OPEN,
+                opened_at=datetime.now(tz=UTC),
+            )
+        )
+    victim = await repository.open_position_at_level(10)
+    assert victim is not None
+    assert await protector.settle_phantom(victim) is not None
+    assert (await repository.get_position(victim.id)).status == (
+        PositionStatus.CLOSED
+    )

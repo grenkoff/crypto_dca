@@ -9,16 +9,15 @@ and given the same resting take-profit a fresh fill would get.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
 import structlog
 
 from core.config.settings import grid_settings
-from core.db.models import Position
-from core.exchange.types import Balance, Instrument, Side
+from core.exchange.types import Instrument, Side
 from core.services import repository
+from core.services.balances import spare_coin
 from core.services.events import EventBus
 from core.services.order_common import link_id
 from core.services.order_manager import OrderManager, compute_buy_qty
@@ -44,18 +43,6 @@ class AdoptionPlan:
     def total_qty(self) -> Decimal:
         """Coin the plan puts back to work."""
         return self.lot_qty * self.lots
-
-
-def spare_coin(
-    balances: dict[str, Balance],
-    positions: Sequence[Position],
-    base_coin: str,
-) -> Decimal:
-    """Coin in the wallet that no open lot accounts for."""
-    base = balances.get(base_coin)
-    total = base.total if base is not None else Decimal(0)
-    held = sum((p.remaining_qty for p in positions), Decimal(0))
-    return max(total - held, Decimal(0))
 
 
 def plan_adoption(
