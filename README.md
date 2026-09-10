@@ -121,7 +121,11 @@ Two spacings, picked by `grid_mode` in the strategy config:
   down to the tick — below `tick / grid_step` a rung widens to a single
   tick rather than stalling, so the grid keeps trading to the bottom.
 
-Every coin in the wallet should be working. Coin no open lot accounts for
+A position is only written off as phantom-sold when the wallet is
+genuinely short by its remainder: an "insufficient balance" from the
+exchange says the *free* coin ran out, which is just as easily another
+lot's resting sell holding it. Every coin in the wallet should be
+working. Coin no open lot accounts for
 — a bag taken over by hand, or a close that booked a sale which never
 reached the exchange — is swept into grid-sized lots at the market price
 on the reconcile tick, each with the usual resting take-profit; the sweep
