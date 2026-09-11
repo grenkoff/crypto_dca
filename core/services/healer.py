@@ -53,6 +53,7 @@ class Healer:
     """Recover naked positions, stale buy levels and dropped TP fills."""
 
     def __init__(self, om: OrderManager) -> None:
+        self._spent_seen: set[str] = set()
         self._om = om
         self._protector = Protector(
             client=om.client,
@@ -90,12 +91,14 @@ class Healer:
             if await repository.exec_logged(execution.exec_id):
                 continue
             if execution.qty > loose:
-                log.warning(
-                    "reconcile.missed_buy_spent",
-                    exec_id=execution.exec_id,
-                    qty=str(execution.qty),
-                    loose=str(loose),
-                )
+                if execution.exec_id not in self._spent_seen:
+                    self._spent_seen.add(execution.exec_id)
+                    log.warning(
+                        "reconcile.missed_buy_spent",
+                        exec_id=execution.exec_id,
+                        qty=str(execution.qty),
+                        loose=str(loose),
+                    )
                 continue
             log.warning(
                 "reconcile.replaying_missed_buy",
