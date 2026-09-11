@@ -1180,9 +1180,20 @@ async def persist_buy_fill(
     fees_in: Decimal,
     tp_price: Decimal,
     tp_order_id: str,
-) -> None:
-    """Open a position, mark its level filled, log the fill (atomic)."""
+) -> bool:
+    """Open a position, mark its level filled, log the fill (atomic).
+
+    Idempotent on ``exec_id``: a redelivered fill opens no second lot over
+    the same coin. False means this execution was already booked.
+    """
     async with new_session() as session, session.begin():
+        already = await session.scalar(
+            select(ExecutionLog.id).where(
+                ExecutionLog.exec_id == execution.exec_id
+            )
+        )
+        if already is not None:
+            return False
         session.add(
             Position(
                 level_index=level_index,
@@ -1206,6 +1217,7 @@ async def persist_buy_fill(
             .values(status=_FILLED, current_buy_order_id="", updated_at=_now())
         )
         await _log_execution(session, execution)
+        return True
 
 
 async def apply_sell_fill(
