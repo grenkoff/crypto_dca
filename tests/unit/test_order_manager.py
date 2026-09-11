@@ -75,6 +75,7 @@ class FakeBybitClient:
         self.fills: dict[str, Decimal] = {}
         self.market_price = Decimal("40000")
         self.base_free = Decimal("0")
+        self.recent: list[Execution] = []
 
     async def get_balances(self) -> dict[str, Balance]:
         return {
@@ -145,6 +146,14 @@ class FakeBybitClient:
 
     async def cancel_order(self, symbol: str, order_id: str) -> None:
         self.cancelled.append((symbol, order_id))
+
+    async def get_executions(
+        self, symbol: str, *, limit: int = 100
+    ) -> list[Execution]:
+        return self.recent
+
+    async def get_open_orders(self, symbol: str) -> list[Any]:
+        return []
 
 
 @pytest.fixture
@@ -897,3 +906,76 @@ async def test_a_fill_whose_level_was_pruned_is_still_booked(
     assert position.qty == Decimal("0.000333")
     assert position.tp_order_id != ""
     assert await _exec_exists("e-orphan")
+
+
+async def test_a_small_shortfall_costs_the_lot_only_what_is_missing(
+    protector: Protector, client: FakeBybitClient, config: StrategyConfig
+) -> None:
+    # the wallet is short by a fraction of the lot: writing the whole lot
+    # off would hand the coin that is still there to nobody
+    client.base_free = Decimal("0.0008")
+    pos = await add_one(
+        Position(
+            level_index=13,
+            entry_price=Decimal("59000"),
+            qty=Decimal("0.001"),
+            tp_price=Decimal("59100"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
+    )
+    assert await protector.settle_phantom(pos, Decimal("59000")) is None
+    left = await repository.get_position(pos.id)
+    assert left.status == PositionStatus.OPEN
+    assert left.filled_qty == Decimal("0.0002")
+    assert left.remaining_qty == Decimal("0.0008")
+    # and the coin that is still there gets a fresh protective sell
+    assert client.placed[-1]["side"] == Side.SELL
+    assert client.placed[-1]["qty"] == Decimal("0.0008")
+
+
+async def test_an_unbooked_buy_is_recovered_before_anything_claims_it(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    # an unbooked buy is indistinguishable from loose coin; booking it
+    # here keeps its real fill price instead of a later market one
+    from core.services.healer import Healer
+
+    client.recent = [
+        _exec(
+            exec_id="e-missed-buy",
+            order_id="missed-1",
+            side=Side.BUY,
+            price=Decimal("58000"),
+            qty=Decimal("0.000333"),
+            fee=Decimal("0.000000333"),
+            fee_coin="BTC",
+        )
+    ]
+    await Healer(om).recover_unbooked_buys()
+    assert await _exec_exists("e-missed-buy")
+    positions = await repository.open_positions()
+    assert len(positions) == 1
+    assert positions[0].entry_price == Decimal("58000")
+
+
+async def test_a_buy_already_on_the_books_is_not_recovered_twice(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    from core.services.healer import Healer
+
+    client.recent = [
+        _exec(
+            exec_id="e-twice",
+            order_id="missed-2",
+            side=Side.BUY,
+            price=Decimal("58000"),
+            qty=Decimal("0.000333"),
+            fee=Decimal("0.000000333"),
+            fee_coin="BTC",
+        )
+    ]
+    healer = Healer(om)
+    await healer.recover_unbooked_buys()
+    await healer.recover_unbooked_buys()
+    assert len(await repository.open_positions()) == 1

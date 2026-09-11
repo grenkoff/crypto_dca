@@ -64,8 +64,38 @@ class Healer:
     async def heal(self, price: Decimal) -> None:
         """Run every recovery pass in order for the current price."""
         await self.recover_missed_fills(price)
+        await self.recover_unbooked_buys()
         await self.heal_naked_positions(price)
         await self.heal_stale_buy_levels(price)
+
+    async def recover_unbooked_buys(self) -> None:
+        """Book buys the stream dropped, before anything else claims them.
+
+        An unbooked buy is coin in the wallet that no lot holds, which is
+        indistinguishable from loose coin — leave it and the adoption
+        sweep takes it at the market price instead of what it cost. Book
+        it here, at its real fill price, while the execution still says so.
+        """
+        for execution in await self._om.client.get_executions(
+            self._om.symbol, limit=100
+        ):
+            if execution.side != Side.BUY:
+                continue
+            if await repository.exec_logged(execution.exec_id):
+                continue
+            log.warning(
+                "reconcile.replaying_missed_buy",
+                exec_id=execution.exec_id,
+                order_id=execution.order_id,
+            )
+            try:
+                await self._om.handle_buy_fill(execution)
+            except Exception as exc:
+                log.warning(
+                    "reconcile.missed_buy_failed",
+                    exec_id=execution.exec_id,
+                    error=str(exc)[:120],
+                )
 
     async def heal_naked_positions(self, price: Decimal) -> None:
         """Settle or reprotect open positions whose TP order vanished.
@@ -110,7 +140,7 @@ class Healer:
                 msg = str(exc)
                 if "170131" in msg or "insufficient" in msg.lower():
                     log.warning("heal.naked_settle_phantom", id=pos_id)
-                    await self._protector.settle_phantom(pos)
+                    await self._protector.settle_phantom(pos, price)
                 else:
                     log.exception(
                         "heal.reprotect_failed", id=pos_id, error=msg[:100]

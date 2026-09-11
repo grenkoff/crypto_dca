@@ -54,6 +54,14 @@ class BalanceCache:
         self._stamped = now
         return self._snapshot
 
+    def invalidate(self) -> None:
+        """Drop the cached snapshot so the next read refetches.
+
+        A caller about to commit money against these numbers cannot
+        afford them to be up to a TTL old.
+        """
+        self._stamped = None
+
 
 def coin_gap(
     balances: dict[str, Balance],
