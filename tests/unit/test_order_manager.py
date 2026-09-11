@@ -941,6 +941,7 @@ async def test_an_unbooked_buy_is_recovered_before_anything_claims_it(
     # here keeps its real fill price instead of a later market one
     from core.services.healer import Healer
 
+    client.base_free = Decimal("1")
     client.recent = [
         _exec(
             exec_id="e-missed-buy",
@@ -959,11 +960,36 @@ async def test_an_unbooked_buy_is_recovered_before_anything_claims_it(
     assert positions[0].entry_price == Decimal("58000")
 
 
+async def test_a_buy_whose_coin_is_gone_is_left_alone(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    # an old fill whose coin has since been sold would be booked over
+    # coin that is not there; the wallet has to still hold it
+    from core.services.healer import Healer
+
+    client.base_free = Decimal("0")
+    client.recent = [
+        _exec(
+            exec_id="e-spent",
+            order_id="spent-1",
+            side=Side.BUY,
+            price=Decimal("58000"),
+            qty=Decimal("0.000333"),
+            fee=Decimal("0.000000333"),
+            fee_coin="BTC",
+        )
+    ]
+    await Healer(om).recover_unbooked_buys()
+    assert await repository.open_positions() == []
+    assert not await _exec_exists("e-spent")
+
+
 async def test_a_buy_already_on_the_books_is_not_recovered_twice(
     om: OrderManager, client: FakeBybitClient
 ) -> None:
     from core.services.healer import Healer
 
+    client.base_free = Decimal("1")
     client.recent = [
         _exec(
             exec_id="e-twice",
