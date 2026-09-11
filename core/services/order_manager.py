@@ -161,16 +161,20 @@ class OrderManager:
             return await self._book_buy_fill(execution)
 
     async def _book_buy_fill(self, execution: BybitExecution) -> int | None:
-        """Rest a take-profit over a filled buy and record the lot."""
-        level_index = await self._level_for_fill(execution)
+        """Rest a take-profit over a filled buy and record the lot.
+
+        A fill under the exchange minimum cannot rest a sell of its own at
+        any price, so it is left where it is: its coin joins the loose
+        balance and the adoption sweep folds it into a full-sized lot.
+        """
         if execution.qty * execution.price < self.instrument.min_order_amt:
             log.warning(
                 "buy_fill.too_small_left_free",
-                level=level_index,
                 qty=str(execution.qty),
                 notional=str(execution.qty * execution.price),
             )
             return None
+        level_index = await self._level_for_fill(execution)
         fees_quote = fee_in_quote(execution, self.instrument.quote_coin)
         tp_price = compute_tp_price(
             entry_price=execution.price,
