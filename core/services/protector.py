@@ -13,7 +13,12 @@ from core.services import repository
 from core.services.balances import BalanceCache, book_shortfall
 from core.services.events import EventBus
 from core.services.order_common import link_id
-from core.strategy.rounding import min_notional_price, next_tick_above
+from core.strategy.rounding import (
+    min_notional_price,
+    next_tick_above,
+    round_down_to_tick,
+    round_up_to_tick,
+)
 
 log = structlog.get_logger()
 
@@ -42,12 +47,21 @@ class Protector:
         """Re-place a protective take-profit for a position with no sell.
 
         Priced at the higher of the original TP, one tick above market, and
-        the minimum notional, so it is never left naked. Returns the order id.
+        the minimum notional, so it is never left naked. The quantity is
+        floored to the lot size — the exchange rejects anything finer, and
+        a written-off remainder need not land on the grid. Returns the
+        order id.
         """
         market_floor = next_tick_above(
             current_price, self.instrument.tick_size
         )
-        qty = position.remaining_qty
+        qty = round_down_to_tick(
+            position.remaining_qty, self.instrument.lot_size
+        )
+        if qty <= 0:
+            raise ValueError(
+                f"position {position.id} has less than one lot left"
+            )
         min_price = min_notional_price(
             self.instrument.min_order_amt,
             qty,
@@ -87,16 +101,17 @@ class Protector:
     ) -> None:
         """Book the missing slice of a lot and re-protect what is left."""
         price = position.tp_price or position.entry_price
+        booked = round_up_to_tick(missing, self.instrument.lot_size)
         left = await repository.write_off_missing(
             position=position,
-            qty=missing,
+            qty=booked,
             price=price,
             maker_fee=self.config.maker_fee,
         )
         log.warning(
             "position.partially_written_off",
             id=position.id,
-            missing=str(missing),
+            missing=str(booked),
             left=str(left),
         )
         if left <= 0 or current_price is None:

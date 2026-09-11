@@ -979,3 +979,26 @@ async def test_a_buy_already_on_the_books_is_not_recovered_twice(
     await healer.recover_unbooked_buys()
     await healer.recover_unbooked_buys()
     assert len(await repository.open_positions()) == 1
+
+
+async def test_a_written_off_remainder_is_still_sellable(
+    protector: Protector, client: FakeBybitClient
+) -> None:
+    # the exchange rejects a quantity finer than the lot size, so what is
+    # written off rounds up to the lot grid and the rest stays sellable
+    client.base_free = Decimal("0.0008")
+    pos = await add_one(
+        Position(
+            level_index=14,
+            entry_price=Decimal("59000"),
+            qty=Decimal("0.001"),
+            tp_price=Decimal("59100"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(tz=UTC),
+        )
+    )
+    await protector.settle_phantom(pos, Decimal("59000"))
+    sold = client.placed[-1]["qty"]
+    lot = Decimal("0.000001")
+    assert sold % lot == 0
+    assert sold > 0
