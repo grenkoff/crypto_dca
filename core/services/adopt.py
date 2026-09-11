@@ -97,7 +97,9 @@ class SpareAdopter:
 
         A fill that has not rested its take-profit yet looks exactly like
         loose coin, so the sweep waits for the same spare to survive
-        several reconcile ticks before it books anything.
+        several reconcile ticks before it books anything — and re-reads
+        the balances at the last moment, because adopting coin a sell has
+        just taken would claim it twice.
         """
         if not grid_settings().auto_adopt or await repository.is_paused():
             self._settled_ticks = 0
@@ -116,7 +118,11 @@ class SpareAdopter:
             )
             return 0
         self._settled_ticks = 0
-        return await self.commit(plan)
+        self._om.balances.invalidate()
+        fresh = await self.plan(price)
+        if fresh.lots <= 0:
+            return 0
+        return await self.commit(fresh)
 
     async def commit(
         self, plan: AdoptionPlan, *, limit: int = _MAX_LOTS_PER_SWEEP

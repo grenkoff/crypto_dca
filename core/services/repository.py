@@ -1360,6 +1360,26 @@ async def heartbeat() -> None:
         (await _load_bot(session)).last_heartbeat = _now()
 
 
+async def write_off_missing(
+    *, position: Position, qty: Decimal, price: Decimal, maker_fee: Decimal
+) -> Decimal:
+    """Book ``qty`` of a lot as sold at ``price``; the rest stays open.
+
+    Used when the wallet is short by less than a whole lot: the coin that
+    is gone is booked, the coin that is still there keeps its position and
+    gets a fresh protective sell. Returns the remaining quantity.
+    """
+    async with new_session() as session, session.begin():
+        pos = await session.get(Position, position.id, with_for_update=True)
+        if pos is None:
+            raise ValueError(f"position {position.id} vanished")
+        booked = min(qty, pos.remaining_qty)
+        pos.filled_qty += booked
+        pos.sell_value += price * booked
+        pos.fees_out += price * booked * maker_fee
+        return pos.remaining_qty
+
+
 async def close_at_price(
     *, position: Position, price: Decimal, maker_fee: Decimal
 ) -> Decimal:

@@ -67,34 +67,72 @@ class Protector:
         log.warning("position.reprotected", id=position.id, price=str(price))
         return order_id
 
-    async def _coin_is_gone(self, position: Position) -> bool:
-        """Whether the wallet is short by at least this lot's remainder.
+    async def _missing_coin(self) -> Decimal:
+        """Coin the open lots claim that the wallet does not hold.
 
         The exchange refuses a sell for want of *free* coin, which says
-        nothing about whether this lot's coin exists — it may be locked in
+        nothing about whether a lot's coin exists — it may be locked in
         another lot's resting sell. Only a book that claims more coin than
         the wallet holds proves something was really sold behind our back.
         """
         snapshot = await self.balances.snapshot()
         positions = await repository.open_positions()
-        missing = book_shortfall(
-            snapshot, positions, self.instrument.base_coin
+        return book_shortfall(snapshot, positions, self.instrument.base_coin)
+
+    async def _write_off_part(
+        self,
+        position: Position,
+        missing: Decimal,
+        current_price: Decimal | None,
+    ) -> None:
+        """Book the missing slice of a lot and re-protect what is left."""
+        price = position.tp_price or position.entry_price
+        left = await repository.write_off_missing(
+            position=position,
+            qty=missing,
+            price=price,
+            maker_fee=self.config.maker_fee,
         )
-        return missing >= position.remaining_qty > 0
+        log.warning(
+            "position.partially_written_off",
+            id=position.id,
+            missing=str(missing),
+            left=str(left),
+        )
+        if left <= 0 or current_price is None:
+            return
+        fresh = await repository.get_position(int(position.id))
+        try:
+            await self.reprotect(fresh, current_price)
+        except Exception as exc:
+            log.warning(
+                "position.reprotect_after_write_off_failed",
+                id=position.id,
+                error=str(exc)[:120],
+            )
 
-    async def settle_phantom(self, position: Position) -> Decimal | None:
-        """Close a position whose coin the wallet no longer holds.
+    async def settle_phantom(
+        self, position: Position, current_price: Decimal | None = None
+    ) -> Decimal | None:
+        """Reconcile a lot with a wallet that no longer holds its coin.
 
-        The TP filled under a superseded order id we can't trace, so book
-        it at its recorded TP price to match the wallet. Returns the
-        realized PnL, or None when the coin turns out to still be there.
+        Short by the whole lot: book it closed at its recorded TP price,
+        the way its sale would have been booked. Short by less: write off
+        only what is missing and re-protect the rest, so a small gap can
+        never cost a whole lot. Returns the realized PnL of a full close,
+        None when nothing was written off or the lot stays open.
         """
-        if not await self._coin_is_gone(position):
+        missing = await self._missing_coin()
+        remaining = position.remaining_qty
+        if missing <= 0 or remaining <= 0:
             log.warning(
                 "position.phantom_refused",
                 id=position.id,
-                qty=str(position.remaining_qty),
+                qty=str(remaining),
             )
+            return None
+        if missing < remaining:
+            await self._write_off_part(position, missing, current_price)
             return None
         price = position.tp_price or position.entry_price
         realized = await repository.close_at_price(

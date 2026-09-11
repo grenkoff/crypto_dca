@@ -232,3 +232,16 @@ async def test_adopted_lots_sit_clear_of_every_grid_level() -> None:
     levels = sorted(p.level_index for p in await repository.open_positions())
     assert levels == [1_000_000, 1_000_001, 1_000_002, 1_000_003]
     assert await repository.next_adopted_level() == 1_000_004
+
+
+@pytestmark_db
+async def test_the_sweep_rereads_balances_before_it_commits() -> None:
+    # a sell that filled during the settle window would otherwise be
+    # adopted from a stale snapshot and claimed twice
+    client = _FakeClient("300")
+    adopter = _adopter(client)
+    assert await adopter.sweep(_PRICE) == 0
+    assert await adopter.sweep(_PRICE) == 0
+    client.kas = Decimal("0")
+    assert await adopter.sweep(_PRICE) == 0
+    assert await repository.open_positions() == []
