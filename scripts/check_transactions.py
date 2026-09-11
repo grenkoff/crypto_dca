@@ -72,6 +72,19 @@ def _local_func_names(tree: ast.AST) -> set[str]:
     }
 
 
+def _is_session(node: ast.expr) -> bool:
+    """Whether ``node`` names a SQLAlchemy session.
+
+    Keeps ``some_set.add(x)`` from reading as a database write: the DAO
+    always goes through a variable named for the session it holds.
+    """
+    if isinstance(node, ast.Name):
+        return node.id.endswith("session")
+    if isinstance(node, ast.Attribute):
+        return node.attr.endswith("session")
+    return False
+
+
 def _is_write_call(node: ast.AST) -> bool:
     """Whether ``node`` is a SQLAlchemy write on a session."""
     if not (
@@ -80,7 +93,7 @@ def _is_write_call(node: ast.AST) -> bool:
         return False
     attr = node.func.attr
     if attr in ("add", "add_all", "delete"):
-        return True
+        return _is_session(node.func.value)
     if attr == "execute" and node.args:
         arg = node.args[0]
         return (

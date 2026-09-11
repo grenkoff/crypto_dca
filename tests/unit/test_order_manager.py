@@ -1076,3 +1076,46 @@ async def test_concurrent_deliveries_of_one_fill_book_it_once(
     )
     assert sorted(b is None for b in booked) == [False, True]
     assert await _count(Position) == 1
+
+
+async def test_a_fill_under_the_minimum_is_left_for_the_sweep(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    # no sell can ever rest over it, so retrying it every tick is futile:
+    # the coin joins the loose balance and the sweep folds it into a lot
+    from core.services.healer import Healer
+
+    client.base_free = Decimal("1")
+    client.recent = [
+        _exec(
+            exec_id="e-dust",
+            order_id="dust-1",
+            side=Side.BUY,
+            price=Decimal("60000"),
+            qty=Decimal("0.00005"),  # $3, under the $5 minimum
+            fee=Decimal("0.00000005"),
+            fee_coin="BTC",
+        )
+    ]
+    await Healer(om).recover_unbooked_buys()
+    assert await repository.open_positions() == []
+    assert not await _exec_exists("e-dust")
+
+
+async def test_a_fill_under_the_minimum_claims_no_level(
+    om: OrderManager,
+) -> None:
+    before = await repository.next_adopted_level()
+    booked = await om.handle_buy_fill(
+        _exec(
+            exec_id="e-dust-2",
+            order_id="dust-2",
+            side=Side.BUY,
+            price=Decimal("60000"),
+            qty=Decimal("0.00005"),
+            fee=Decimal("0.00000005"),
+            fee_coin="BTC",
+        )
+    )
+    assert booked is None
+    assert await repository.next_adopted_level() == before

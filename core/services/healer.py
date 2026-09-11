@@ -80,7 +80,9 @@ class Healer:
 
         Only while the coin is actually still loose: an old fill whose
         coin has since been sold, or already claimed by a lot, would
-        otherwise be booked over coin that is not there.
+        otherwise be booked over coin that is not there. A fill under the
+        exchange minimum is skipped for good — no sell can ever rest over
+        it, so its coin belongs to the adoption sweep instead.
         """
         loose = await self._loose_coin()
         for execution in await self._om.client.get_executions(
@@ -89,6 +91,16 @@ class Healer:
             if execution.side != Side.BUY:
                 continue
             if await repository.exec_logged(execution.exec_id):
+                continue
+            notional = execution.qty * execution.price
+            if notional < self._om.instrument.min_order_amt:
+                if execution.exec_id not in self._spent_seen:
+                    self._spent_seen.add(execution.exec_id)
+                    log.warning(
+                        "reconcile.missed_buy_too_small",
+                        exec_id=execution.exec_id,
+                        notional=str(notional),
+                    )
                 continue
             if execution.qty > loose:
                 if execution.exec_id not in self._spent_seen:
