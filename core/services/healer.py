@@ -8,6 +8,7 @@ import structlog
 
 from core.exchange.types import Execution, Side
 from core.services import repository
+from core.services.balances import spare_coin
 from core.services.order_manager import OrderManager
 from core.services.protector import Protector
 
@@ -75,13 +76,26 @@ class Healer:
         indistinguishable from loose coin — leave it and the adoption
         sweep takes it at the market price instead of what it cost. Book
         it here, at its real fill price, while the execution still says so.
+
+        Only while the coin is actually still loose: an old fill whose
+        coin has since been sold, or already claimed by a lot, would
+        otherwise be booked over coin that is not there.
         """
+        loose = await self._loose_coin()
         for execution in await self._om.client.get_executions(
             self._om.symbol, limit=100
         ):
             if execution.side != Side.BUY:
                 continue
             if await repository.exec_logged(execution.exec_id):
+                continue
+            if execution.qty > loose:
+                log.warning(
+                    "reconcile.missed_buy_spent",
+                    exec_id=execution.exec_id,
+                    qty=str(execution.qty),
+                    loose=str(loose),
+                )
                 continue
             log.warning(
                 "reconcile.replaying_missed_buy",
@@ -96,6 +110,14 @@ class Healer:
                     exec_id=execution.exec_id,
                     error=str(exc)[:120],
                 )
+                continue
+            loose -= execution.qty
+
+    async def _loose_coin(self) -> Decimal:
+        """Coin in the wallet that no open lot accounts for."""
+        balances = await self._om.balances.snapshot()
+        positions = await repository.open_positions()
+        return spare_coin(balances, positions, self._om.instrument.base_coin)
 
     async def heal_naked_positions(self, price: Decimal) -> None:
         """Settle or reprotect open positions whose TP order vanished.
