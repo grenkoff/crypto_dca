@@ -520,8 +520,9 @@ def render_book(rungs: list[BookLevel], price: Decimal, symbol: str) -> bytes:
 
 def _book_totals(rungs: list[BookLevel]) -> str:
     """Coins and value resting on each side of the ladder."""
-    bid = [rung for rung in rungs if rung.is_buy and not rung.is_gap]
-    ask = [rung for rung in rungs if not rung.is_buy and not rung.is_gap]
+    resting = [rung for rung in rungs if not (rung.is_gap or rung.is_held)]
+    bid = [rung for rung in resting if rung.is_buy]
+    ask = [rung for rung in resting if not rung.is_buy]
     coins = sum((rung.qty for rung in ask), Decimal(0))
     cash = sum((rung.price * rung.qty for rung in bid), Decimal(0))
     return (
@@ -547,17 +548,19 @@ def _book_lines(
 
 
 def _rung_line(rung: BookLevel) -> str:
-    """One ladder row: price, size and value, or a collapsed gap."""
+    """One ladder row: an order, a held level, or a collapsed gap."""
     if rung.is_gap:
         return f"{'· · ·':>9}   {rung.skipped:>4} levels"
+    if rung.is_held:
+        return f"{rung.price:>9.5f}  {rung.qty:>8.2f}  held"
     return (
         f"{rung.price:>9.5f}  {rung.qty:>8.2f}  {rung.price * rung.qty:>6.2f}"
     )
 
 
 def _rung_colour(rung: BookLevel) -> str:
-    """Green for a bid, red for an ask, grey for a gap."""
-    if rung.is_gap:
+    """Green for a bid, red for an ask, grey for a gap or a held level."""
+    if rung.is_gap or rung.is_held:
         return _BOOK_GAP
     return _BOOK_BUY if rung.is_buy else _BOOK_SELL
 

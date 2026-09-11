@@ -13,6 +13,7 @@ from core.exchange.types import Side
 from core.services import repository
 from core.services.order_common import config_geometry
 from core.strategy.book import BookLevel, build_ladder
+from core.strategy.lattice import nearest_rung
 from tgbot.formatters import (
     AprSnapshot,
     DigestSnapshot,
@@ -218,9 +219,15 @@ async def book_snapshot() -> tuple[list[BookLevel], Decimal, str] | None:
         return None
     config = await repository.load_config()
     geometry = config_geometry(config, instrument.tick_size)
+    positions = await repository.open_positions()
+    held: dict[Decimal, Decimal] = {}
+    for position in positions:
+        rung = nearest_rung(geometry.lattice, position.entry_price)
+        held[rung] = held.get(rung, Decimal(0)) + position.remaining_qty
     rungs = build_ladder(
         [(order.price, order.qty, order.side == Side.BUY) for order in orders],
         geometry.lattice,
+        held,
     )
     return rungs, price, symbol
 
