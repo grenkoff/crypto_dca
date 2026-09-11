@@ -140,14 +140,25 @@ class TraderRuntime:
 
         if not isinstance(event.payload, BybitExecution):
             return
-        self._current_price = await self._client.get_last_price(
-            self._om.symbol
-        )
+        await self._refresh_price(self._om.symbol)
         if event.payload.side == Side.BUY:
             await self._om.handle_buy_fill(event.payload)
         else:
             await self._om.handle_sell_fill(event.payload, self._current_price)
         await self._grid.ensure(self._current_price)
+
+    async def _refresh_price(self, symbol: str) -> None:
+        """Update the market price, keeping the last one on failure.
+
+        A fill has to be booked even when the price call fails. Letting
+        that failure escape used to discard the execution, and the coin it
+        bought then sat in the wallet with no lot holding it.
+        """
+        assert self._client is not None
+        try:
+            self._current_price = await self._client.get_last_price(symbol)
+        except Exception as exc:
+            log.warning("trader.price_refresh_failed", error=str(exc)[:120])
 
     async def _reconcile_loop(self) -> None:
         assert (
