@@ -121,7 +121,10 @@ Two spacings, picked by `grid_mode` in the strategy config:
   down to the tick — below `tick / grid_step` a rung widens to a single
   tick rather than stalling, so the grid keeps trading to the bottom.
 
-A fill is never dropped: if a prune raced it and cleared its level, the
+Booking a buy fill is serialized and idempotent on its execution id — the
+stream, the healer and the pruner all feed the same fills in, and opening
+two lots over one lot of coin rests two sells against it and starves the
+next fill. A fill is never dropped: if a prune raced it and cleared its level, the
 buy is still booked — at its real fill price, on a level of its own — and
 a cancel that comes back "order does not exist" asks the exchange what
 actually happened before idling the level. A position is only written off

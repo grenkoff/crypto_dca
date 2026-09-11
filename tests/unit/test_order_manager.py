@@ -1028,3 +1028,51 @@ async def test_a_written_off_remainder_is_still_sellable(
     lot = Decimal("0.000001")
     assert sold % lot == 0
     assert sold > 0
+
+
+async def test_the_same_buy_fill_never_opens_two_lots(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    # the stream, the healer and the pruner all feed fills in; booking one
+    # twice rests two sells over one lot of coin and starves the next fill
+    client.next_id = "buy-dup"
+    await om.place_buy_at_level(0, Decimal("60000"))
+    execution = _exec(
+        exec_id="e-dup",
+        order_id="buy-dup",
+        side=Side.BUY,
+        price=Decimal("60000"),
+        qty=Decimal("0.000333"),
+        fee=Decimal("0.000000333"),
+        fee_coin="BTC",
+    )
+    first = await om.handle_buy_fill(execution)
+    second = await om.handle_buy_fill(execution)
+    assert first == 0
+    assert second is None
+    assert await _count(Position) == 1
+    sells = [p for p in client.placed if p["side"] == Side.SELL]
+    assert len(sells) == 1
+
+
+async def test_concurrent_deliveries_of_one_fill_book_it_once(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    import asyncio
+
+    client.next_id = "buy-race"
+    await om.place_buy_at_level(1, Decimal("60000"))
+    execution = _exec(
+        exec_id="e-race",
+        order_id="buy-race",
+        side=Side.BUY,
+        price=Decimal("60000"),
+        qty=Decimal("0.000333"),
+        fee=Decimal("0.000000333"),
+        fee_coin="BTC",
+    )
+    booked = await asyncio.gather(
+        om.handle_buy_fill(execution), om.handle_buy_fill(execution)
+    )
+    assert sorted(b is None for b in booked) == [False, True]
+    assert await _count(Position) == 1

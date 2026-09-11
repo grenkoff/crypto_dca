@@ -7,6 +7,7 @@ keeps multi-statement writes inside a single transaction.
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 
 import structlog
@@ -68,6 +69,7 @@ class OrderManager:
         self.config = config
         self.bus = bus
         self.balances = BalanceCache(client)
+        self._fills = asyncio.Lock()
         self.geometry = config_geometry(config, instrument.tick_size)
         self._compensator = Compensator(
             balances=self.balances,
@@ -146,7 +148,20 @@ class OrderManager:
         return spare_level
 
     async def handle_buy_fill(self, execution: BybitExecution) -> int | None:
-        """Book a filled buy: open a position and rest its take-profit."""
+        """Book a filled buy: open a position and rest its take-profit.
+
+        Serialized and idempotent: the stream, the healer and the pruner
+        all feed fills in, and booking one twice would rest two sells over
+        one lot of coin — starving the next fill of the coin it needs.
+        """
+        async with self._fills:
+            if await repository.exec_logged(execution.exec_id):
+                log.info("buy_fill.already_booked", exec_id=execution.exec_id)
+                return None
+            return await self._book_buy_fill(execution)
+
+    async def _book_buy_fill(self, execution: BybitExecution) -> int | None:
+        """Rest a take-profit over a filled buy and record the lot."""
         level_index = await self._level_for_fill(execution)
         if execution.qty * execution.price < self.instrument.min_order_amt:
             log.warning(
@@ -184,13 +199,21 @@ class OrderManager:
                 error=str(exc)[:100],
             )
             raise
-        await repository.persist_buy_fill(
+        booked = await repository.persist_buy_fill(
             execution=execution,
             level_index=level_index,
             fees_in=fees_quote,
             tp_price=tp_price,
             tp_order_id=tp_order_id,
         )
+        if not booked:
+            log.warning(
+                "buy_fill.duplicate_after_place",
+                exec_id=execution.exec_id,
+                order_id=tp_order_id,
+            )
+            await self._cancel_quietly(tp_order_id)
+            return None
         log.info(
             "buy.filled",
             level=level_index,
@@ -207,6 +230,17 @@ class OrderManager:
             },
         )
         return level_index
+
+    async def _cancel_quietly(self, order_id: str) -> None:
+        """Pull an order we should not have placed, logging any failure."""
+        try:
+            await self.client.cancel_order(self.symbol, order_id)
+        except Exception as exc:
+            log.warning(
+                "order.cancel_failed",
+                order_id=order_id,
+                error=str(exc)[:120],
+            )
 
     async def drain_pool(self, current_price: Decimal) -> None:
         """Spend the banked pool without waiting for a profitable close.
