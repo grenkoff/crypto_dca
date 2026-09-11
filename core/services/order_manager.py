@@ -156,9 +156,7 @@ class OrderManager:
         """
         async with self._fills:
             if await repository.exec_logged(execution.exec_id):
-                log.info(
-                    "buy_fill.already_booked", exec_id=execution.exec_id
-                )
+                log.info("buy_fill.already_booked", exec_id=execution.exec_id)
                 return None
             return await self._book_buy_fill(execution)
 
