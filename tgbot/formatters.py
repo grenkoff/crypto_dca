@@ -197,8 +197,8 @@ def _format_move(move: dict[str, Any]) -> str:
     new_tp = _price5(move.get("new_tp"))
     old = move.get("old_tp")
     if old:
-        return f"   ↓ TP `{_price5(old)}` → `{new_tp}`"
-    return f"   ↓ TP `{new_tp}`"
+        return f"   TP `{_price5(old)}` ↓ `{new_tp}`"
+    return f"   TP ↓ `{new_tp}`"
 
 
 def _format_drained(payload: dict[str, Any]) -> str:

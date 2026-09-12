@@ -167,8 +167,8 @@ def test_a_close_lists_the_moves_it_paid_for() -> None:
     lines = text.splitlines()
     assert len(lines) == 3
     assert lines[0].startswith("💰")
-    assert lines[1] == "   ↓ TP `0.02885` → `0.02880`"
-    assert lines[2] == "   ↓ TP `0.03035` → `0.03015`"
+    assert lines[1] == "   TP `0.02885` ↓ `0.02880`"
+    assert lines[2] == "   TP `0.03035` ↓ `0.03015`"
 
 
 def test_a_close_without_moves_stays_one_line() -> None:
@@ -198,7 +198,7 @@ def test_a_move_without_a_previous_price_still_renders() -> None:
             },
         }
     )
-    assert text.splitlines()[1] == "   ↓ TP `0.02940`"
+    assert text.splitlines()[1] == "   TP ↓ `0.02940`"
 
 
 def test_format_event_unknown_falls_back_to_raw() -> None:
@@ -355,7 +355,7 @@ def test_a_long_drain_is_reported_as_one_message() -> None:
             "payload": {"compensations": moves, "pool": "0.0023"},
         }
     )
-    assert text.count("↓ TP") == _MAX_MOVES_PER_CLOSE
+    assert text.count(" ↓ ") == _MAX_MOVES_PER_CLOSE
     # Telegram refuses anything past 4096 characters
     assert len(text) < 4096
 
@@ -405,7 +405,7 @@ def test_a_drain_names_the_fill_it_followed() -> None:
         "🟢 `0.03502` → TP `0.03526`",
         "   Pool spent",
     ]
-    assert "↓ TP `0.03558` → `0.03542`" in text
+    assert "TP `0.03558` ↓ `0.03542`" in text
 
 
 def test_a_drain_with_no_fill_behind_it_keeps_the_plain_header() -> None:
