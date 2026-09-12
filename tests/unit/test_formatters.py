@@ -401,7 +401,10 @@ def test_a_drain_names_the_fill_it_followed() -> None:
             },
         }
     )
-    assert text.startswith("Pool spent after 🟢 `0.03502` → TP `0.03526`")
+    assert text.splitlines()[:2] == [
+        "🟢 `0.03502` → TP `0.03526`",
+        "   Pool spent",
+    ]
     assert "↓ TP `0.03558` → `0.03542`" in text
 
 

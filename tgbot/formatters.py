@@ -206,10 +206,11 @@ def _format_drained(payload: dict[str, Any]) -> str:
 
     The pool is spent on the reconcile tick, and what makes a tick able
     to spend it is usually the fill just before: its take-profit joins
-    the wall and opens a slot under it. So the header names that fill,
-    the way the message announcing it did.
+    the wall and opens a slot under it. So that fill opens the message,
+    written exactly as its own announcement was, and everything the
+    drain did is indented under it.
     """
-    lines = [_drained_header(payload.get("after"))]
+    lines = _drained_header(payload.get("after"))
     moves = payload.get("compensations") or []
     if isinstance(moves, list):
         lines += [
@@ -221,13 +222,13 @@ def _format_drained(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _drained_header(after: Any) -> str:
-    """The title line, naming the fill this drain followed."""
+def _drained_header(after: Any) -> list[str]:
+    """The opening lines: the fill this drain followed, then the title."""
     if not isinstance(after, dict):
-        return "Pool spent"
+        return ["Pool spent"]
     entry = _price5(after.get("entry"))
     tp = _price5(after.get("tp"))
-    return f"Pool spent after 🟢 `{entry}` → TP `{tp}`"
+    return [f"🟢 `{entry}` → TP `{tp}`", "   Pool spent"]
 
 
 def _format_exit(move: dict[str, Any]) -> str:
