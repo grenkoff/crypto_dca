@@ -386,3 +386,61 @@ def test_adopted_coin_reads_as_a_sentence_not_a_payload() -> None:
 def test_an_unknown_event_still_falls_back_to_its_payload() -> None:
     text = format_event({"type": "mystery", "payload": {"a": 1}})
     assert text.startswith("📨 mystery:")
+
+
+def test_a_moved_take_profit_names_the_buy_it_belongs_to() -> None:
+    # "↓ TP 0.03570 → 0.03554" alone says nothing about which lot moved
+    text = format_event(
+        {
+            "type": "pool.drained",
+            "payload": {
+                "compensations": [
+                    {
+                        "entry": "0.03546",
+                        "old_tp": "0.03570",
+                        "new_tp": "0.03554",
+                        "drawn": "0",
+                    }
+                ],
+                "pool": "0.0005",
+            },
+        }
+    )
+    assert "🟢 `0.03546` ↓ TP `0.03570` → `0.03554`" in text
+
+
+def test_a_retirement_names_its_lot_too() -> None:
+    text = format_event(
+        {
+            "type": "pool.drained",
+            "payload": {
+                "compensations": [
+                    {
+                        "kind": "exit",
+                        "entry": "0.05200",
+                        "positions": "1,2",
+                        "old_tp": "0.05320",
+                        "price": "0.0355",
+                        "drawn": "0.42",
+                    }
+                ],
+                "pool": "0",
+            },
+        }
+    )
+    assert text.startswith("Pool spent\n   🟢 `0.05200` ✂️")
+
+
+def test_a_move_without_an_entry_still_renders() -> None:
+    # older events on the bus carry no entry price
+    text = format_event(
+        {
+            "type": "pool.drained",
+            "payload": {
+                "compensations": [{"old_tp": "0.03570", "new_tp": "0.03554"}],
+                "pool": "0",
+            },
+        }
+    )
+    assert "↓ TP `0.03570` → `0.03554`" in text
+    assert "🟢" not in text

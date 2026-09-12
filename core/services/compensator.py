@@ -324,6 +324,7 @@ class Compensator:
         return {
             "kind": "exit",
             "positions": ",".join(str(t.id) for t in targets),
+            "entry": str(targets[0].entry_price),
             "old_tp": str(old_tp) if old_tp is not None else "",
             "price": str(price),
             "qty": str(plan.qty),
@@ -413,6 +414,7 @@ class Compensator:
         )
         return {
             "target_position": str(target.id),
+            "entry": str(target.entry_price),
             "old_tp": str(old_tp) if old_tp is not None else "",
             "new_tp": str(decision.new_tp_price),
             "drawn": str(decision.credit_drawn),

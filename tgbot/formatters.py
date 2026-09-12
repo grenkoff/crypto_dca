@@ -191,14 +191,25 @@ def _format_pool(payload: dict[str, Any]) -> str:
 
 
 def _format_move(move: dict[str, Any]) -> str:
-    """One take-profit move — or one retirement — in a close message."""
+    """One take-profit move — or one retirement — in a close message.
+
+    The lot is named by the price it was bought at, the way an opened
+    position is, so a move can be traced back to the buy it belongs to.
+    """
     if move.get("kind") == "exit":
         return _format_exit(move)
+    lot = _lot_label(move)
     new_tp = _price5(move.get("new_tp"))
     old = move.get("old_tp")
     if old:
-        return f"   ↓ TP `{_price5(old)}` → `{new_tp}`"
-    return f"   ↓ TP `{new_tp}`"
+        return f"   {lot}↓ TP `{_price5(old)}` → `{new_tp}`"
+    return f"   {lot}↓ TP `{new_tp}`"
+
+
+def _lot_label(move: dict[str, Any]) -> str:
+    """The lot a move is about, tagged with the buy that opened it."""
+    entry = move.get("entry")
+    return f"🟢 `{_price5(entry)}` " if entry else ""
 
 
 def _format_drained(payload: dict[str, Any]) -> str:
@@ -223,8 +234,8 @@ def _format_exit(move: dict[str, Any]) -> str:
     tail = f" x{lots}" if lots > 1 else ""
     drawn = _q(_dec(move.get("drawn")), "0.0001")
     return (
-        f"   ✂️ TP `{_price5(move.get('old_tp'))}`{tail} sold at "
-        f"`{_price5(move.get('price'))}` (`-{drawn}`)"
+        f"   {_lot_label(move)}✂️ TP `{_price5(move.get('old_tp'))}`{tail} "
+        f"sold at `{_price5(move.get('price'))}` (`-{drawn}`)"
     )
 
 
