@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from decimal import Decimal
+from typing import Any
 
 import structlog
 
@@ -70,6 +71,7 @@ class OrderManager:
         self.bus = bus
         self.balances = BalanceCache(client)
         self._fills = asyncio.Lock()
+        self._since_drain: dict[str, str] | None = None
         self.geometry = config_geometry(config, instrument.tick_size)
         self._compensator = Compensator(
             balances=self.balances,
@@ -218,6 +220,10 @@ class OrderManager:
             )
             await self._cancel_quietly(tp_order_id)
             return None
+        self._since_drain = {
+            "entry": str(execution.price),
+            "tp": str(tp_price),
+        }
         log.info(
             "buy.filled",
             level=level_index,
@@ -252,7 +258,9 @@ class OrderManager:
         The pool only ever grew on a close, so a lot it could already
         afford to retire sat idle until an unrelated trade happened to
         finish. Running the same spending on the reconcile cycle acts
-        the moment the money is there.
+        the moment the money is there — usually the tick after a fill
+        adds a take-profit to the wall and opens a slot under it, which
+        is why the fill since the last drain is reported with the moves.
         """
         if await repository.pending_credit() <= 0:
             return
@@ -262,13 +270,14 @@ class OrderManager:
         moves = await self._compensator.drain_pool(current_price, source)
         if not moves:
             return
-        await self.bus.publish(
-            "pool.drained",
-            {
-                "compensations": moves,
-                "pool": str(await repository.pending_credit()),
-            },
-        )
+        payload: dict[str, Any] = {
+            "compensations": moves,
+            "pool": str(await repository.pending_credit()),
+        }
+        if self._since_drain is not None:
+            payload["after"] = self._since_drain
+        self._since_drain = None
+        await self.bus.publish("pool.drained", payload)
 
     async def handle_sell_fill(
         self, execution: BybitExecution, current_price: Decimal

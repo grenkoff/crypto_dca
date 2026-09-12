@@ -1119,3 +1119,64 @@ async def test_a_fill_under_the_minimum_claims_no_level(
     )
     assert booked is None
     assert await repository.next_adopted_level() == before
+
+
+async def _fill_one(om: OrderManager, client: FakeBybitClient) -> None:
+    """Book one buy so the manager has a fill to report."""
+    client.next_id = "buy-drain"
+    await om.place_buy_at_level(3, Decimal("60000"))
+    await om.handle_buy_fill(
+        _exec(
+            exec_id="e-drain",
+            order_id="buy-drain",
+            side=Side.BUY,
+            price=Decimal("60000"),
+            qty=Decimal("0.000333"),
+            fee=Decimal("0.000000333"),
+            fee_coin="BTC",
+        )
+    )
+
+
+async def test_a_drain_reports_the_fill_it_followed_once(
+    om: OrderManager, client: FakeBybitClient, bus: RecordingEventBus
+) -> None:
+    # the fill that opened a slot under the wall belongs with the moves;
+    # the next drain must not claim the same fill again
+    await _fill_one(om, client)
+    closed = await add_one(
+        Position(
+            level_index=99,
+            entry_price=Decimal("59000"),
+            qty=Decimal("0.001"),
+            status=PositionStatus.CLOSED,
+            opened_at=datetime.now(tz=UTC),
+            closed_at=datetime.now(tz=UTC),
+        )
+    )
+    await repository.accrue_split(
+        pool_add=Decimal("5"), pocket_add=Decimal(0), position_id=closed.id
+    )
+
+    async def _moved(price: Decimal, source: int) -> list[dict[str, str]]:
+        return [{"old_tp": "60300", "new_tp": "60200"}]
+
+    om._compensator.drain_pool = _moved  # type: ignore[assignment]
+    await om.drain_pool(Decimal("59000"))
+    drained = [e for e in bus.events if e[0] == "pool.drained"]
+    assert drained[-1][1]["after"] == {"entry": "60000", "tp": "60270.43"}
+
+    await om.drain_pool(Decimal("59000"))
+    assert (
+        "after" not in [e for e in bus.events if e[0] == "pool.drained"][-1][1]
+    )
+
+
+async def test_a_drain_that_moves_nothing_keeps_the_fill_for_later(
+    om: OrderManager, client: FakeBybitClient
+) -> None:
+    # a tick that could not spend anything must not swallow the fill the
+    # next one will want to report
+    await _fill_one(om, client)
+    await om.drain_pool(Decimal("59000"))
+    assert om._since_drain is not None

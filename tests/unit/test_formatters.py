@@ -386,3 +386,36 @@ def test_adopted_coin_reads_as_a_sentence_not_a_payload() -> None:
 def test_an_unknown_event_still_falls_back_to_its_payload() -> None:
     text = format_event({"type": "mystery", "payload": {"a": 1}})
     assert text.startswith("📨 mystery:")
+
+
+def test_a_drain_names_the_fill_it_followed() -> None:
+    # the pool is spent on a tick, and what makes a tick able to spend it
+    # is usually the fill just before — so the header says which one
+    text = format_event(
+        {
+            "type": "pool.drained",
+            "payload": {
+                "after": {"entry": "0.03502", "tp": "0.03526"},
+                "compensations": [{"old_tp": "0.03558", "new_tp": "0.03542"}],
+                "pool": "0.0005",
+            },
+        }
+    )
+    assert text.splitlines()[:2] == [
+        "🟢 `0.03502` → TP `0.03526`",
+        "   Pool spent",
+    ]
+    assert "↓ TP `0.03558` → `0.03542`" in text
+
+
+def test_a_drain_with_no_fill_behind_it_keeps_the_plain_header() -> None:
+    text = format_event(
+        {
+            "type": "pool.drained",
+            "payload": {
+                "compensations": [{"old_tp": "0.03570", "new_tp": "0.03554"}],
+                "pool": "0.0005",
+            },
+        }
+    )
+    assert text.startswith("Pool spent\n")
