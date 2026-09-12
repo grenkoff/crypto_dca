@@ -116,7 +116,6 @@ def _style_right(axis: Any, color: str, outward: float) -> None:
 _GREEN = "#16a34a"
 _AMBER = "#f59e0b"
 _BAR = "#7dd3fc"
-_POOL = "#ef4444"
 _MA = "#2563eb"
 _INK = "black"
 _GREY = "#b8b8b8"
@@ -124,8 +123,7 @@ _VOL_UP = "#8fd3b6"
 _VOL_DOWN = "#f0a8a8"
 _MA_WINDOW = 10
 _CHART_DPI = 200
-_PAIR_WIDTH = 0.35
-_PAIR_SHIFT = _PAIR_WIDTH / 2
+_BAR_WIDTH = 0.7
 
 
 def _axis_badge(
@@ -242,7 +240,6 @@ def _badges(
     equity: list[float],
     ma: list[float],
     ohlc: list[Bar | None],
-    pool: list[float],
     profit: list[float],
 ) -> None:
     """Tag every axis with the value it currently reads."""
@@ -260,9 +257,6 @@ def _badges(
     last_profit = _last(profit)
     if last_profit is not None:
         _axis_badge(bar_ax, last_profit, _BAR, f"{last_profit:.2f}", 34)
-    last_pool = _last(pool)
-    if last_pool is not None:
-        _axis_badge(bar_ax, last_pool, _POOL, f"{last_pool:.2f}", 34)
     if candles:
         close = candles[-1][3]
         _axis_badge(price_ax, close, _INK, f"{close:.5f}", 68)
@@ -321,15 +315,13 @@ def render_pnl_chart(
     ohlc: list[Bar | None],
     btc_ohlc: list[Bar | None] | None = None,
     funds: list[Decimal] | None = None,
-    pool: list[Decimal] | None = None,
 ) -> bytes:
     """Render the funds-and-profit chart to PNG bytes.
 
     Locked USDT (amber) sits on the left; banked capital (green), daily
     profit and the KAS price each get a right axis. The blue bars are
-    what a day's closes left in the pocket, the red ones what the
-    credit pool held at the end of that day, paired edge to edge on the
-    day's tick. ``funds`` is capital plus profit banked for good,
+    what a day's closes left in the pocket. ``funds`` is capital plus
+    profit banked for good,
     falling back to cost basis plus realized profit; ``btc_ohlc``
     (rescaled to KAS units) is drawn as grey candles to gauge
     correlation; volume sits in its own panel. ``matplotlib`` is
@@ -355,19 +347,11 @@ def render_pnl_chart(
     price_ax = ax.twinx()
 
     bar_ax.bar(
-        [x - _PAIR_SHIFT for x in xs],
+        xs,
         [float(v) for v in profits],
         color=_BAR,
-        width=_PAIR_WIDTH,
+        width=_BAR_WIDTH,
         label="profit/day",
-    )
-    pooled = [float(v) for v in pool] if pool else [0.0] * len(xs)
-    bar_ax.bar(
-        [x + _PAIR_SHIFT for x in xs],
-        pooled,
-        color=_POOL,
-        width=_PAIR_WIDTH,
-        label="pool",
     )
     fxs = [float(x) for x in xs]
     ma_x, ma_y = _smooth(fxs, _moving_average(profits, _MA_WINDOW))
@@ -392,7 +376,6 @@ def render_pnl_chart(
         [float(v) for v in equity],
         _moving_average(profits, _MA_WINDOW),
         ohlc,
-        pooled,
         [float(v) for v in profits],
     )
 

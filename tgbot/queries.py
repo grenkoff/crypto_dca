@@ -206,7 +206,11 @@ async def book_snapshot() -> tuple[list[BookLevel], Decimal, str] | None:
 
     Read from the exchange rather than the database: the ladder should
     show what is actually resting, including anything the bot has not
-    booked yet. ``None`` when the exchange cannot be reached.
+    booked yet. Levels the grid already holds a lot on are marked below
+    market, where they explain a buy that is deliberately not there;
+    above market the buy band does not reach, so a held level would say
+    nothing the take-profit resting over it does not already say.
+    ``None`` when the exchange cannot be reached.
     """
     try:
         client = BybitClient.from_settings()
@@ -223,6 +227,8 @@ async def book_snapshot() -> tuple[list[BookLevel], Decimal, str] | None:
     held: dict[Decimal, Decimal] = {}
     for position in positions:
         rung = nearest_rung(geometry.lattice, position.entry_price)
+        if rung >= price:
+            continue
         held[rung] = held.get(rung, Decimal(0)) + position.remaining_qty
     rungs = build_ladder(
         [(order.price, order.qty, order.side == Side.BUY) for order in orders],
