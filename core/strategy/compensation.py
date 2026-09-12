@@ -205,15 +205,14 @@ def plan_hole_fill(
 ) -> CompensationDecision | None:
     """Fill the gap nearest market with the lot stranded furthest away.
 
-    Walking the wall down slot by slot costs exactly what one long move
-    costs — five lots giving up one step each is the same USDT as one lot
-    giving up five — but it spends a cancel and a place per step. So the
-    gap is filled in a single move by the highest take-profit that fits,
-    which leaves the same wall behind for a fifth of the traffic.
+    The pool pays for how far a lot ends below its own entry, not for
+    slots travelled, and entries differ — so a wall walking down a slot
+    per lot is *cheaper* than one lot walking down five, each landing
+    near its own cost. Within that, the furthest lot the pool can still
+    afford takes the gap: the most wall compacted per move.
 
     ``offset`` holds the search that fraction of the price above market,
-    so a lot lands near the price rather than on top of it and is not
-    sold into an immediate loss.
+    so a lot lands near the price rather than on top of it.
     """
     if ctx.pool <= 0 or not open_positions:
         return None
