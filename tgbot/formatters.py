@@ -202,8 +202,14 @@ def _format_move(move: dict[str, Any]) -> str:
 
 
 def _format_drained(payload: dict[str, Any]) -> str:
-    """Compensations bought by the pool with no close to trigger them."""
-    lines = ["Pool spent"]
+    """Compensations bought by the pool with no close to trigger them.
+
+    The pool is spent on the reconcile tick, and what makes a tick able
+    to spend it is usually the fill just before: its take-profit joins
+    the wall and opens a slot under it. So the header names that fill,
+    the way the message announcing it did.
+    """
+    lines = [_drained_header(payload.get("after"))]
     moves = payload.get("compensations") or []
     if isinstance(moves, list):
         lines += [
@@ -213,6 +219,15 @@ def _format_drained(payload: dict[str, Any]) -> str:
     if pool:
         lines.append(f"   left `{_q(_dec(pool), '0.0001')}`")
     return "\n".join(lines)
+
+
+def _drained_header(after: Any) -> str:
+    """The title line, naming the fill this drain followed."""
+    if not isinstance(after, dict):
+        return "Pool spent"
+    entry = _price5(after.get("entry"))
+    tp = _price5(after.get("tp"))
+    return f"Pool spent after 🟢 `{entry}` → TP `{tp}`"
 
 
 def _format_exit(move: dict[str, Any]) -> str:
