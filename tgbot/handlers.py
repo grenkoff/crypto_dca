@@ -108,7 +108,7 @@ async def cb_notify_toggle(call: CallbackQuery) -> None:
 async def cmd_pnl(message: Message) -> None:
     """Reply with realized PnL and a funds-and-profit chart."""
     snap = await pnl_snapshot()
-    days, base_capital, locked, dates, pool = await pnl_curve_data()
+    days, base_capital, locked, dates, _pool = await pnl_curve_data()
     unlock_days, _ = await unlock_estimate()
     tail = [build_equity(await account_equity())]
     tail.append(build_unlock(base_capital, unlock_days))
@@ -127,7 +127,6 @@ async def cmd_pnl(message: Message) -> None:
         ohlc,
         btc_ohlc,
         funds,
-        pool,
     )
     await message.answer_photo(
         BufferedInputFile(png, filename="pnl.png"),
