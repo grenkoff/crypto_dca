@@ -11,6 +11,14 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
+_INDENT = "\u3000 "
+"""Leading blank for a continuation line.
+
+An ideographic space is about as wide as the emoji the first line opens
+with, so every line of a message starts at the same place — a plain
+space is a quarter of that and left them ragged.
+"""
+
 
 @dataclass(frozen=True)
 class PnlSnapshot:
@@ -187,7 +195,10 @@ def _format_pool(payload: dict[str, Any]) -> str:
     pool = payload.get("pool")
     if not share or not pool:
         return ""
-    return f"   Pool `{_dec(share) * 100:.0f}%` · `{_q(_dec(pool), '0.0001')}`"
+    return (
+        f"{_INDENT}Pool `{_dec(share) * 100:.0f}%` ·"
+        f" `{_q(_dec(pool), '0.0001')}`"
+    )
 
 
 def _format_move(move: dict[str, Any]) -> str:
@@ -197,8 +208,8 @@ def _format_move(move: dict[str, Any]) -> str:
     new_tp = _price5(move.get("new_tp"))
     old = move.get("old_tp")
     if old:
-        return f"   TP `{_price5(old)}` ↓ `{new_tp}`"
-    return f"   TP ↓ `{new_tp}`"
+        return f"{_INDENT}TP `{_price5(old)}` ↓ `{new_tp}`"
+    return f"{_INDENT}TP ↓ `{new_tp}`"
 
 
 def _format_drained(payload: dict[str, Any]) -> str:
@@ -218,7 +229,7 @@ def _format_drained(payload: dict[str, Any]) -> str:
         ]
     pool = payload.get("pool")
     if pool:
-        lines.append(f"   left `{_q(_dec(pool), '0.0001')}`")
+        lines.append(f"{_INDENT}left `{_q(_dec(pool), '0.0001')}`")
     return "\n".join(lines)
 
 
@@ -228,7 +239,7 @@ def _drained_header(after: Any) -> list[str]:
         return ["Pool spent"]
     entry = _price5(after.get("entry"))
     tp = _price5(after.get("tp"))
-    return [f"🟢 `{entry}` → TP `{tp}`", "   Pool spent"]
+    return [f"🟢 `{entry}` → TP `{tp}`", f"{_INDENT}Pool spent"]
 
 
 def _format_exit(move: dict[str, Any]) -> str:
@@ -239,7 +250,7 @@ def _format_exit(move: dict[str, Any]) -> str:
     tail = f" x{lots}" if lots > 1 else ""
     drawn = _q(_dec(move.get("drawn")), "0.0001")
     return (
-        f"   ✂️ TP `{_price5(move.get('old_tp'))}`{tail} sold at "
+        f"{_INDENT}✂️ TP `{_price5(move.get('old_tp'))}`{tail} sold at "
         f"`{_price5(move.get('price'))}` (`-{drawn}`)"
     )
 

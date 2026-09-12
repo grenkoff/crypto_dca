@@ -167,8 +167,8 @@ def test_a_close_lists_the_moves_it_paid_for() -> None:
     lines = text.splitlines()
     assert len(lines) == 3
     assert lines[0].startswith("💰")
-    assert lines[1] == "   TP `0.02885` ↓ `0.02880`"
-    assert lines[2] == "   TP `0.03035` ↓ `0.03015`"
+    assert lines[1] == "　 TP `0.02885` ↓ `0.02880`"
+    assert lines[2] == "　 TP `0.03035` ↓ `0.03015`"
 
 
 def test_a_close_without_moves_stays_one_line() -> None:
@@ -198,7 +198,7 @@ def test_a_move_without_a_previous_price_still_renders() -> None:
             },
         }
     )
-    assert text.splitlines()[1] == "   TP ↓ `0.02940`"
+    assert text.splitlines()[1] == "　 TP ↓ `0.02940`"
 
 
 def test_format_event_unknown_falls_back_to_raw() -> None:
@@ -270,7 +270,7 @@ def test_a_close_shows_the_pool_share_and_what_is_left() -> None:
     )
     lines = text.splitlines()
     assert len(lines) == 3
-    assert lines[2] == "   Pool `79%` · `0.5743`"
+    assert lines[2] == "　 Pool `79%` · `0.5743`"
 
 
 def test_the_pool_line_appears_without_any_moves() -> None:
@@ -287,7 +287,7 @@ def test_the_pool_line_appears_without_any_moves() -> None:
             },
         }
     )
-    assert text.splitlines()[1] == "   Pool `20%` · `0.0038`"
+    assert text.splitlines()[1] == "　 Pool `20%` · `0.0038`"
 
 
 def test_a_close_without_a_split_omits_the_pool_line() -> None:
@@ -403,7 +403,7 @@ def test_a_drain_names_the_fill_it_followed() -> None:
     )
     assert text.splitlines()[:2] == [
         "🟢 `0.03502` → TP `0.03526`",
-        "   Pool spent",
+        "　 Pool spent",
     ]
     assert "TP `0.03558` ↓ `0.03542`" in text
 
